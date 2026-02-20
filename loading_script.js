@@ -30,15 +30,20 @@
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
+    let lastFetchParams = null;
+    let lastTransformed = null;
+
+    // Update your XHR send interceptor to save params:
     XMLHttpRequest.prototype.send = function (body) {
         if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
             const parsedUrl = new URL(this._url);
-            const date = parsedUrl.searchParams.get('date');
-            const categoryCode = parsedUrl.searchParams.get('categoryCode');
-            const categoryOptionsId = parsedUrl.searchParams.get('categoryOptionsId');
-            const timeSlotId = parsedUrl.searchParams.get('timeSlotId');
-
-            fetchAllClubs(date, timeSlotId);
+            lastFetchParams = {
+                date: parsedUrl.searchParams.get('date'),
+                categoryCode: parsedUrl.searchParams.get('categoryCode'),
+                categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
+                timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+            };
+            fetchAllClubs(lastFetchParams);
         }
         return originalXhrSend.apply(this, arguments);
     };
@@ -82,7 +87,7 @@
         const timeStr = m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`;
         return `${timeStr} ${ampm}`;
     }
-    
+
     function transformAvailability(results) {
         const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
         const output = { Morning: [], Afternoon: [], Evening: [] };
@@ -129,7 +134,97 @@
         return output;
     }
 
-    function fetchAllClubs(selectedDate, timeSlotId) {
+    function renderAllClubsAvailability(transformed, anchorElement) {
+        // Build the replacement HTML
+        const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
+
+        // Collect all unique clubs across all time-of-day sections
+        const allClubIds = [];
+        const clubMeta = {};
+        for (const tod of timeOfDays) {
+            for (const club of (transformed[tod] || [])) {
+                if (!clubMeta[club.clubId]) {
+                    allClubIds.push(club.clubId);
+                    clubMeta[club.clubId] = { shortName: club.shortName, code: club.code };
+                }
+            }
+        }
+
+        // Build a quick lookup: clubId -> tod -> availabilities
+        const byClubAndTod = {};
+        for (const tod of timeOfDays) {
+            for (const club of (transformed[tod] || [])) {
+                if (!byClubAndTod[club.clubId]) byClubAndTod[club.clubId] = {};
+                byClubAndTod[club.clubId][tod] = club.availabilities;
+            }
+        }
+
+        let html = `<div class="all-clubs-availability" style="margin-top: 12px;">`;
+
+        for (const clubId of allClubIds) {
+            const meta = clubMeta[clubId];
+            html += `
+      <div style="margin-bottom: 24px;">
+        <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
+          ${meta.shortName}
+        </div>
+        <div class="row">`;
+
+            for (const tod of timeOfDays) {
+                const slots = (byClubAndTod[clubId] || {})[tod] || [];
+                html += `
+          <div class="col">
+            <div class="row"><div class="col text-center white-80 m-2">${tod.toUpperCase()}</div></div>
+            <div class="row gutter-1">`;
+
+                if (slots.length === 0) {
+                    html += `<div class="col-12 mb-2 text-center" style="color: rgba(255,255,255,0.4); font-size: 12px;">No availability</div>`;
+                } else {
+                    for (const slot of slots) {
+                        html += `
+              <div class="col-12 mb-2">
+                <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2">
+                  <div class="text-lowercase">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
+                  <div style="font-size: 10px; color: rgba(255,255,255,0.6);">${slot.courtName}</div>
+                </div>
+              </div>`;
+                    }
+                }
+
+                html += `
+            </div>
+          </div>`;
+            }
+
+            html += `
+        </div>
+      </div>`;
+        }
+
+        html += `</div>`;
+
+        // Replace the original tile
+        anchorElement.innerHTML = html;
+    }
+
+    // Update watchForHourViewTile to detect re-renders:
+    function watchForHourViewTile() {
+        const observer = new MutationObserver(() => {
+            const tile = document.querySelector('.item-tile');
+            if (tile && !tile.dataset.allClubsInjected) {
+                if (lastTransformed) {
+                    // Tile was re-rendered (e.g. date change) — re-inject immediately
+                    // with stale data while fresh fetch is in flight
+                    tile.dataset.allClubsInjected = 'true';
+                    renderAllClubsAvailability(lastTransformed, tile);
+                }
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+    
+    // Update fetchAllClubs to save results and re-inject after fresh fetch:
+    async function fetchAllClubs(params) {
         const clubs = [
             '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63', // Broadway
             '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18', // Redwood Shores
@@ -137,21 +232,26 @@
             '3bc78448-ec6b-49e1-a2ae-64abd68e646b'  // Santa Clara
         ];
 
-        (async () => {
-            const results = await Promise.all(clubs.map(clubId =>
-                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${selectedDate}&categoryCode=pickleball&categoryOptionsId=182a18e2-fd11-4868-a6be-36d96f7f2645&timeSlotId=${timeSlotId}`, {
-                    headers: {
-                        'Authorization': capturedHeaders['Authorization'],
-                        'X-SessionId': capturedHeaders['X-SessionId'],
-                        'Request-Id': crypto.randomUUID(),
-                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
-                        'Accept': 'application/json',
-                    }
-                }).then(r => r.json())
-            ));
-            const transformed = transformAvailability(results);
-            console.log(JSON.stringify(transformed, null, 2));
-        })();
+        const results = await Promise.all(clubs.map(clubId =>
+            fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
+                headers: {
+                    'Authorization': capturedHeaders['Authorization'],
+                    'X-SessionId': capturedHeaders['X-SessionId'],
+                    'Request-Id': crypto.randomUUID(),
+                    'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                    'Accept': 'application/json',
+                }
+            }).then(r => r.json())
+        ));
+
+        lastTransformed = transformAvailability(results);
+
+        // Re-inject with fresh data — clear the flag so renderAllClubsAvailability runs again
+        const tile = document.querySelector('.item-tile');
+        if (tile) {
+            tile.dataset.allClubsInjected = 'true';
+            renderAllClubsAvailability(lastTransformed, tile);
+        }
     }
 
     onUrlChange((url) => {
@@ -161,4 +261,7 @@
             });
         }
     });
+
+    // Call this once at startup — it runs forever watching for tile re-renders
+    watchForHourViewTile();
 })();
