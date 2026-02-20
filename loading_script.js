@@ -32,7 +32,6 @@
 
     XMLHttpRequest.prototype.send = function (body) {
         if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
-            alert("original call detected");
             const parsedUrl = new URL(this._url);
             const date = parsedUrl.searchParams.get('date');
             const categoryCode = parsedUrl.searchParams.get('categoryCode');
@@ -43,32 +42,6 @@
         }
         return originalXhrSend.apply(this, arguments);
     };
-    // const originalFetch = window.fetch;
-    // window.fetch = function (url, options = {}) {
-    //     alert(url);
-    //     if (url.includes('availability')) {
-    //         alert("original call detected")
-    //         // Capture headers as before
-    //         const h = options.headers || {};
-    //         if (h['Authorization']) capturedHeaders['Authorization'] = h['Authorization'];
-    //         if (h['X-SessionId']) capturedHeaders['X-SessionId'] = h['X-SessionId'];
-
-    //         // Parse the URL to extract the params the page is using
-    //         const parsedUrl = new URL(url);
-    //         const date = parsedUrl.searchParams.get('date');
-    //         const categoryCode = parsedUrl.searchParams.get('categoryCode');
-    //         const categoryOptionsId = parsedUrl.searchParams.get('categoryOptionsId');
-    //         const timeSlotId = parsedUrl.searchParams.get('timeSlotId');
-
-    //         // Fire your multi-club batch
-    //         fetchAllClubs({ date, categoryCode, categoryOptionsId, timeSlotId, headers: h });
-
-    //         // Still let the original request proceed so the page works normally
-    //         return originalFetch.apply(this, arguments);
-    //     }
-
-    //     return originalFetch.apply(this, arguments);
-    // };
 
     function onUrlChange(callback) {
         const originalPushState = history.pushState.bind(history);
@@ -101,6 +74,59 @@
         // alert("racquet sports filter loaded");
     }
 
+    function minutesToHumanTime(minutes) {
+        let h = Math.floor(minutes / 60) % 12;
+        if (h === 0) h = 12;
+        const m = minutes % 60;
+        return m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`;
+    }
+
+    function transformAvailability(results) {
+        const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
+        const output = { Morning: [], Afternoon: [], Evening: [] };
+
+        for (const result of results) {
+            for (const clubAvail of result.clubsAvailabilities) {
+                const { club, courts, availableTimeSlots } = clubAvail;
+
+                // Build a lookup from courtId -> court info
+                const courtById = {};
+                for (const court of courts) {
+                    courtById[court.courtId] = court;
+                }
+
+                for (const tod of timeOfDays) {
+                    const slots = availableTimeSlots
+                        .filter(slot => slot.timeOfDay === tod)
+                        .sort((a, b) => a.fromInMinutes - b.fromInMinutes)
+                        .map(slot => {
+                            const court = courtById[slot.courtId] || {};
+                            return {
+                                fromInMinutes: slot.fromInMinutes,
+                                toInMinutes: slot.toInMinutes,
+                                fromHumanTime: minutesToHumanTime(slot.fromInMinutes),
+                                toHumanTime: minutesToHumanTime(slot.toInMinutes),
+                                courtId: slot.courtId,
+                                courtName: court.courtName || null,
+                                courtShortName: court.courtShortName || null,
+                            };
+                        });
+
+                    if (slots.length > 0) {
+                        output[tod].push({
+                            clubId: club.id,
+                            shortName: club.shortName,
+                            code: club.code,
+                            availabilities: slots,
+                        });
+                    }
+                }
+            }
+        }
+
+        return output;
+    }
+
     function fetchAllClubs(selectedDate, timeSlotId) {
         const clubs = [
             '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63', // Broadway
@@ -111,7 +137,7 @@
 
         (async () => {
             const results = await Promise.all(clubs.map(clubId =>
-                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${selectedDate}&categoryCode=pickleball&categoryOptionsId=182a18e2-fd11-4868-a6be-36d96f7f2645&timeSlotId=${timeSlotId}}`, {
+                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${selectedDate}&categoryCode=pickleball&categoryOptionsId=182a18e2-fd11-4868-a6be-36d96f7f2645&timeSlotId=${timeSlotId}`, {
                     headers: {
                         'Authorization': capturedHeaders['Authorization'],
                         'X-SessionId': capturedHeaders['X-SessionId'],
@@ -121,7 +147,10 @@
                     }
                 }).then(r => r.json())
             ));
-            alert("RESULTS: " + results);
+            // console.log(JSON.stringify(results, null, 2));
+
+            const transformed = transformAvailability(results);
+            console.log(JSON.stringify(transformed, null, 2));
         })();
     }
 
