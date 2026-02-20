@@ -134,23 +134,32 @@
         return output;
     }
 
-    function renderAllClubsAvailability(transformed, anchorElement) {
-        // Build the replacement HTML
+    function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
 
-        // Collect all unique clubs across all time-of-day sections
+        // Figure out which clubs have a daysAheadLimit and whether this date exceeds it.
+        // We pass fetchDate as a "YYYY-MM-DD" string from the intercepted URL param.
+        const fetchDateObj = new Date(fetchDate + 'T00:00:00');
+        const todayObj = new Date();
+        todayObj.setHours(0, 0, 0, 0);
+        const daysDiff = Math.round((fetchDateObj - todayObj) / (1000 * 60 * 60 * 24));
+
+        // Build club metadata lookup including daysAheadLimit
         const allClubIds = [];
         const clubMeta = {};
         for (const tod of timeOfDays) {
             for (const club of (transformed[tod] || [])) {
                 if (!clubMeta[club.clubId]) {
                     allClubIds.push(club.clubId);
-                    clubMeta[club.clubId] = { shortName: club.shortName, code: club.code };
+                    clubMeta[club.clubId] = {
+                        shortName: club.shortName,
+                        code: club.code,
+                        daysAheadLimit: club.daysAheadLimit,
+                    };
                 }
             }
         }
 
-        // Build a quick lookup: clubId -> tod -> availabilities
         const byClubAndTod = {};
         for (const tod of timeOfDays) {
             for (const club of (transformed[tod] || [])) {
@@ -163,6 +172,8 @@
 
         for (const clubId of allClubIds) {
             const meta = clubMeta[clubId];
+            const isLocked = daysDiff > (meta.daysAheadLimit ?? 3);
+
             html += `
       <div style="margin-bottom: 24px;">
         <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
@@ -181,11 +192,27 @@
                     html += `<div class="col-12 mb-2 text-center" style="color: rgba(255,255,255,0.4); font-size: 12px;">No availability</div>`;
                 } else {
                     for (const slot of slots) {
+                        const slotLocked = isLocked;
+                        const disabledStyle = slotLocked
+                            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
+                            : '';
+                        const disabledClass = slotLocked ? ' time-slot-disabled' : '';
+                        const lockIcon = slotLocked
+                            ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
+                            : '';
+                        const dataAttrs = slotLocked ? '' :
+                            `data-club-name="${meta.shortName}" ` +
+                            `data-from="${slot.fromHumanTime}" ` +
+                            `data-to="${slot.toHumanTime}" ` +
+                            `data-court="${slot.courtName}" ` +
+                            `data-club-id="${clubId}"`;
+
                         html += `
               <div class="col-12 mb-2">
-                <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2">
+                <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${disabledClass} ${slotLocked ? '' : 'clickable bc-injected-slot'}" ${dataAttrs} style="${disabledStyle}">
                   <div class="text-lowercase">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
                   <div style="font-size: 10px; color: rgba(255,255,255,0.6);">${slot.courtName}</div>
+                  ${lockIcon}
                 </div>
               </div>`;
                     }
@@ -203,8 +230,31 @@
 
         html += `</div>`;
 
-        // Replace the original tile
         anchorElement.innerHTML = html;
+
+        // Wire up click handlers
+        anchorElement.querySelectorAll('.bc-injected-slot').forEach(el => {
+            el.addEventListener('click', () => {
+                const clubName = el.dataset.clubName;
+                const from = el.dataset.from;
+                const to = el.dataset.to;
+                const court = el.dataset.court;
+
+                const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                if (!bottomBar) return;
+
+                // Find or create the info col
+                let infoCol = bottomBar.querySelector('.bc-injected-info');
+                if (!infoCol) {
+                    infoCol = document.createElement('div');
+                    infoCol.className = 'col-12 col-md-auto black-gray size-12 text-center text-md-right my-auto p-2 bc-injected-info';
+                    const row = bottomBar.querySelector('.row');
+                    row.insertBefore(infoCol, row.firstChild);
+                }
+
+                infoCol.textContent = `${clubName} · ${court} @ ${from} - ${to}`;
+            });
+        });
     }
 
     // Update watchForHourViewTile to detect re-renders:
@@ -216,13 +266,13 @@
                     // Tile was re-rendered (e.g. date change) — re-inject immediately
                     // with stale data while fresh fetch is in flight
                     tile.dataset.allClubsInjected = 'true';
-                    renderAllClubsAvailability(lastTransformed, tile);
+                    renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
                 }
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
-    
+
     // Update fetchAllClubs to save results and re-inject after fresh fetch:
     async function fetchAllClubs(params) {
         const clubs = [
@@ -250,7 +300,7 @@
         const tile = document.querySelector('.item-tile');
         if (tile) {
             tile.dataset.allClubsInjected = 'true';
-            renderAllClubsAvailability(lastTransformed, tile);
+            renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
         }
     }
 
