@@ -6,12 +6,47 @@
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
 // @icon         https://github.com/mbrubin56gh/bayclubconnect_helper/blob/d4f3023bb29f8db0fc4799894a084bb01c81d49e/icons/pickleball_17155178.png
-// @require      http://code.jquery.com/jquery-latest.js
+// @run-at       document-start
 // @grant none
 // ==/UserScript==
 
 (function () {
     'use strict';
+
+    let capturedHeaders = {};
+
+    const originalFetch = window.fetch;
+    window.fetch = function (url, options = {}) {
+        if (url.includes('connect-api.bayclubs.io/court-booking/api/1.0/availability')) {
+            // Capture headers as before
+            const h = options.headers || {};
+            if (h['Authorization']) capturedHeaders['Authorization'] = h['Authorization'];
+            if (h['X-SessionId']) capturedHeaders['X-SessionId'] = h['X-SessionId'];
+
+            // Parse the URL to extract the params the page is using
+            const parsedUrl = new URL(url);
+            const date = parsedUrl.searchParams.get('date');
+            const categoryCode = parsedUrl.searchParams.get('categoryCode');
+            const categoryOptionsId = parsedUrl.searchParams.get('categoryOptionsId');
+            const timeSlotId = parsedUrl.searchParams.get('timeSlotId');
+
+            // Fire your multi-club batch
+            fetchAllClubs({ date, categoryCode, categoryOptionsId, timeSlotId, headers: h });
+
+            // Still let the original request proceed so the page works normally
+            return originalFetch.apply(this, arguments);
+        }
+
+        return originalFetch.apply(this, arguments);
+    };
+
+    const originalXhrOpen = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+        if (name === 'Authorization' || name === 'X-SessionId') {
+            capturedHeaders[name] = value;
+        }
+        return originalXhrOpen.apply(this, arguments);
+    };
 
     function onUrlChange(callback) {
         const originalPushState = history.pushState.bind(history);
@@ -42,6 +77,30 @@
 
     function onRacquetSportsFilterNodeLoaded() {
         alert("racquet sports filter loaded");
+    }
+
+    function fetchAllClubs() {
+        const clubs = [
+            '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63', // Broadway
+            '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18', // Redwood Shores
+            'ce7e7607-09e6-4d16-8197-1fffb70db776', // South San Francisco
+            '3bc78448-ec6b-49e1-a2ae-64abd68e646b'  // Santa Clara
+        ];
+
+        (async () => {
+            const results = await Promise.all(clubs.map(clubId =>
+                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${selectedDate}&categoryCode=pickleball&categoryOptionsId=182a18e2-fd11-4868-a6be-36d96f7f2645&timeSlotId=ea57c6b1-069c-4df9-8ee6-0d63ade162bc`, {
+                    headers: {
+                        'Authorization': capturedHeaders['Authorization'],
+                        'X-SessionId': capturedHeaders['X-SessionId'],
+                        'Request-Id': crypto.randomUUID(),
+                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                        'Accept': 'application/json',
+                    }
+                }).then(r => r.json())
+            ));
+            alert("RESULTS: " + results);
+        })();
     }
 
     onUrlChange((url) => {
