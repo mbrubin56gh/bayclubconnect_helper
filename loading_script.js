@@ -73,14 +73,16 @@
     function onRacquetSportsFilterNodeLoaded() {
         // alert("racquet sports filter loaded");
     }
-
     function minutesToHumanTime(minutes) {
-        let h = Math.floor(minutes / 60) % 12;
+        const totalHours = Math.floor(minutes / 60);
+        const ampm = totalHours < 12 ? 'am' : 'pm';
+        let h = totalHours % 12;
         if (h === 0) h = 12;
         const m = minutes % 60;
-        return m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`;
+        const timeStr = m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`;
+        return `${timeStr} ${ampm}`;
     }
-
+    
     function transformAvailability(results) {
         const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
         const output = { Morning: [], Afternoon: [], Evening: [] };
@@ -147,8 +149,6 @@
                     }
                 }).then(r => r.json())
             ));
-            // console.log(JSON.stringify(results, null, 2));
-
             const transformed = transformAvailability(results);
             console.log(JSON.stringify(transformed, null, 2));
         })();
