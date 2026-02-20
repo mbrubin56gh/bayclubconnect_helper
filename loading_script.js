@@ -134,6 +134,19 @@
         return output;
     }
 
+    // Call this once after renderAllClubsAvailability injects the HTML
+    function initNextButton() {
+        const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+            .find(btn => btn.textContent.trim().includes('NEXT'));
+        if (nextButton) {
+            nextButton.setAttribute('disabled', '');
+            nextButton.style.backgroundColor = '';
+            nextButton.style.borderColor = '';
+            nextButton.style.opacity = '';
+            nextButton.style.cursor = '';
+        }
+    }
+
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
 
@@ -232,9 +245,27 @@
 
         anchorElement.innerHTML = html;
 
+        initNextButton();
+
         // Wire up click handlers
+        let selectedSlot = null;
+
         anchorElement.querySelectorAll('.bc-injected-slot').forEach(el => {
             el.addEventListener('click', () => {
+
+                // Deselect previous
+                if (selectedSlot) {
+                    selectedSlot.style.backgroundColor = '';
+                    selectedSlot.style.borderColor = '';
+                    selectedSlot.style.color = '';
+                }
+
+                // Select this one
+                el.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                el.style.borderColor = 'rgba(255, 255, 255, 0.6)';
+                el.style.color = 'white';
+                selectedSlot = el;
+
                 const clubName = el.dataset.clubName;
                 const from = el.dataset.from;
                 const to = el.dataset.to;
@@ -253,6 +284,18 @@
                 }
 
                 infoCol.textContent = `${clubName} · ${court} @ ${from} - ${to}`;
+
+                const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                    .find(btn => btn.textContent.trim().includes('NEXT'));
+
+                if (nextButton) {
+                    nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
+                    nextButton.style.borderColor = 'rgb(0, 188, 212)';
+                    nextButton.style.opacity = '1';
+                    nextButton.style.cursor = 'pointer';
+                    nextButton.removeAttribute('disabled');
+                }
+
             });
         });
     }
