@@ -139,14 +139,13 @@
                             };
                         });
 
-                    if (slots.length > 0) {
-                        output[tod].push({
-                            clubId: club.id,
-                            shortName: club.shortName,
-                            code: club.code,
-                            availabilities: slots,
-                        });
-                    }
+                    // Always push the club, even if slots is empty
+                    output[tod].push({
+                        clubId: club.id,
+                        shortName: club.shortName,
+                        code: club.code,
+                        availabilities: slots,
+                    });
                 }
             }
         }
@@ -172,11 +171,10 @@
 
         const limitDate = new Date();
         limitDate.setDate(limitDate.getDate() + 3);
-        // Round up to next half hour
         const mins = limitDate.getMinutes();
-        const roundedMins = mins <= 30 ? 30 : 60;
-        limitDate.setMinutes(roundedMins, 0, 0);
+        limitDate.setMinutes(mins <= 30 ? 30 : 60, 0, 0);
 
+        // Build club metadata lookup
         const allClubIds = [];
         const clubMeta = {};
         for (const tod of timeOfDays) {
@@ -199,28 +197,35 @@
             }
         }
 
-        let html = `<div class="all-clubs-availability" style="margin-top: 12px;">`;
+        let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
 
         for (const clubId of allClubIds) {
             const meta = clubMeta[clubId];
+            const hasAnySlots = timeOfDays.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
 
             html += `
-      <div style="margin-bottom: 24px;">
-        <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
-          ${meta.shortName}
-        </div>
-        <div class="row">`;
+        <div style="margin-bottom: 24px;">
+          <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
+            ${meta.shortName}
+          </div>`;
 
-            for (const tod of timeOfDays) {
-                const slots = (byClubAndTod[clubId] || {})[tod] || [];
+            if (!hasAnySlots) {
                 html += `
-          <div class="col">
-            <div class="row"><div class="col text-center white-80 m-2">${tod.toUpperCase()}</div></div>
-            <div class="row gutter-1">`;
+          <div class="row">
+            <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">No courts available for this location on this date.</div>
+          </div>`;
+            } else {
+                html += `<div class="row">`;
 
-                if (slots.length === 0) {
-                    html += `<div class="col-12 mb-2 text-center" style="color: rgba(255,255,255,0.4); font-size: 12px;">No availability</div>`;
-                } else {
+                for (const tod of timeOfDays) {
+                    const slots = (byClubAndTod[clubId] || {})[tod] || [];
+                    if (slots.length === 0) continue;
+
+                    html += `
+            <div class="col">
+              <div class="row"><div class="col text-center white-80 m-2">${tod.toUpperCase()}</div></div>
+              <div class="row gutter-1">`;
+
                     for (const slot of slots) {
                         const slotDate = new Date(fetchDate + 'T00:00:00');
                         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
@@ -250,16 +255,16 @@
                 </div>
               </div>`;
                     }
+
+                    html += `
+              </div>
+            </div>`;
                 }
 
-                html += `
-            </div>
-          </div>`;
+                html += `</div>`;
             }
 
-            html += `
-        </div>
-      </div>`;
+            html += `</div>`;
         }
 
         html += `</div>`;
@@ -306,11 +311,9 @@
 
                 // Click a native slot to activate Angular's internal state
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
-                console.log('[booking] native slot found:', nativeSlot);
                 if (nativeSlot) {
                     nativeSlot.click();
                     setTimeout(() => {
-                        // Hide the app's native selection info, we show our own
                         const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
                         if (nativeInfo) nativeInfo.style.display = 'none';
                     }, 0);
@@ -324,7 +327,6 @@
                 const bottomBar = document.querySelector('.white-bg.p-2 .container');
                 if (!bottomBar) return;
 
-                // Find or create the info col
                 let infoCol = bottomBar.querySelector('.bc-injected-info');
                 if (!infoCol) {
                     infoCol = document.createElement('div');
@@ -345,7 +347,6 @@
                     nextButton.style.cursor = 'pointer';
                     nextButton.removeAttribute('disabled');
                 }
-
             });
         });
     }
