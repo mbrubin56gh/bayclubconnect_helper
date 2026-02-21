@@ -22,6 +22,9 @@
         if (name === 'Authorization' || name === 'X-SessionId') {
             capturedHeaders[name] = value;
         }
+        if (name === 'Request-Id') {
+            this._requestId = value;
+        }
         return originalSetRequestHeader.apply(this, arguments);
     };
 
@@ -30,12 +33,14 @@
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         this._url = url; // stash the url for use in send
+        this._method = method;
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
     let lastFetchParams = null;
     let lastTransformed = null;
     let pendingSlotBooking = null; // set when user clicks an injected slot
+    let lastBookingRequestId = null;
 
     // Update your XHR send interceptor to save params:
     XMLHttpRequest.prototype.send = function (body) {
@@ -50,8 +55,18 @@
             fetchAllClubs(lastFetchParams);
         }
 
-        if (this._url && this._url.includes('courtbookings/temporary') && pendingSlotBooking) {
-            console.log('[booking] intercepting temporary booking, substituting our slot');
+        if (this._url &&
+            this._url.match(/courtbookings$/) && // ends with 'courtbookings', not 'courtbookings/temporary'
+            this._method === 'POST' &&
+            pendingSlotBooking) {
+            const requestId = this._requestId;
+            if (requestId === lastBookingRequestId) {
+                // Duplicate — swallow it entirely
+                console.log('[booking] suppressing duplicate courtbookings POST');
+                return;
+            }
+            lastBookingRequestId = requestId;
+            console.log('[booking] intercepting courtbookings POST, substituting our slot');
             const ourBody = JSON.stringify({
                 clubId: pendingSlotBooking.clubId,
                 date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
@@ -81,17 +96,6 @@
         };
 
         window.addEventListener('popstate', () => callback(location.href));
-    }
-
-    function waitForRacquetSportsFilter(callback) {
-        const observer = new MutationObserver(() => {
-            const el = document.querySelector('app-racquet-sports-filter');
-            if (el) {
-                observer.disconnect();
-                callback();
-            }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
     }
 
     function minutesToHumanTime(minutes) {
@@ -166,14 +170,13 @@
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const timeOfDays = ['Morning', 'Afternoon', 'Evening'];
 
-        // Figure out which clubs have a daysAheadLimit and whether this date exceeds it.
-        // We pass fetchDate as a "YYYY-MM-DD" string from the intercepted URL param.
-        const fetchDateObj = new Date(fetchDate + 'T00:00:00');
-        const todayObj = new Date();
-        todayObj.setHours(0, 0, 0, 0);
-        const daysDiff = Math.round((fetchDateObj - todayObj) / (1000 * 60 * 60 * 24));
+        const limitDate = new Date();
+        limitDate.setDate(limitDate.getDate() + 3);
+        // Round up to next half hour
+        const mins = limitDate.getMinutes();
+        const roundedMins = mins <= 30 ? 30 : 60;
+        limitDate.setMinutes(roundedMins, 0, 0);
 
-        // Build club metadata lookup including daysAheadLimit
         const allClubIds = [];
         const clubMeta = {};
         for (const tod of timeOfDays) {
@@ -183,7 +186,6 @@
                     clubMeta[club.clubId] = {
                         shortName: club.shortName,
                         code: club.code,
-                        daysAheadLimit: club.daysAheadLimit,
                     };
                 }
             }
@@ -201,7 +203,6 @@
 
         for (const clubId of allClubIds) {
             const meta = clubMeta[clubId];
-            const isLocked = daysDiff > (meta.daysAheadLimit ?? 3);
 
             html += `
       <div style="margin-bottom: 24px;">
@@ -221,7 +222,9 @@
                     html += `<div class="col-12 mb-2 text-center" style="color: rgba(255,255,255,0.4); font-size: 12px;">No availability</div>`;
                 } else {
                     for (const slot of slots) {
-                        const slotLocked = isLocked;
+                        const slotDate = new Date(fetchDate + 'T00:00:00');
+                        slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
+                        const slotLocked = slotDate > limitDate;
                         const disabledStyle = slotLocked
                             ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
                             : '';
@@ -438,15 +441,7 @@
                 throw e;
             }
         }
-    }
-
-    onUrlChange((url) => {
-        if (url.includes('/racquet-sports/create-booking/')) {
-            waitForRacquetSportsFilter(() => {
-                interceptBackToHomeButton();
-            });
-        }
-    });
+    };
 
     // Call this once at startup — it runs forever watching for tile re-renders
     interceptBackToHomeButton();
