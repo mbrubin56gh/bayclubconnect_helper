@@ -32,6 +32,7 @@
 
     let lastFetchParams = null;
     let lastTransformed = null;
+    let pendingSlotBooking = null; // set when user clicks an injected slot
 
     // Update your XHR send interceptor to save params:
     XMLHttpRequest.prototype.send = function (body) {
@@ -45,6 +46,21 @@
             };
             fetchAllClubs(lastFetchParams);
         }
+
+        if (this._url && this._url.includes('courtbookings/temporary') && pendingSlotBooking) {
+            console.log('[booking] intercepting temporary booking, substituting our slot');
+            const ourBody = JSON.stringify({
+                clubId: pendingSlotBooking.clubId,
+                date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
+                timeFromInMinutes: pendingSlotBooking.fromMinutes,
+                timeToInMinutes: pendingSlotBooking.toMinutes,
+                categoryOptionsId: lastFetchParams.categoryOptionsId,
+                timeSlotId: lastFetchParams.timeSlotId,
+            });
+            pendingSlotBooking = null;
+            return originalXhrSend.call(this, ourBody);
+        }
+
         return originalXhrSend.apply(this, arguments);
     };
 
@@ -218,7 +234,9 @@
                             `data-from="${slot.fromHumanTime}" ` +
                             `data-to="${slot.toHumanTime}" ` +
                             `data-court="${slot.courtName}" ` +
-                            `data-club-id="${clubId}"`;
+                            `data-club-id="${clubId}" ` +
+                            `data-from-minutes="${slot.fromInMinutes}" ` +
+                            `data-to-minutes="${slot.toInMinutes}"`;
 
                         html += `
               <div class="col-12 mb-2">
@@ -265,6 +283,13 @@
                 el.style.borderColor = 'rgba(255, 255, 255, 0.6)';
                 el.style.color = 'white';
                 selectedSlot = el;
+
+                pendingSlotBooking = {
+                    clubId: el.dataset.clubId,
+                    date: lastFetchParams.date,
+                    fromMinutes: parseInt(el.dataset.fromMinutes),
+                    toMinutes: parseInt(el.dataset.toMinutes),
+                };
 
                 const clubName = el.dataset.clubName;
                 const from = el.dataset.from;
@@ -364,11 +389,10 @@
         lastTransformed = transformAvailability(results);
 
         // Re-inject with fresh data — clear the flag so renderAllClubsAvailability runs again
-        const tile = document.querySelector('.item-tile');
-        if (tile) {
-            tile.dataset.allClubsInjected = 'true';
-            injectIntoAllContainers();
-        }
+        // Clear stale injected content so injectIntoAllContainers will re-render
+        document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+
+        injectIntoAllContainers();
     }
 
     onUrlChange((url) => {
