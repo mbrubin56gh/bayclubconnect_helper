@@ -300,6 +300,22 @@
         });
     }
 
+    function interceptBackToHomeButton() {
+        const observer = new MutationObserver(() => {
+            document.querySelectorAll('img[src="assets/back.svg"]').forEach(backImg => {
+                const container = backImg.closest('[class*="col"]');
+                if (container && !container.dataset.bcIntercepted) {
+                    container.dataset.bcIntercepted = 'true';
+                    container.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        window.location.href = 'https://bayclubconnect.com/home/dashboard';
+                    }, true);
+                }
+            });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
     // Update watchForHourViewTile to detect re-renders:
     function watchForHourViewTile() {
         const observer = new MutationObserver(() => {
@@ -351,10 +367,12 @@
         if (url.includes('/racquet-sports/create-booking/')) {
             waitForRacquetSportsFilter(() => {
                 onRacquetSportsFilterNodeLoaded();
+                interceptBackToHomeButton();
             });
         }
     });
 
     // Call this once at startup — it runs forever watching for tile re-renders
+    interceptBackToHomeButton();
     watchForHourViewTile();
 })();
