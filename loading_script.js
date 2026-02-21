@@ -410,6 +410,13 @@
     function injectIntoAllContainers() {
         if (!lastTransformed) return;
 
+        // Hide the court selector — not relevant when showing all clubs
+        document.querySelectorAll('app-court-select').forEach(el => {
+            el.closest('.ng-star-inserted')
+                ? el.closest('.ng-star-inserted').style.display = 'none'
+                : el.style.display = 'none';
+        });
+
         // Desktop
         const tile = document.querySelector('.item-tile');
         if (tile && !tile.querySelector('.all-clubs-availability')) {
