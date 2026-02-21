@@ -319,17 +319,25 @@
     // Update watchForHourViewTile to detect re-renders:
     function watchForHourViewTile() {
         const observer = new MutationObserver(() => {
-            const tile = document.querySelector('.item-tile');
-            if (tile && !tile.dataset.allClubsInjected) {
-                if (lastTransformed) {
-                    // Tile was re-rendered (e.g. date change) — re-inject immediately
-                    // with stale data while fresh fetch is in flight
-                    tile.dataset.allClubsInjected = 'true';
-                    renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
-                }
-            }
+            injectIntoAllContainers();
         });
         observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    function injectIntoAllContainers() {
+        if (!lastTransformed) return;
+
+        // Desktop
+        const tile = document.querySelector('.item-tile');
+        if (tile && !tile.querySelector('.all-clubs-availability')) {
+            renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
+        }
+
+        // Mobile
+        const mobileContainer = document.querySelector('.d-md-none.px-3');
+        if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
+            renderAllClubsAvailability(lastTransformed, mobileContainer, lastFetchParams.date);
+        }
     }
 
     // Update fetchAllClubs to save results and re-inject after fresh fetch:
@@ -359,7 +367,7 @@
         const tile = document.querySelector('.item-tile');
         if (tile) {
             tile.dataset.allClubsInjected = 'true';
-            renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
+            injectIntoAllContainers();
         }
     }
 
