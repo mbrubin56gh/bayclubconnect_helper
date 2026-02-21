@@ -261,7 +261,17 @@
 
         html += `</div>`;
 
-        anchorElement.innerHTML = html;
+        // Hide native content but keep it in DOM
+        Array.from(anchorElement.children).forEach(child => {
+            if (!child.classList.contains('all-clubs-availability')) {
+                child.style.display = 'none';
+            }
+        });
+
+        // Append our content instead of replacing
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
+        anchorElement.appendChild(wrapper.firstChild);
 
         initNextButton();
 
@@ -290,6 +300,13 @@
                     fromMinutes: parseInt(el.dataset.fromMinutes),
                     toMinutes: parseInt(el.dataset.toMinutes),
                 };
+
+                // Click a native slot to activate Angular's internal state
+                const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
+                console.log('[booking] native slot found:', nativeSlot);
+                if (nativeSlot) {
+                    nativeSlot.click();
+                }
 
                 const clubName = el.dataset.clubName;
                 const from = el.dataset.from;
@@ -391,6 +408,10 @@
         // Re-inject with fresh data — clear the flag so renderAllClubsAvailability runs again
         // Clear stale injected content so injectIntoAllContainers will re-render
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+
+        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
+            child.style.display = '';
+        });
 
         injectIntoAllContainers();
     }
