@@ -13,6 +13,23 @@
 (function () {
     'use strict';
 
+    const CLUBS = {
+        broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
+        redwoodShores: '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',
+        southSF: 'ce7e7607-09e6-4d16-8197-1fffb70db776',
+        santaClara: '3bc78448-ec6b-49e1-a2ae-64abd68e646b',
+    };
+
+    const TIMESLOTS = {
+        min30: '37ef7bde-8580-48c3-aced-776ada7c2832',
+        min60: '89a1327a-c893-49f6-88a9-be4c9ab4d481',
+        min90: 'ea57c6b1-069c-4df9-8ee6-0d63ade162bc',
+    };
+
+    const CLUB_MAX_TIMESLOT = {
+        [CLUBS.santaClara]: TIMESLOTS.min60,
+    };
+
     let currentAbortController = null;
 
     let capturedHeaders = {};
@@ -67,13 +84,17 @@
             }
             lastBookingRequestId = requestId;
             console.log('[booking] intercepting courtbookings POST, substituting our slot');
+            const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
+                lastFetchParams.timeSlotId === TIMESLOTS.min90
+                ? CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId]
+                : lastFetchParams.timeSlotId;
             const ourBody = JSON.stringify({
                 clubId: pendingSlotBooking.clubId,
                 date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
                 timeFromInMinutes: pendingSlotBooking.fromMinutes,
                 timeToInMinutes: pendingSlotBooking.toMinutes,
                 categoryOptionsId: lastFetchParams.categoryOptionsId,
-                timeSlotId: lastFetchParams.timeSlotId,
+                timeSlotId: timeSlotId,
             });
             pendingSlotBooking = null;
             return originalXhrSend.call(this, ourBody);
@@ -408,16 +429,13 @@
         currentAbortController = new AbortController();
         const signal = currentAbortController.signal;
 
-        const clubs = [
-            '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63', // Broadway
-            '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18', // Redwood Shores
-            'ce7e7607-09e6-4d16-8197-1fffb70db776', // South San Francisco
-            '3bc78448-ec6b-49e1-a2ae-64abd68e646b'  // Santa Clara
-        ];
-
         try {
-            const results = await Promise.all(clubs.map(clubId =>
-                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
+            const results = await Promise.all(Object.values(CLUBS).map(clubId => {
+                const timeSlotId = CLUB_MAX_TIMESLOT[clubId] &&
+                    params.timeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : params.timeSlotId;
+                return fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${timeSlotId}`, {
                     signal,
                     headers: {
                         'Authorization': capturedHeaders['Authorization'],
@@ -427,6 +445,7 @@
                         'Accept': 'application/json',
                     }
                 }).then(r => r.json())
+            }
             ));
 
             lastTransformed = transformAvailability(results);
