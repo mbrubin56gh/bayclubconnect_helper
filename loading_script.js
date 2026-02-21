@@ -306,6 +306,11 @@
                 console.log('[booking] native slot found:', nativeSlot);
                 if (nativeSlot) {
                     nativeSlot.click();
+                    setTimeout(() => {
+                        // Hide the app's native selection info, we show our own
+                        const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                        if (nativeInfo) nativeInfo.style.display = 'none';
+                    }, 0);
                 }
 
                 const clubName = el.dataset.clubName;
