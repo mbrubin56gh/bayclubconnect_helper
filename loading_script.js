@@ -2,18 +2,21 @@
 // @name         Bay Club Connect Multi-club Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
 // @version      0.1
-// @description  Shows pickleball court booking opportunities across multiple clubs
+// @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
 // @run-at       document-start
-// @icon         https://github.com/mbrubin56gh/bayclubconnect_helper/blob/d4f3023bb29f8db0fc4799894a084bb01c81d49e/icons/pickleball_17155178.png
+// @icon         https://github.com/mbrubin56gh/bayclubconnect_helper/raw/d4f3023bb29f8db0fc4799894a084bb01c81d49e/icons/pickleball_17155178.png
 // @grant        none
 // ==/UserScript==
 
 (function () {
     'use strict';
 
+    let currentAbortController = null;
+
     let capturedHeaders = {};
+
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
         if (name === 'Authorization' || name === 'X-SessionId') {
@@ -91,9 +94,6 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    function onRacquetSportsFilterNodeLoaded() {
-        // alert("racquet sports filter loaded");
-    }
     function minutesToHumanTime(minutes) {
         const totalHours = Math.floor(minutes / 60);
         const ampm = totalHours < 12 ? 'am' : 'pm';
@@ -348,10 +348,21 @@
                 const container = backImg.closest('[class*="col"]');
                 if (container && !container.dataset.bcIntercepted) {
                     container.dataset.bcIntercepted = 'true';
-                    container.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        window.location.href = 'https://bayclubconnect.com/home/dashboard';
-                    }, true);
+                    container.addEventListener('click', () => {
+                        // Abort in-flight fetches
+                        if (currentAbortController) currentAbortController.abort();
+
+                        // Clear state
+                        lastTransformed = null;
+                        lastFetchParams = null;
+                        pendingSlotBooking = null;
+
+                        // Remove injected content and unhide native
+                        document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+                        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
+                            child.style.display = '';
+                        });
+                    }, true); // capture: true, no stopPropagation — Angular handles navigation
                 }
             });
         });
@@ -384,6 +395,10 @@
 
     // Update fetchAllClubs to save results and re-inject after fresh fetch:
     async function fetchAllClubs(params) {
+        if (currentAbortController) currentAbortController.abort();
+        currentAbortController = new AbortController();
+        const signal = currentAbortController.signal;
+
         const clubs = [
             '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63', // Broadway
             '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18', // Redwood Shores
@@ -391,35 +406,38 @@
             '3bc78448-ec6b-49e1-a2ae-64abd68e646b'  // Santa Clara
         ];
 
-        const results = await Promise.all(clubs.map(clubId =>
-            fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
-                headers: {
-                    'Authorization': capturedHeaders['Authorization'],
-                    'X-SessionId': capturedHeaders['X-SessionId'],
-                    'Request-Id': crypto.randomUUID(),
-                    'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
-                    'Accept': 'application/json',
-                }
-            }).then(r => r.json())
-        ));
+        try {
+            const results = await Promise.all(clubs.map(clubId =>
+                fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
+                    signal,
+                    headers: {
+                        'Authorization': capturedHeaders['Authorization'],
+                        'X-SessionId': capturedHeaders['X-SessionId'],
+                        'Request-Id': crypto.randomUUID(),
+                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                        'Accept': 'application/json',
+                    }
+                }).then(r => r.json())
+            ));
 
-        lastTransformed = transformAvailability(results);
-
-        // Re-inject with fresh data — clear the flag so renderAllClubsAvailability runs again
-        // Clear stale injected content so injectIntoAllContainers will re-render
-        document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
-
-        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
-            child.style.display = '';
-        });
-
-        injectIntoAllContainers();
+            lastTransformed = transformAvailability(results);
+            document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+            document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
+                child.style.display = '';
+            });
+            injectIntoAllContainers();
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                console.log('[fetch] aborted');
+            } else {
+                throw e;
+            }
+        }
     }
 
     onUrlChange((url) => {
         if (url.includes('/racquet-sports/create-booking/')) {
             waitForRacquetSportsFilter(() => {
-                onRacquetSportsFilterNodeLoaded();
                 interceptBackToHomeButton();
             });
         }
