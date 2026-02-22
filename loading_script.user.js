@@ -473,6 +473,14 @@
     };
 
     // Call this once at startup — it runs forever watching for tile re-renders
-    interceptBackToHomeButton();
-    watchForHourViewTile();
+    // Call this once at startup — it runs forever watching for tile re-renders
+    if (document.body) {
+        interceptBackToHomeButton();
+        watchForHourViewTile();
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            interceptBackToHomeButton();
+            watchForHourViewTile();
+        });
+    }
 })();
