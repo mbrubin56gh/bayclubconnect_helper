@@ -37,6 +37,15 @@
 
     const TIME_OF_DAYS = ['Morning', 'Afternoon', 'Evening'];
 
+    // Edge courts are preferable because you have fewer courts potentially hitting balls onto your court, and
+    // it makes you less likely to spray balls onto another court, especially when using a pickleball machine.
+    const EDGE_COURTS = {
+        [CLUBS.broadway]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
+        [CLUBS.redwoodShores]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4'], // all courts equally good
+        [CLUBS.southSF]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
+        // santaClara: TBD
+    };
+
     // We want to abort our multiple availability requests in flight if the user clicks BACK TO HOME.
     let currentAbortController = null;
 
@@ -84,7 +93,7 @@
         }
 
         if (this._url &&
-            this._url.match(/courtbookings$/) && // ends with 'courtbookings', not 'courtbookings/temporary'
+            this._url.match(/courtbookings$/) && // We're watching for just 'courtbookings', not 'courtbookings/temporary'
             this._method === 'POST' &&
             pendingSlotBooking) {
 
@@ -239,6 +248,8 @@
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
+        const isEdgeCourt = !slotLocked && (EDGE_COURTS[clubId] || []).includes(slot.courtName);
+
         const disabledStyle = slotLocked
             ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
             : '';
@@ -257,14 +268,15 @@
 
         return `
     <div class="col-12 mb-2">
-      <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${disabledClass} ${slotLocked ? '' : 'clickable bc-injected-slot'}" ${dataAttrs} style="${disabledStyle}">
+      <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${disabledClass} ${slotLocked ? '' : 'clickable bc-injected-slot'}" ${dataAttrs} style="${disabledStyle} ${isEdgeCourt ? 'border: 1px solid rgba(255, 200, 50, 0.7);' : ''}">
         <div class="text-lowercase">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6);">${slot.courtName}</div>
+        ${isEdgeCourt ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255, 200, 50, 0.9);">★</div>` : ''}
         ${lockIcon}
       </div>
     </div>`;
     }
-
+    
     function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate) {
         const meta = clubMeta[clubId];
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
