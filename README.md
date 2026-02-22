@@ -32,3 +32,8 @@ Be aware that Tampermonktoey allows you or someone to install scripts that injec
 - If you're not enjoying this, you can delete the installation from the Tampermonkey extenson's Dashboard UI. If you didn't install TamperMonkey for other reasons, you can just uninstall it entirely.
 - You can also temporarily disable this for as long as you like via the Tampermonkey extension's Dashboard UI.
 
+## Demonstration
+
+https://github.com/user-attachments/assets/d185d02a-5226-4f5b-8e11-e7019d1bbc05
+
+
