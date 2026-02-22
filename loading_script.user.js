@@ -300,6 +300,156 @@
         });
     }
 
+    // We add a widget to allow users to filter availability by time range.
+    const TIME_RANGE_KEY = 'bc_time_range';
+    const SLIDER_MIN_MINUTES = 360;  // 6:00 am
+    const SLIDER_MAX_MINUTES = 1200; // 8:00 pm
+    const SLIDER_STEP_MINUTES = 30;
+    const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 28 intervals
+
+    function getTimeRangeForSlider() {
+        try {
+            const saved = localStorage.getItem(TIME_RANGE_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
+                    return parsed;
+                }
+            }
+        } catch (e) { }
+        return { startMinutes: SLIDER_MIN_MINUTES, endMinutes: SLIDER_MAX_MINUTES };
+    }
+
+    function saveTimeRangeForSlider(startMinutes, endMinutes) {
+        localStorage.setItem(TIME_RANGE_KEY, JSON.stringify({ startMinutes, endMinutes }));
+    }
+
+    function minutesToSliderPercent(minutes) {
+        return (minutes - SLIDER_MIN_MINUTES) / (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) * 100;
+    }
+
+    function sliderPercentToMinutes(percent) {
+        const raw = SLIDER_MIN_MINUTES + (percent / 100) * (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES);
+        // Snap to nearest 30-minute increment.
+        return Math.round(raw / SLIDER_STEP_MINUTES) * SLIDER_STEP_MINUTES;
+    }
+
+    function buildTimeRangeSliderHtml(startMinutes, endMinutes) {
+        const startPct = minutesToSliderPercent(startMinutes);
+        const endPct = minutesToSliderPercent(endMinutes);
+
+        // Build tick marks and hour labels.
+        let ticks = '';
+        for (let i = 0; i <= SLIDER_STOPS; i++) {
+            const m = SLIDER_MIN_MINUTES + i * SLIDER_STEP_MINUTES;
+            const pct = minutesToSliderPercent(m);
+            const isHour = m % 60 === 0;
+            ticks += `
+            <div style="position: absolute; left: ${pct}%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center;">
+                <div style="width: 1px; height: ${isHour ? '8px' : '5px'}; background: rgba(255,255,255,${isHour ? '0.4' : '0.2'}); margin-top: 2px;"></div>
+                ${isHour ? `<div style="font-size: 9px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap;">${minutesToHumanTime(m)}</div>` : ''}
+            </div>`;
+        }
+
+        return `
+    <div class="bc-time-range-widget" style="margin-bottom: 20px; padding: 0 8px;">
+        <div style="font-size: 14px; color: rgba(255,255,255,0.8); margin-bottom: 12px;">
+            Time Range: <span class="bc-time-range-label" style="color: white; font-weight: bold;">${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}</span>
+        </div>
+        <div class="bc-slider-container" style="position: relative; height: 20px; margin: 0 8px;">
+            <!-- Track background -->
+            <div style="position: absolute; top: 8px; left: 0; right: 0; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px;"></div>
+            <!-- Active track fill -->
+            <div class="bc-slider-fill" style="position: absolute; top: 8px; left: ${startPct}%; right: ${100 - endPct}%; height: 4px; background: rgba(0, 188, 212, 0.8); border-radius: 2px;"></div>
+            <!-- Start handle -->
+            <div class="bc-slider-handle bc-slider-start" data-type="start" style="position: absolute; top: 0; left: ${startPct}%; transform: translateX(-50%); width: 20px; height: 20px; background: rgb(0, 188, 212); border-radius: 50%; cursor: grab; z-index: 2; box-shadow: 0 1px 4px rgba(0,0,0,0.4);"></div>
+            <!-- End handle -->
+            <div class="bc-slider-handle bc-slider-end" data-type="end" style="position: absolute; top: 0; left: ${endPct}%; transform: translateX(-50%); width: 20px; height: 20px; background: rgb(0, 188, 212); border-radius: 50%; cursor: grab; z-index: 2; box-shadow: 0 1px 4px rgba(0,0,0,0.4);"></div>
+        </div>
+        <!-- Ticks and labels -->
+        <div style="position: relative; height: 28px; margin: 0 8px;">
+            ${ticks}
+        </div>
+    </div>`;
+    }
+
+    function initTimeRangeSlider(container) {
+        const sliderContainer = container.querySelector('.bc-slider-container');
+        const fill = container.querySelector('.bc-slider-fill');
+        const label = container.querySelector('.bc-time-range-label');
+        const startHandle = container.querySelector('.bc-slider-start');
+        const endHandle = container.querySelector('.bc-slider-end');
+
+        let { startMinutes, endMinutes } = getTimeRangeForSlider();
+        let dragging = null;
+
+        function updateUI() {
+            const startPct = minutesToSliderPercent(startMinutes);
+            const endPct = minutesToSliderPercent(endMinutes);
+            startHandle.style.left = `${startPct}%`;
+            endHandle.style.left = `${endPct}%`;
+            fill.style.left = `${startPct}%`;
+            fill.style.right = `${100 - endPct}%`;
+            label.textContent = `${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}`;
+        }
+
+        function onMouseMove(e) {
+            if (!dragging) return;
+            const rect = sliderContainer.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const pct = Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
+            const snapped = sliderPercentToMinutes(pct);
+
+            if (dragging === 'start') {
+                startMinutes = Math.min(snapped, endMinutes - SLIDER_STEP_MINUTES);
+            } else {
+                endMinutes = Math.max(snapped, startMinutes + SLIDER_STEP_MINUTES);
+            }
+            updateUI();
+        }
+
+        function onMouseUp() {
+            if (!dragging) return;
+            dragging = null;
+            saveTimeRangeForSlider(startMinutes, endMinutes);
+            // Re-filter visible slots.
+            applyTimeRangeFilter(startMinutes, endMinutes);
+        }
+
+        [startHandle, endHandle].forEach(handle => {
+            handle.addEventListener('mousedown', e => { dragging = handle.dataset.type; e.preventDefault(); });
+            handle.addEventListener('touchstart', e => { dragging = handle.dataset.type; e.preventDefault(); }, { passive: false });
+        });
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('touchmove', onMouseMove, { passive: false });
+        document.addEventListener('mouseup', onMouseUp);
+        document.addEventListener('touchend', onMouseUp);
+    }
+
+    function applyTimeRangeFilter(startMinutes, endMinutes) {
+        document.querySelectorAll('.bc-injected-slot').forEach(el => {
+            const from = parseInt(el.dataset.fromMinutes);
+            const visible = from >= startMinutes && from < endMinutes;
+            el.closest('[data-slot-wrapper]').style.display = visible ? '' : 'none';
+        });
+
+        // Hide time-of-day columns that have no visible slots remaining.
+        document.querySelectorAll('.all-clubs-availability > [data-club-id]').forEach(clubDiv => {
+            clubDiv.querySelectorAll('[data-tod-col]').forEach(todCol => {
+                const anyVisible = Array.from(todCol.querySelectorAll('[data-slot-wrapper]'))
+                    .some(el => el.style.display !== 'none');
+                todCol.style.display = anyVisible ? '' : 'none';
+            });
+
+            const anyTodVisible = Array.from(clubDiv.querySelectorAll('[data-tod-col]'))
+                .some(col => col.style.display !== 'none');
+
+            const filterMsg = clubDiv.querySelector('.bc-filter-message');
+            if (filterMsg) filterMsg.style.display = anyTodVisible ? 'none' : '';
+        });
+    }
+
     // Create a data structure well-tailored for rendering our slots by time of day per club.
     function buildClubIndex(transformed) {
         const allClubIds = [];
@@ -364,7 +514,7 @@
             `data-to-minutes="${slot.toInMinutes}"`;
 
         return `
-    <div class="col-12 mb-2">
+    <div class="col-12 mb-2" data-slot-wrapper>
       <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${disabledClass} ${slotLocked ? '' : 'clickable bc-injected-slot'}" ${dataAttrs} style="${disabledStyle} ${isEdgeCourt ? 'border: 1px solid rgba(255, 200, 50, 0.7);' : ''}">
         <div class="text-lowercase">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6);">${slot.courtName}</div>
@@ -379,9 +529,12 @@
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
 
         let html = `
-    <div style="margin-bottom: 24px;">
+    <div data-club-id="${clubId}" style="margin-bottom: 24px;">
       <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
         ${meta.shortName}
+      </div>
+      <div class="row bc-filter-message">
+        <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">There are available slots at this location, but none match your time range filter.</div>
       </div>`;
 
         if (!hasAnySlots) {
@@ -397,7 +550,7 @@
                 if (slots.length === 0) continue;
 
                 html += `
-          <div class="col">
+          <div class="col" data-tod-col>
             <div class="row"><div class="col text-center white-80 m-2">${tod.toUpperCase()}</div></div>
             <div class="row gutter-1">`;
 
@@ -440,6 +593,10 @@
             ((byClubAndTod[lastFetchParams.nativeClubId] || {})[tod] || []).length > 0
         );
 
+        const { startMinutes, endMinutes } = getTimeRangeForSlider();
+        let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
+        html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
+
         // We're going to render our slots for all the clubs. But we have to handle an edge case.
         // After a user selects one of our presented slots and then clicks Next, we want to fire off
         // a reservation request to the server and advance the UI to showing the partner picker, just
@@ -454,8 +611,6 @@
         // for a day (maybe there's a tournament going on all day, so all courts are pre-booked). In that case,
         // we have no native slot to select and we're out of luck. We'll show a warning message to the user to
         // select a different default club or date.
-        let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
-
         if (!nativeClubHasAvailability) {
             html += buildNoNativeSlotWarningHtml(allClubIds, clubMeta, byClubAndTod);
         }
@@ -478,6 +633,11 @@
         const wrapper = document.createElement('div');
         wrapper.innerHTML = html;
         anchorElement.appendChild(wrapper.firstChild);
+
+        // Add our time range slider widget.
+        const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
+        if (sliderWidget) initTimeRangeSlider(sliderWidget);
+        applyTimeRangeFilter(startMinutes, endMinutes);
 
         // We'll take over handling the Next button.
         initNextButton();
@@ -590,10 +750,10 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    // When the duration selector page appears, we'll inject our own wiget for club ordering.
+    // When the duration selector page appears, we'll inject our own widget for club ordering.
     function watchForDurationSelectorPage() {
         const observer = new MutationObserver(() => {
-            const container = document.querySelector('div.row.row-cols-auto');
+            const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
             if (container && !container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
             }
