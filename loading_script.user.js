@@ -5,7 +5,7 @@
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
-// @run-at       document-start
+// @run-at       document-body
 // @icon         https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/icons/pickleball_17155178.png
 // @updateURL    https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js
 // @downloadURL  https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js
@@ -473,14 +473,6 @@
     };
 
     // Call this once at startup — it runs forever watching for tile re-renders
-    // Call this once at startup — it runs forever watching for tile re-renders
-    if (document.body) {
-        interceptBackToHomeButton();
-        watchForHourViewTile();
-    } else {
-        document.addEventListener('DOMContentLoaded', () => {
-            interceptBackToHomeButton();
-            watchForHourViewTile();
-        });
-    }
+    interceptBackToHomeButton();
+    watchForHourViewTile();
 })();
