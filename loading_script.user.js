@@ -774,11 +774,7 @@
                         lastFetchParams = null;
                         pendingSlotBooking = null;
 
-                        // Remove injected content and unhide native
-                        document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
-                        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
-                            child.style.display = '';
-                        });
+                        removeOurContentAndUnhideNativeContent();
                     }, true); // capture: true, no stopPropagation — Angular handles navigation
                 }
             });
@@ -808,6 +804,13 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
+    function removeOurContentAndUnhideNativeContent() {
+        document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
+            child.style.display = '';
+        });
+    }
+
     // Angular supports mobile and desktop views/containers, and renders them differently. We want
     // to make sure we can handle either.
     function injectIntoAllContainers() {
@@ -831,6 +834,23 @@
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
             renderAllClubsAvailability(lastTransformed, mobileContainer, lastFetchParams.date);
         }
+    }
+
+    function watchForNavigationAwayFromBooking() {
+        let lastHref = location.href;
+
+        setInterval(() => {
+            if (location.href === lastHref) return;
+            lastHref = location.href;
+
+            // If we've navigated away from the court booking flow, clean up.
+            if (!location.href.includes('create-booking')) {
+                removeOurContentAndUnhideNativeContent();
+                lastTransformed = null;
+                lastFetchParams = null;
+                pendingSlotBooking = null;
+            }
+        }, 300);
     }
 
     // Fetch availability info for all the clubs in parallel, and combine their results.
@@ -858,10 +878,7 @@
             }));
 
             lastTransformed = transformAvailability(results);
-            document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
-            document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
-                child.style.display = '';
-            });
+            removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
             if (e.name === 'AbortError') {
@@ -876,4 +893,5 @@
     interceptBackToHomeButton();
     watchForContainerChanges();
     watchForDurationSelectorPage();
+    watchForNavigationAwayFromBooking();
 })();
