@@ -70,6 +70,7 @@
                 categoryCode: parsedUrl.searchParams.get('categoryCode'),
                 categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
                 timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+                nativeClubId: parsedUrl.searchParams.get('clubId'),
             };
             fetchAllClubs(lastFetchParams);
         }
@@ -222,6 +223,24 @@
 
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
 
+        const nativeClubHasAvailability = timeOfDays.some(tod =>
+            ((byClubAndTod[lastFetchParams.nativeClubId] || {})[tod] || []).length > 0
+        );
+
+        if (!nativeClubHasAvailability) {
+            const clubsWithAvailability = allClubIds
+                .filter(id => id !== lastFetchParams.nativeClubId)
+                .filter(id => ['Morning', 'Afternoon', 'Evening'].some(tod =>
+                    ((byClubAndTod[id] || {})[tod] || []).length > 0
+                ))
+                .map(id => clubMeta[id].shortName);
+
+            html += `
+    <div style="background-color: rgba(255, 180, 0, 0.15); border: 1px solid rgba(255, 180, 0, 0.4); border-radius: 4px; padding: 10px 12px; margin-bottom: 16px; color: rgba(255, 220, 100, 0.9); font-size: 12px;">
+        ⚠️ Your home club has no availability. To book at another location, change your home club to one with availability. These clubs have availability: ${clubsWithAvailability.join(', ')}
+    </div>`;
+        }
+
         for (const clubId of allClubIds) {
             const meta = clubMeta[clubId];
             const hasAnySlots = timeOfDays.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
@@ -340,6 +359,20 @@
                         const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
                         if (nativeInfo) nativeInfo.style.display = 'none';
                     }, 0);
+                } else {
+                    const clubsWithAvailability = Object.entries(CLUBS)
+                        .filter(([key, id]) => {
+                            return ['Morning', 'Afternoon', 'Evening'].some(tod =>
+                                (lastTransformed[tod] || []).some(c => c.clubId === id && c.availabilities.length > 0)
+                            );
+                        })
+                        .map(([key, id]) => lastTransformed['Morning'].concat(lastTransformed['Afternoon']).concat(lastTransformed['Evening'])
+                            .find(c => c.clubId === id)?.shortName)
+                        .filter(Boolean);
+
+                    infoCol.textContent = `⚠️ To book, set your home club to one with availability: ${clubsWithAvailability.join(', ')}`;
+                    // Don't enable NEXT
+                    return;
                 }
 
                 const clubName = el.dataset.clubName;
