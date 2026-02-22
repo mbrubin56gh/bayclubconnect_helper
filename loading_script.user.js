@@ -204,6 +204,102 @@
         }
     }
 
+    // Use this key to store the club ordering selected by the user for future sessions. We'll use
+    // a default order if nothing is stored at this key.
+    const CLUB_ORDER_KEY = 'bc_club_order';
+
+    function getClubOrder() {
+        try {
+            const saved = localStorage.getItem(CLUB_ORDER_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                // Validate that it contains exactly our club IDs
+                if (parsed.length === Object.values(CLUBS).length &&
+                    parsed.every(id => Object.values(CLUBS).includes(id))) {
+                    return parsed;
+                }
+            }
+        } catch (e) { }
+        // Default order
+        return [CLUBS.redwoodShores, CLUBS.broadway, CLUBS.southSF, CLUBS.santaClara];
+    }
+
+    function saveClubOrder(order) {
+        localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
+    }
+
+    function injectClubOrderWidget() {
+        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        if (!container || container.nextSibling?.classList?.contains('bc-club-order-widget')) return;
+
+        const clubOrder = getClubOrder();
+
+        // Friendlier names
+        const CLUB_SHORT_NAMES = {
+            [CLUBS.broadway]: 'Broadway',
+            [CLUBS.redwoodShores]: 'Redwood Shores',
+            [CLUBS.southSF]: 'South SF',
+            [CLUBS.santaClara]: 'Santa Clara',
+        };
+
+        const widget = document.createElement('div');
+        widget.className = 'bc-club-order-widget mt-3';
+        widget.innerHTML = `
+        <div style="font-size: 14px; margin-bottom: 8px; color: rgba(255,255,255,0.8);">Club Preference Order</div>
+        <div class="bc-club-order-list" style="display: flex; flex-direction: column; gap: 6px;">
+            ${clubOrder.map((id, i) => `
+                <div class="bc-club-order-item" data-club-id="${id}" draggable="true"
+                    style="display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+                           background: rgba(255,255,255,0.08); border-radius: 4px; cursor: grab;
+                           border: 1px solid rgba(255,255,255,0.15); font-size: 13px;">
+                    <span style="color: rgba(255,255,255,0.4); font-size: 16px; line-height: 1;">⠿</span>
+                    <span style="color: rgba(255,255,255,0.5); min-width: 16px;">${i + 1}.</span>
+                    <span>${CLUB_SHORT_NAMES[id]}</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+        container.insertAdjacentElement('afterend', widget);
+        initClubOrderingDragAndDrop(widget, CLUB_SHORT_NAMES);
+    }
+
+    function initClubOrderingDragAndDrop(widget, clubShortNames) {
+        const list = widget.querySelector('.bc-club-order-list');
+        let draggedItem = null;
+
+        list.querySelectorAll('.bc-club-order-item').forEach(item => {
+            item.addEventListener('dragstart', () => {
+                draggedItem = item;
+                setTimeout(() => item.style.opacity = '0.4', 0);
+            });
+            item.addEventListener('dragend', () => {
+                item.style.opacity = '1';
+                draggedItem = null;
+                // Update numbering
+                list.querySelectorAll('.bc-club-order-item').forEach((el, i) => {
+                    el.querySelectorAll('span')[1].textContent = `${i + 1}.`;
+                });
+                // Save new order
+                const newOrder = Array.from(list.querySelectorAll('.bc-club-order-item'))
+                    .map(el => el.dataset.clubId);
+                saveClubOrder(newOrder);
+            });
+            item.addEventListener('dragover', e => {
+                e.preventDefault();
+                if (item !== draggedItem) {
+                    const rect = item.getBoundingClientRect();
+                    const midY = rect.top + rect.height / 2;
+                    if (e.clientY < midY) {
+                        list.insertBefore(draggedItem, item);
+                    } else {
+                        list.insertBefore(draggedItem, item.nextSibling);
+                    }
+                }
+            });
+        });
+    }
+
     // Create a data structure well-tailored for rendering our slots by time of day per club.
     function buildClubIndex(transformed) {
         const allClubIds = [];
@@ -214,15 +310,16 @@
             for (const club of (transformed[tod] || [])) {
                 if (!clubMeta[club.clubId]) {
                     allClubIds.push(club.clubId);
-                    clubMeta[club.clubId] = {
-                        shortName: club.shortName,
-                        code: club.code,
-                    };
+                    clubMeta[club.clubId] = { shortName: club.shortName, code: club.code };
                 }
                 if (!byClubAndTod[club.clubId]) byClubAndTod[club.clubId] = {};
                 byClubAndTod[club.clubId][tod] = club.availabilities;
             }
         }
+
+        // Sort by saved club preference order.
+        const preferredOrder = getClubOrder();
+        allClubIds.sort((a, b) => preferredOrder.indexOf(a) - preferredOrder.indexOf(b));
 
         return { allClubIds, clubMeta, byClubAndTod };
     }
@@ -276,7 +373,7 @@
       </div>
     </div>`;
     }
-    
+
     function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate) {
         const meta = clubMeta[clubId];
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
@@ -493,6 +590,17 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
+    // When the duration selector page appears, we'll inject our own wiget for club ordering.
+    function watchForDurationSelectorPage() {
+        const observer = new MutationObserver(() => {
+            const container = document.querySelector('div.row.row-cols-auto');
+            if (container && !container.nextSibling?.classList?.contains('bc-club-order-widget')) {
+                injectClubOrderWidget();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
     // Angular supports mobile and desktop views/containers, and renders them differently. We want
     // to make sure we can handle either.
     function injectIntoAllContainers() {
@@ -560,4 +668,5 @@
     // Let's actually start our program! We'll keep watch on the DOM starting here.
     interceptBackToHomeButton();
     watchForContainerChanges();
+    watchForDurationSelectorPage();
 })();
