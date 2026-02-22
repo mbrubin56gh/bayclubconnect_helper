@@ -6,7 +6,9 @@
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
 // @run-at       document-start
-// @icon         https://github.com/mbrubin56gh/bayclubconnect_helper/raw/d4f3023bb29f8db0fc4799894a084bb01c81d49e/icons/pickleball_17155178.png
+// @icon         https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/icons/pickleball_17155178.png
+// @updateURL    https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js
+// @downloadURL  https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js
 // @grant        none
 // ==/UserScript==
 
