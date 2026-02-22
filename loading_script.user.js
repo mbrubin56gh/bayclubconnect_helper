@@ -23,6 +23,9 @@
         santaClara: '3bc78448-ec6b-49e1-a2ae-64abd68e646b',
     };
 
+    // These clubs have only indoor courts.
+    const INDOOR_CLUBS = new Set([CLUBS.broadway, CLUBS.southSF]);
+
     // These are the uuids the app natively uses for time slot lengths.
     const TIMESLOTS = {
         min30: '37ef7bde-8580-48c3-aced-776ada7c2832',
@@ -300,6 +303,30 @@
         });
     }
 
+    const INDOOR_ONLY_KEY = 'bc_indoor_only';
+
+    function getShowIndoorClubsOnly() {
+        try {
+            const saved = localStorage.getItem(INDOOR_ONLY_KEY);
+            if (saved !== null) return JSON.parse(saved);
+        } catch (e) { }
+        return false;
+    }
+
+    function saveShowIndoorClubsOnly(value) {
+        localStorage.setItem(INDOOR_ONLY_KEY, JSON.stringify(value));
+    }
+
+    function buildShowIndoorCourtsOnlyToggleHtml(indoorOnly) {
+        return `
+    <div class="bc-indoor-toggle" style="margin-bottom: 16px; padding: 0 8px; display: flex; align-items: center; gap: 8px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: rgba(255,255,255,0.8); user-select: none;">
+            <input type="checkbox" class="bc-indoor-checkbox" ${indoorOnly ? 'checked' : ''} style="width: 16px; height: 16px; cursor: pointer; accent-color: rgb(0, 188, 212);">
+            Indoor courts only
+        </label>
+    </div>`;
+    }
+
     // We add a widget to allow users to filter availability by time range.
     const TIME_RANGE_KEY = 'bc_time_range';
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
@@ -413,7 +440,7 @@
             dragging = null;
             saveTimeRangeForSlider(startMinutes, endMinutes);
             // Re-filter visible slots.
-            applyTimeRangeFilter(startMinutes, endMinutes);
+            applyFilters(startMinutes, endMinutes, getShowIndoorClubsOnly());
         }
 
         [startHandle, endHandle].forEach(handle => {
@@ -427,7 +454,7 @@
         document.addEventListener('touchend', onMouseUp);
     }
 
-    function applyTimeRangeFilter(startMinutes, endMinutes) {
+    function applyFilters(startMinutes, endMinutes, indoorOnly) {
         document.querySelectorAll('.bc-injected-slot').forEach(el => {
             const from = parseInt(el.dataset.fromMinutes);
             const visible = from >= startMinutes && from < endMinutes;
@@ -436,6 +463,15 @@
 
         // Hide time-of-day columns that have no visible slots remaining.
         document.querySelectorAll('.all-clubs-availability > [data-club-id]').forEach(clubDiv => {
+            const clubId = clubDiv.dataset.clubId;
+
+            // If indoor only is on and this club is not indoor, hide it entirely.
+            if (indoorOnly && !INDOOR_CLUBS.has(clubId)) {
+                clubDiv.style.display = 'none';
+                return;
+            }
+            clubDiv.style.display = '';
+
             clubDiv.querySelectorAll('[data-tod-col]').forEach(todCol => {
                 const anyVisible = Array.from(todCol.querySelectorAll('[data-slot-wrapper]'))
                     .some(el => el.style.display !== 'none');
@@ -594,7 +630,9 @@
         );
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
+        const indoorOnly = getShowIndoorClubsOnly();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
+        html += buildShowIndoorCourtsOnlyToggleHtml(indoorOnly);
         html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
 
         // We're going to render our slots for all the clubs. But we have to handle an edge case.
@@ -637,7 +675,16 @@
         // Add our time range slider widget.
         const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
         if (sliderWidget) initTimeRangeSlider(sliderWidget);
-        applyTimeRangeFilter(startMinutes, endMinutes);
+        applyFilters(startMinutes, endMinutes, indoorOnly);
+
+        // Listen to our indoor courts only toggle.
+        const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
+        if (indoorCheckbox) {
+            indoorCheckbox.addEventListener('change', () => {
+                saveShowIndoorClubsOnly(indoorCheckbox.checked);
+                applyFilters(startMinutes, endMinutes, indoorCheckbox.checked);
+            });
+        }
 
         // We'll take over handling the Next button.
         initNextButton();
