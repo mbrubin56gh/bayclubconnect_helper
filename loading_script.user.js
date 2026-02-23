@@ -217,6 +217,67 @@
         }
     }
 
+    // Use this key to store the previously selected number of players for a booking (Singles or Doubles).
+    const PLAYERS_KEY = 'bc_players';
+
+    // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
+    const DURATION_KEY = 'bc_duration';
+
+    function autoSelectPlayerAndDuration() {
+        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        if (!container) return;
+
+        if (!container.dataset.bcListening) {
+            // Save on click via delegation.
+            container.addEventListener('click', e => {
+                const btn = e.target.closest('app-button-select .btn');
+                if (!btn) return;
+                const group = btn.closest('.btn-group');
+                const labels = Array.from(group.querySelectorAll('.btn'))
+                    .map(b => b.textContent.trim());
+                const key = labels.includes('Singles') ? PLAYERS_KEY
+                    : labels.includes('30 minutes') ? DURATION_KEY
+                        : null;
+                if (key) localStorage.setItem(key, btn.textContent.trim());
+            });
+
+            // Watch the container for Angular adding the button groups.
+            const observer = new MutationObserver(() => tryAutoSelect(container, observer));
+            observer.observe(container, { childList: true, subtree: true });
+            container.dataset.bcListening = 'true';
+        }
+
+        tryAutoSelect(container, null);
+    }
+
+    function tryAutoSelect(container, observer) {
+        document.querySelectorAll('app-button-select .btn-group').forEach(group => {
+            if (group.dataset.bcAutoSelected) return;
+            const labels = Array.from(group.querySelectorAll('.btn'))
+                .map(b => b.textContent.trim());
+            const key = labels.includes('Singles') ? PLAYERS_KEY
+                : labels.includes('30 minutes') ? DURATION_KEY
+                    : null;
+            if (!key) return;
+            const saved = localStorage.getItem(key);
+            if (saved) {
+                const btn = Array.from(group.querySelectorAll('.btn'))
+                    .find(b => b.textContent.trim() === saved);
+                if (btn && !btn.classList.contains('btn-selected')) btn.click();
+            }
+            group.dataset.bcAutoSelected = 'true';
+        });
+
+        // Disconnect observer once both groups have been handled.
+        if (observer) {
+            const allHandled = ['Singles', '30 minutes'].every(label =>
+                Array.from(document.querySelectorAll('app-button-select .btn'))
+                    .some(b => b.textContent.trim() === label &&
+                        b.closest('.btn-group').dataset.bcAutoSelected)
+            );
+            if (allHandled) observer.disconnect();
+        }
+    }
     // Use this key to store the club ordering selected by the user for future sessions. We'll use
     // a default order if nothing is stored at this key.
     const CLUB_ORDER_KEY = 'bc_club_order';
@@ -877,6 +938,7 @@
             const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
             if (container && !container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
+                autoSelectPlayerAndDuration();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
