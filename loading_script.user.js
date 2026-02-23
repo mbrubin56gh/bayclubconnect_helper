@@ -796,7 +796,7 @@
                     const otherExpand = card.querySelector('.bc-court-expand');
                     if (otherExpand) otherExpand.style.display = 'none';
                 });
-                
+
                 // Select this court option.
                 el.setAttribute('data-selected', '')
 
@@ -919,6 +919,24 @@
     // When we navigate away from the booking screen, we want to clean up any of our injected content
     // and restore whatever was there natively we might have hidden.
     function watchForNavigationAwayFromBooking() {
+        let lastHref = location.href;
+
+        // Belt and suspeners. The push, pop, and replace state listeners might work, but this is
+        // a SPA and an Angular one at that, so it's not always easy to detect URL navigations.
+        // We set up an interval timer, too, just in case. This is what is handling clearing
+        // when we navigate to the bookings page (https://bayclubconnect.com/bookings).
+        setInterval(() => {
+            if (location.href === lastHref) return;
+            lastHref = location.href;
+
+            // If we've navigated away from the court booking flow, clean up.
+            if (!location.href.includes('create-booking')) {
+                removeOurContentAndUnhideNativeContent();
+                lastFetchState = null;
+                pendingSlotBooking = null;
+            }
+        }, 200);
+
         const originalPushState = history.pushState;
         const originalReplaceState = history.replaceState;
 
