@@ -1,3 +1,4 @@
+/*jslint esversion: 11 */
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
@@ -82,7 +83,7 @@
     XMLHttpRequest.prototype.send = (() => {
         let lastBookingRequestId = null;
 
-        return function (body) {
+        return function (_body) {
             if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
                 const parsedUrl = new URL(this._url);
                 const params = {
@@ -221,17 +222,16 @@
     const CLUB_ORDER_KEY = 'bc_club_order';
 
     function getClubOrder() {
-        try {
-            const saved = localStorage.getItem(CLUB_ORDER_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                // Validate that it contains exactly our club IDs
-                if (parsed.length === Object.values(CLUBS).length &&
-                    parsed.every(id => Object.values(CLUBS).includes(id))) {
-                    return parsed;
-                }
+        const saved = localStorage.getItem(CLUB_ORDER_KEY);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            // Validate that it contains exactly our club IDs
+            if (parsed.length === Object.values(CLUBS).length &&
+                parsed.every(id => Object.values(CLUBS).includes(id))) {
+                return parsed;
             }
-        } catch (e) { }
+        }
+
         // Default order
         return [CLUBS.redwoodShores, CLUBS.broadway, CLUBS.southSF, CLUBS.santaClara];
     }
@@ -317,10 +317,8 @@
     const INDOOR_ONLY_KEY = 'bc_indoor_only';
 
     function getShowIndoorClubsOnly() {
-        try {
-            const saved = localStorage.getItem(INDOOR_ONLY_KEY);
-            if (saved !== null) return JSON.parse(saved);
-        } catch (e) { }
+        const saved = localStorage.getItem(INDOOR_ONLY_KEY);
+        if (saved !== null) return JSON.parse(saved);
         return false;
     }
 
@@ -347,15 +345,13 @@
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 28 intervals
 
     function getTimeRangeForSlider() {
-        try {
-            const saved = localStorage.getItem(TIME_RANGE_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
-                    return parsed;
-                }
+        const saved = localStorage.getItem(TIME_RANGE_KEY);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
+                return parsed;
             }
-        } catch (e) { }
+        }
         return { startMinutes: SLIDER_MIN_MINUTES, endMinutes: SLIDER_MAX_MINUTES };
     }
 
@@ -763,9 +759,6 @@
         // We'll take over handling the Next button.
         initNextButton();
 
-        // Wire up click handlers.
-        let selectedSlot = null;
-
         // Expand/collapse slot cards on click.
         anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
             card.addEventListener('click', e => {
@@ -803,12 +796,9 @@
                     const otherExpand = card.querySelector('.bc-court-expand');
                     if (otherExpand) otherExpand.style.display = 'none';
                 });
-
-                selectedSlot = null;
-
+                
                 // Select this court option.
-                el.setAttribute('data-selected', '');
-                selectedSlot = el;
+                el.setAttribute('data-selected', '')
 
                 pendingSlotBooking = {
                     clubId: el.dataset.clubId,
@@ -1008,7 +998,7 @@
             dates.forEach((date, i) => {
                 weather.cache[date] = probs[i];
             });
-        } catch (e) {
+        } catch (_e) {
             // Fail silently — weather is a hint, not critical.
         }
     }
