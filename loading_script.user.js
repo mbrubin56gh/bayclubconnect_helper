@@ -127,6 +127,7 @@
                 : lastFetchParams.timeSlotId;
             const ourBody = JSON.stringify({
                 clubId: pendingSlotBooking.clubId,
+                courtId: pendingSlotBooking.courtId,
                 date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
                 timeFromInMinutes: pendingSlotBooking.fromMinutes,
                 timeToInMinutes: pendingSlotBooking.toMinutes,
@@ -568,12 +569,13 @@
             const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
             const dataAttrs = slotLocked ? '' :
                 `data-club-name="${meta.shortName}"
-             data-from="${slot.fromHumanTime}"
-             data-to="${slot.toHumanTime}"
-             data-court="${court.courtName}"
-             data-club-id="${clubId}"
-             data-from-minutes="${slot.fromInMinutes}"
-             data-to-minutes="${slot.toInMinutes}"`;
+                data-from="${slot.fromHumanTime}"
+                data-to="${slot.toHumanTime}"
+                data-court="${court.courtName}"
+                data-court-id="${court.courtId}"
+                data-club-id="${clubId}"
+                data-from-minutes="${slot.fromInMinutes}"
+                data-to-minutes="${slot.toInMinutes}"`;
             return `
     <div data-slot-wrapper style="margin-bottom: 8px; margin-left: 4px; margin-right: 4px; width: 100%;">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
@@ -599,6 +601,7 @@
             data-from="${slot.fromHumanTime}"
             data-to="${slot.toHumanTime}"
             data-court="${court.courtName}"
+            data-court-id="${court.courtId}"
             data-club-id="${clubId}"
             data-from-minutes="${slot.fromInMinutes}"
             data-to-minutes="${slot.toInMinutes}"
@@ -817,6 +820,7 @@
 
                 pendingSlotBooking = {
                     clubId: el.dataset.clubId,
+                    courtId: el.dataset.courtId,
                     date: lastFetchParams.date,
                     fromMinutes: parseInt(el.dataset.fromMinutes),
                     toMinutes: parseInt(el.dataset.toMinutes),
@@ -1012,7 +1016,7 @@
     }
 
     function isRainPredictedForDate(dateString) {
-        return rainPercentageForDate(dateString) > MIN_RAIN_PERCENTAGE_FOR_ALERT ?? false;
+        return (rainPercentageForDate(dateString) ?? 0) > MIN_RAIN_PERCENTAGE_FOR_ALERT;
     }
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
