@@ -18,12 +18,13 @@ Be aware that Tampermonktoey allows you or someone to install scripts that injec
 5. Done! The script runs automatically on bayclubconnect.com
 
 ## Usage
-- Navigate to the court booking page as normal, regardless of what club you have selected
+- Navigate to the court booking page as normal, regardless of what club you have selected.
 - Walk through Pickleball booking. When you get to the players count and duration selector, you can choose the order of club availabilities that will be displayed.
 - When you click Next to get to the availability listings, swich to the Hour View. This helper only supports the Hour View.
 - Available slots across all clubs will appear automatically.
 - Note that you have a time range slider to limit the court availability search to your desired times.
 - Note also that you have a checkbox to show clubs only with indoor courts. There's some weather prediction built in: if it's predicted to be >20% chance of rain, there's a hint next to the checkbox that rain is predicted.
+- Unlike the native time slot selector in Hour View, we show a slot for each court open at that time with a label telling you the court name.
 - Courts that are on the ends (so they are less likely to have balls from other courts spray onto them or vice versa) are outlined in gold with a gold star.
 - Select any slot, then click NEXT to proceed with booking.
 - There's an odd boundary case: if there is no court availability at any time for the default selected club for the day you've selected, this enhanced functionality won't work, so you'll have to pick another default club or another day. You'll see messaging to let you know if you run into this.
