@@ -77,7 +77,6 @@
     };
 
     let lastFetchState = null; // { transformed, params }
-    let lastBookingRequestId = null;
     let pendingSlotBooking = null;
 
     XMLHttpRequest.prototype.send = (() => {
@@ -276,13 +275,15 @@
         initClubOrderingDragAndDrop(widget, CLUB_SHORT_NAMES);
     }
 
-    function initClubOrderingDragAndDrop(widget, clubShortNames) {
+    function initClubOrderingDragAndDrop(widget) {
         const list = widget.querySelector('.bc-club-order-list');
         let draggedItem = null;
 
         list.querySelectorAll('.bc-club-order-item').forEach(item => {
             item.addEventListener('dragstart', () => {
                 draggedItem = item;
+                // This is a workaround for a browser quirk where setting opacity during 
+                // dragstart affects the drag ghost image.
                 setTimeout(() => item.style.opacity = '0.4', 0);
             });
             item.addEventListener('dragend', () => {
@@ -327,11 +328,11 @@
         localStorage.setItem(INDOOR_ONLY_KEY, JSON.stringify(value));
     }
 
-    function buildShowIndoorCourtsOnlyToggleHtml(indoorOnly) {
+    function buildShowIndoorCourtsOnlyToggleHtml() {
         return `
     <div class="bc-indoor-toggle" style="margin-bottom: 16px; padding: 0 8px; display: flex; align-items: center; gap: 8px;">
         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: rgba(255,255,255,0.8); user-select: none;">
-            <input type="checkbox" class="bc-indoor-checkbox" ${indoorOnly ? 'checked' : ''} style="width: 16px; height: 16px; cursor: pointer; accent-color: rgb(0, 188, 212);">
+            <input type="checkbox" class="bc-indoor-checkbox" ${getShowIndoorClubsOnly() ? 'checked' : ''} style="width: 16px; height: 16px; cursor: pointer; accent-color: rgb(0, 188, 212);">
             Indoor courts only
         </label>
     </div>`;
@@ -466,7 +467,7 @@
     }
 
     // Apply any filters to our court data (e.g. filter by time range, indoor/outdoor courts).
-    function applyFilters(startMinutes, endMinutes, indoorOnly) {
+    function applyFilters(startMinutes, endMinutes) {
         document.querySelectorAll('.bc-court-option').forEach(el => {
             const from = parseInt(el.dataset.fromMinutes);
             const visible = from >= startMinutes && from < endMinutes;
@@ -478,7 +479,7 @@
             const clubId = clubDiv.dataset.clubId;
 
             // If indoor only is on and this club is not indoor, hide it entirely.
-            if (indoorOnly && !INDOOR_CLUBS.has(clubId)) {
+            if (getShowIndoorClubsOnly() && !INDOOR_CLUBS.has(clubId)) {
                 clubDiv.style.display = 'none';
                 return;
             }
@@ -689,9 +690,8 @@
         );
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
-        const indoorOnly = getShowIndoorClubsOnly();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
-        html += buildShowIndoorCourtsOnlyToggleHtml(indoorOnly);
+        html += buildShowIndoorCourtsOnlyToggleHtml();
         html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
 
         // We're going to render our slots for all the clubs. But we have to handle an edge case.
@@ -734,14 +734,14 @@
         // Add our time range slider widget.
         const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
         if (sliderWidget) initTimeRangeSlider(sliderWidget);
-        applyFilters(startMinutes, endMinutes, indoorOnly);
+        applyFilters(startMinutes, endMinutes);
 
         // Listen to our indoor courts only toggle.
         const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
         if (indoorCheckbox) {
             indoorCheckbox.addEventListener('change', () => {
                 saveShowIndoorClubsOnly(indoorCheckbox.checked);
-                applyFilters(startMinutes, endMinutes, indoorCheckbox.checked);
+                applyFilters(startMinutes, endMinutes);
             });
         }
 
@@ -880,13 +880,7 @@
     function watchForContainerChanges() {
         const observer = new MutationObserver(() => {
             injectIntoAllContainers();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    // When the native app's duration selector page appears, we'll inject our own widget for club ordering.
-    function watchForDurationSelectorPage() {
-        const observer = new MutationObserver(() => {
+            // When the native app's duration selector page appears, we'll inject our own widget for club ordering.
             const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
             if (container && !container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
@@ -894,6 +888,7 @@
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
+
 
     function removeOurContentAndUnhideNativeContent() {
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
@@ -1043,7 +1038,6 @@
     createCardSelectionStyle();
     interceptBackToHomeButton();
     watchForContainerChanges();
-    watchForDurationSelectorPage();
     watchForNavigationAwayFromBooking();
     weather.promise = fetchWeatherForecast();
 })();
