@@ -15,6 +15,16 @@
 (function () {
     'use strict';
 
+    // Set up a style for selected card appearance.
+    const style = document.createElement('style');
+    style.textContent = `
+    .bc-court-option[data-selected] {
+        background-color: rgba(255,255,255,0.2) !important;
+        outline: 1px solid rgba(255,255,255,0.5) !important;
+    }
+`;
+
+    document.head.appendChild(style);
     // These are the uuids the app natively uses for each site.
     const CLUBS = {
         broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
@@ -146,15 +156,12 @@
     // When we get back availability data from the server, we want to massage it into a useful structure for us
     // to represent visually on the screen.
     function transformAvailability(results) {
-        // We bucket by time of day, as does the native app.
         const output = { Morning: [], Afternoon: [], Evening: [] };
 
         for (const result of results) {
             for (const clubAvail of result.clubsAvailabilities) {
                 const { club, courts, availableTimeSlots } = clubAvail;
 
-                // Build a lookup from courtId -> court info. The app natively uses uuids as courtIds to
-                // represent each court at each club.
                 const courtById = {};
                 const courtByVersionId = {};
                 for (const court of courts) {
@@ -162,32 +169,39 @@
                     courtByVersionId[court.courtSetupVersionId] = court;
                 }
 
-                // Let's track, for each courtId, when it's available and its court name.
                 for (const tod of TIME_OF_DAYS) {
-                    const slots = availableTimeSlots
-                        .filter(slot => slot.timeOfDay === tod)
-                        .flatMap(slot => {
-                            const courtVersionIds = slot.courtsVersionsIds?.length > 0
-                                ? slot.courtsVersionsIds
-                                : [slot.courtId];
-                            return courtVersionIds.map(versionId => {
-                                const court = courtByVersionId[versionId] || courtById[versionId] || {};
-                                return {
-                                    fromInMinutes: slot.fromInMinutes,
-                                    toInMinutes: slot.toInMinutes,
-                                    fromHumanTime: minutesToHumanTime(slot.fromInMinutes),
-                                    toHumanTime: minutesToHumanTime(slot.toInMinutes),
-                                    courtId: court.courtId || versionId,
-                                    courtName: court.courtName || null,
-                                    courtShortName: court.courtShortName || null,
-                                    courtOrder: court.order ?? 999, // 999 is just a max so we don't have NaN issues.
-                                };
+                    // Group slots by start time, collecting all available courts per time.
+                    const slotMap = new Map();
+                    for (const slot of availableTimeSlots.filter(s => s.timeOfDay === tod)) {
+                        if (!slotMap.has(slot.fromInMinutes)) {
+                            slotMap.set(slot.fromInMinutes, {
+                                fromInMinutes: slot.fromInMinutes,
+                                toInMinutes: slot.toInMinutes,
+                                fromHumanTime: minutesToHumanTime(slot.fromInMinutes),
+                                toHumanTime: minutesToHumanTime(slot.toInMinutes),
+                                courts: [],
                             });
-                        })
-                        .sort((a, b) => a.fromInMinutes - b.fromInMinutes || a.courtOrder - b.courtOrder);
+                        }
+                        const courtVersionIds = slot.courtsVersionsIds?.length > 0
+                            ? slot.courtsVersionsIds
+                            : [slot.courtId];
+                        for (const versionId of courtVersionIds) {
+                            const court = courtByVersionId[versionId] || courtById[versionId] || {};
+                            slotMap.get(slot.fromInMinutes).courts.push({
+                                courtId: court.courtId || versionId,
+                                courtName: court.courtName || null,
+                                courtOrder: court.order ?? 999,
+                            });
+                        }
+                    }
 
-                    // Always push the club, even if slots is empty. This allows us to show a custom empty state
-                    // for a club's slots if there are no slots.
+                    const slots = Array.from(slotMap.values())
+                        .sort((a, b) => a.fromInMinutes - b.fromInMinutes)
+                        .map(slot => ({
+                            ...slot,
+                            courts: slot.courts.sort((a, b) => a.courtOrder - b.courtOrder),
+                        }));
+
                     output[tod].push({
                         clubId: club.id,
                         shortName: club.shortName,
@@ -463,7 +477,7 @@
     }
 
     function applyFilters(startMinutes, endMinutes, indoorOnly) {
-        document.querySelectorAll('.bc-injected-slot').forEach(el => {
+        document.querySelectorAll('.bc-court-option').forEach(el => {
             const from = parseInt(el.dataset.fromMinutes);
             const visible = from >= startMinutes && from < endMinutes;
             el.closest('[data-slot-wrapper]').style.display = visible ? '' : 'none';
@@ -539,31 +553,73 @@
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
-        const isEdgeCourt = !slotLocked && (EDGE_COURTS[clubId] || []).includes(slot.courtName);
 
-        const disabledStyle = slotLocked
-            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
-            : '';
-        const disabledClass = slotLocked ? ' time-slot-disabled' : '';
+        const hasEdgeCourt = slot.courts.some(c => (EDGE_COURTS[clubId] || []).includes(c.courtName));
         const lockIcon = slotLocked
             ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
             : '';
-        const dataAttrs = slotLocked ? '' :
-            `data-club-name="${meta.shortName}" ` +
-            `data-from="${slot.fromHumanTime}" ` +
-            `data-to="${slot.toHumanTime}" ` +
-            `data-court="${slot.courtName}" ` +
-            `data-club-id="${clubId}" ` +
-            `data-from-minutes="${slot.fromInMinutes}" ` +
-            `data-to-minutes="${slot.toInMinutes}"`;
+        const disabledStyle = slotLocked
+            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
+            : '';
+
+        // Single court — render as a directly selectable card with no expand step.
+        if (slot.courts.length === 1) {
+            const court = slot.courts[0];
+            const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
+            const dataAttrs = slotLocked ? '' :
+                `data-club-name="${meta.shortName}"
+             data-from="${slot.fromHumanTime}"
+             data-to="${slot.toHumanTime}"
+             data-court="${court.courtName}"
+             data-club-id="${clubId}"
+             data-from-minutes="${slot.fromInMinutes}"
+             data-to-minutes="${slot.toInMinutes}"`;
+            return `
+    <div data-slot-wrapper style="margin-bottom: 8px; margin-left: 4px; margin-right: 4px; width: 100%;">
+      <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
+           ${dataAttrs} style="${disabledStyle}${isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+        <div class="text-lowercase" style="font-weight: 500;">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
+        <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
+        ${isEdge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${lockIcon}
+      </div>
+    </div>`;
+        }
+
+        // Multiple courts — abbreviate court list and show expandable options.
+        const courtNumbers = slot.courts.map(c => c.courtName?.replace(/\D+/g, '')).filter(Boolean);
+        const courtSummary = courtNumbers.length > 0
+            ? `Pickleball ${courtNumbers.join(', ')}`
+            : 'Courts available';
+
+        const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
+            const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
+            return `<div class="bc-court-option"
+            data-club-name="${meta.shortName}"
+            data-from="${slot.fromHumanTime}"
+            data-to="${slot.toHumanTime}"
+            data-court="${court.courtName}"
+            data-club-id="${clubId}"
+            data-from-minutes="${slot.fromInMinutes}"
+            data-to-minutes="${slot.toInMinutes}"
+            style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
+                   background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+            <span>${court.courtName}</span>
+            ${isEdge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
+        </div>`;
+        }).join('');
 
         return `
-    <div class="col-12 mb-2" data-slot-wrapper>
-      <div class="border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${disabledClass} ${slotLocked ? '' : 'clickable bc-injected-slot'}" ${dataAttrs} style="${disabledStyle} ${isEdgeCourt ? 'border: 1px solid rgba(255, 200, 50, 0.7);' : ''}">
-        <div class="text-lowercase">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
-        <div style="font-size: 10px; color: rgba(255,255,255,0.6);">${slot.courtName}</div>
-        ${isEdgeCourt ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255, 200, 50, 0.9);">★</div>` : ''}
+    <div data-slot-wrapper style="margin-bottom: 8px; margin-left: 4px; margin-right: 4px; width: 100%;">
+      <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
+           style="${disabledStyle}${hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+        <div class="text-lowercase" style="font-weight: 500;">${slot.fromHumanTime} - ${slot.toHumanTime}</div>
+        <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
+        ${hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
+        <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
+            ${expandedCourts}
+        </div>
       </div>
     </div>`;
     }
@@ -712,23 +768,51 @@
         // We'll take over handling the Next button.
         initNextButton();
 
-        // Wire up click handlers
+        // Wire up click handlers.
         let selectedSlot = null;
 
-        anchorElement.querySelectorAll('.bc-injected-slot').forEach(el => {
-            el.addEventListener('click', () => {
+        // Expand/collapse slot cards on click.
+        anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+            card.addEventListener('click', e => {
+                if (card.classList.contains('time-slot-disabled')) return;
+                if (e.target.closest('.bc-court-option')) return;
 
-                // Deselect previous
-                if (selectedSlot) {
-                    selectedSlot.style.backgroundColor = '';
-                    selectedSlot.style.borderColor = '';
-                    selectedSlot.style.color = '';
+                const expand = card.querySelector('.bc-court-expand');
+                if (!expand) return;
+
+                const isOpen = expand.style.display !== 'none';
+                const hasSelection = !!card.querySelector('.bc-court-option[data-selected]');
+
+                // Toggle open/closed, but never collapse if a selection is active within.
+                if (isOpen && !hasSelection) {
+                    expand.style.display = 'none';
+                } else {
+                    expand.style.display = 'block';
                 }
+            });
+        });
 
-                // Select this one
-                el.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
-                el.style.borderColor = 'rgba(255, 255, 255, 0.6)';
-                el.style.color = 'white';
+        // Select a specific court when an expanded court option or single-court card is clicked.
+        anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
+            el.addEventListener('click', () => {
+                // Deselect any previously selected option.
+                anchorElement.querySelectorAll('.bc-court-option[data-selected]').forEach(prev => {
+                    prev.removeAttribute('data-selected');
+                });
+
+                // Collapse all expanded cards except the one containing the new selection.
+                // Collapsing is a consequence of selection, not of expansion.
+                const parentCard = el.closest('.bc-slot-card');
+                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+                    if (card === parentCard) return;
+                    const otherExpand = card.querySelector('.bc-court-expand');
+                    if (otherExpand) otherExpand.style.display = 'none';
+                });
+
+                selectedSlot = null;
+
+                // Select this court option.
+                el.setAttribute('data-selected', '');
                 selectedSlot = el;
 
                 pendingSlotBooking = {
@@ -738,13 +822,10 @@
                     toMinutes: parseInt(el.dataset.toMinutes),
                 };
 
-                // Find or create the info col in the bottom bar early, since we need it in both
-                // the success and warning paths below.
                 const bottomBar = document.querySelector('.white-bg.p-2 .container');
                 if (!bottomBar) return;
                 const infoCol = getOrCreateInfoCol(bottomBar);
 
-                // Click a native slot to activate Angular's internal state.
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
                 if (nativeSlot) {
                     nativeSlot.click();
@@ -753,23 +834,15 @@
                         if (nativeInfo) nativeInfo.style.display = 'none';
                     }, 0);
                 } else {
-                    // No native slot available — the home club has no availability.
-                    // Tell the user which clubs they can switch to.
                     infoCol.textContent = `⚠️ To book, set your home club to one with availability: ${getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod).join(', ')}`;
                     pendingSlotBooking = null;
                     return;
                 }
 
-                const clubName = el.dataset.clubName;
-                const from = el.dataset.from;
-                const to = el.dataset.to;
-                const court = el.dataset.court;
-
-                infoCol.textContent = `${clubName} · ${court} @ ${from} - ${to}`;
+                infoCol.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
 
                 const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
                     .find(btn => btn.textContent.trim().includes('NEXT'));
-
                 if (nextButton) {
                     nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
                     nextButton.style.borderColor = 'rgb(0, 188, 212)';
