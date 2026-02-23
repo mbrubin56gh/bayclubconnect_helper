@@ -1,4 +1,4 @@
-# Bay Club Connect Multi-Club Pickleball Court Reservation Helper
+# Bay Club Connect Pickleball Court Reservation Helper
 
 Shows pickleball court availability across multiple Bay Club locations and allows booking at any club, even when a different club is set as the default.
 
