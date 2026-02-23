@@ -20,7 +20,7 @@ Be aware that Tampermonktoey allows you or someone to install scripts that injec
 ## Usage
 - Navigate to the court booking page as normal, regardless of what club you have selected.
 - Walk through Pickleball booking. When you get to the players count and duration selector, you can choose the order of club availabilities that will be displayed.
-- When you click Next to get to the availability listings, swich to the Hour View. This helper only supports the Hour View.
+- When you click Next to get to the availability listings, Hour View is now defaulted to instead of Court View. This helper only supports the Hour View, and this helper assumes you prefer it. You can always select Court View manually.
 - Available slots across all clubs will appear automatically.
 - Note that you have a time range slider to limit the court availability search to your desired times.
 - Note also that you have a checkbox to show clubs only with indoor courts. There's some weather prediction built in: if it's predicted to be >20% chance of rain, there's a hint next to the checkbox that rain is predicted.

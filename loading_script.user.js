@@ -918,6 +918,14 @@
                 : el.style.display = 'none';
         });
 
+        // Auto-select Hour View if Court View is currently selected.
+        const hourViewBtn = Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
+            .find(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+        if (hourViewBtn && !hourViewBtn.classList.contains('btn-selected') && !hourViewBtn.dataset.bcAutoSelected) {
+            hourViewBtn.dataset.bcAutoSelected = 'true';
+            hourViewBtn.click();
+        }
+
         // Desktop
         const tile = document.querySelector('.item-tile');
         if (tile && !tile.querySelector('.all-clubs-availability')) {
