@@ -156,27 +156,35 @@
                 // Build a lookup from courtId -> court info. The app natively uses uuids as courtIds to
                 // represent each court at each club.
                 const courtById = {};
+                const courtByVersionId = {};
                 for (const court of courts) {
                     courtById[court.courtId] = court;
+                    courtByVersionId[court.courtSetupVersionId] = court;
                 }
 
                 // Let's track, for each courtId, when it's available and its court name.
                 for (const tod of TIME_OF_DAYS) {
                     const slots = availableTimeSlots
                         .filter(slot => slot.timeOfDay === tod)
-                        .sort((a, b) => a.fromInMinutes - b.fromInMinutes)
-                        .map(slot => {
-                            const court = courtById[slot.courtId] || {};
-                            return {
-                                fromInMinutes: slot.fromInMinutes,
-                                toInMinutes: slot.toInMinutes,
-                                fromHumanTime: minutesToHumanTime(slot.fromInMinutes),
-                                toHumanTime: minutesToHumanTime(slot.toInMinutes),
-                                courtId: slot.courtId,
-                                courtName: court.courtName || null,
-                                courtShortName: court.courtShortName || null,
-                            };
-                        });
+                        .flatMap(slot => {
+                            const courtVersionIds = slot.courtsVersionsIds?.length > 0
+                                ? slot.courtsVersionsIds
+                                : [slot.courtId];
+                            return courtVersionIds.map(versionId => {
+                                const court = courtByVersionId[versionId] || courtById[versionId] || {};
+                                return {
+                                    fromInMinutes: slot.fromInMinutes,
+                                    toInMinutes: slot.toInMinutes,
+                                    fromHumanTime: minutesToHumanTime(slot.fromInMinutes),
+                                    toHumanTime: minutesToHumanTime(slot.toInMinutes),
+                                    courtId: court.courtId || versionId,
+                                    courtName: court.courtName || null,
+                                    courtShortName: court.courtShortName || null,
+                                    courtOrder: court.order ?? 999, // 999 is just a max so we don't have NaN issues.
+                                };
+                            });
+                        })
+                        .sort((a, b) => a.fromInMinutes - b.fromInMinutes || a.courtOrder - b.courtOrder);
 
                     // Always push the club, even if slots is empty. This allows us to show a custom empty state
                     // for a club's slots if there are no slots.
