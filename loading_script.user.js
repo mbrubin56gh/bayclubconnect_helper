@@ -76,60 +76,57 @@
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
-    let lastFetchParams = null;
-    let lastTransformed = null;
+    let lastFetchState = null; // { transformed, params }
     let lastBookingRequestId = null;
     let pendingSlotBooking = null;
 
-    XMLHttpRequest.prototype.send = function (body) {
-        // When the native app requests availability for the default club, we fire off requests for all clubs.
-        if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
-            const parsedUrl = new URL(this._url);
-            lastFetchParams = {
-                date: parsedUrl.searchParams.get('date'),
-                categoryCode: parsedUrl.searchParams.get('categoryCode'),
-                categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
-                timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
-                nativeClubId: parsedUrl.searchParams.get('clubId'),
-            };
-            fetchAllClubs(lastFetchParams);
-        }
+    XMLHttpRequest.prototype.send = (() => {
+        let lastBookingRequestId = null;
 
-        if (this._url &&
-            this._url.match(/courtbookings$/) && // We're watching for just 'courtbookings', not 'courtbookings/temporary'
-            this._method === 'POST' &&
-            pendingSlotBooking) {
-
-            // Let's swallow any duplicate requests that might result from our hacking.
-            const requestId = this._requestId;
-            if (requestId === lastBookingRequestId) {
-                // Duplicate — swallow it entirely
-                return;
+        return function (body) {
+            if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
+                const parsedUrl = new URL(this._url);
+                const params = {
+                    date: parsedUrl.searchParams.get('date'),
+                    categoryCode: parsedUrl.searchParams.get('categoryCode'),
+                    categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
+                    timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+                    nativeClubId: parsedUrl.searchParams.get('clubId'),
+                };
+                fetchAllClubs(params);
             }
-            lastBookingRequestId = requestId;
 
-            // The app's selected club may support larger reservation blocks than a club permits. Let's cap
-            // our block size requests appropriately. Right now, we only have to worry about 90 minute time slots,
-            // so let's keep it simple. timeSlotId is what the app uses for a time slot length.
-            const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
-                lastFetchParams.timeSlotId === TIMESLOTS.min90
-                ? CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId]
-                : lastFetchParams.timeSlotId;
-            const ourBody = JSON.stringify({
-                clubId: pendingSlotBooking.clubId,
-                courtId: pendingSlotBooking.courtId,
-                date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
-                timeFromInMinutes: pendingSlotBooking.fromMinutes,
-                timeToInMinutes: pendingSlotBooking.toMinutes,
-                categoryOptionsId: lastFetchParams.categoryOptionsId,
-                timeSlotId: timeSlotId,
-            });
-            pendingSlotBooking = null;
-            return originalXhrSend.call(this, ourBody);
-        }
+            if (this._url &&
+                this._url.match(/courtbookings$/) &&
+                this._method === 'POST' &&
+                pendingSlotBooking) {
 
-        return originalXhrSend.apply(this, arguments);
-    };
+                const requestId = this._requestId;
+                if (requestId === lastBookingRequestId) {
+                    return;
+                }
+                lastBookingRequestId = requestId;
+
+                const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
+                    lastFetchState.params.timeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId]
+                    : lastFetchState.params.timeSlotId;
+                const ourBody = JSON.stringify({
+                    clubId: pendingSlotBooking.clubId,
+                    courtId: pendingSlotBooking.courtId,
+                    date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
+                    timeFromInMinutes: pendingSlotBooking.fromMinutes,
+                    timeToInMinutes: pendingSlotBooking.toMinutes,
+                    categoryOptionsId: lastFetchState.params.categoryOptionsId,
+                    timeSlotId: timeSlotId,
+                });
+                pendingSlotBooking = null;
+                return originalXhrSend.call(this, ourBody);
+            }
+
+            return originalXhrSend.apply(this, arguments);
+        };
+    })();
 
     // The app and its server natively represent court booking start and end times as minutes from midnight.
     // So, for example, a court availability start time of 7:00 AM is represented as 420 (7 hours past midnight
@@ -527,7 +524,7 @@
 
     function getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod) {
         return allClubIds
-            .filter(id => id !== lastFetchParams.nativeClubId)
+            .filter(id => id !== lastFetchState.params.nativeClubId)
             .filter(id => TIME_OF_DAYS.some(tod =>
                 ((byClubAndTod[id] || {})[tod] || []).length > 0
             ))
@@ -688,7 +685,7 @@
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
 
         const nativeClubHasAvailability = TIME_OF_DAYS.some(tod =>
-            ((byClubAndTod[lastFetchParams.nativeClubId] || {})[tod] || []).length > 0
+            ((byClubAndTod[lastFetchState.params.nativeClubId] || {})[tod] || []).length > 0
         );
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
@@ -749,7 +746,7 @@
         }
 
         // Wait for the weather forecast to be ready, then update the indoor toggle hint if rain is predicted.
-        weatherFetchPromise.then(() => {
+        weather.promise.then(() => {
             if (!isRainPredictedForDate(fetchDate)) return;
             anchorElement.querySelectorAll('.bc-indoor-checkbox').forEach(checkbox => {
                 const label = checkbox.closest('label');
@@ -816,7 +813,7 @@
                 pendingSlotBooking = {
                     clubId: el.dataset.clubId,
                     courtId: el.dataset.courtId,
-                    date: lastFetchParams.date,
+                    date: lastFetchState.params.date,
                     fromMinutes: parseInt(el.dataset.fromMinutes),
                     toMinutes: parseInt(el.dataset.toMinutes),
                 };
@@ -865,8 +862,7 @@
                         if (currentAbortController) currentAbortController.abort();
 
                         // Clear state
-                        lastTransformed = null;
-                        lastFetchParams = null;
+                        lastFetchState = null;
                         pendingSlotBooking = null;
 
                         removeOurContentAndUnhideNativeContent();
@@ -909,16 +905,14 @@
     // Angular supports mobile and desktop views/containers, and renders them differently. We want
     // to make sure we can handle either.
     function injectIntoAllContainers() {
-        if (!lastTransformed) return;
+        if (!lastFetchState) return;
 
-        // Hide the court selector — not relevant when showing all clubs
         document.querySelectorAll('app-court-select').forEach(el => {
             el.closest('.ng-star-inserted')
                 ? el.closest('.ng-star-inserted').style.display = 'none'
                 : el.style.display = 'none';
         });
 
-        // Auto-select Hour View if Court View is currently selected.
         const hourViewBtn = Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
             .find(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
         if (hourViewBtn && !hourViewBtn.classList.contains('btn-selected') && !hourViewBtn.dataset.bcAutoSelected) {
@@ -926,16 +920,14 @@
             hourViewBtn.click();
         }
 
-        // Desktop
         const tile = document.querySelector('.item-tile');
         if (tile && !tile.querySelector('.all-clubs-availability')) {
-            renderAllClubsAvailability(lastTransformed, tile, lastFetchParams.date);
+            renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
         }
 
-        // Mobile
         const mobileContainer = document.querySelector('.d-md-none.px-3');
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
-            renderAllClubsAvailability(lastTransformed, mobileContainer, lastFetchParams.date);
+            renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
     }
 
@@ -951,8 +943,7 @@
                 history.replaceState = originalReplaceState;
                 window.removeEventListener('popstate', onNavigate);
                 removeOurContentAndUnhideNativeContent();
-                lastTransformed = null;
-                lastFetchParams = null;
+                lastFetchState = null;
                 pendingSlotBooking = null;
             }
         }
@@ -991,10 +982,10 @@
                         'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
                         'Accept': 'application/json',
                     }
-                }).then(r => r.json())
+                }).then(r => r.json());
             }));
 
-            lastTransformed = transformAvailability(results);
+            lastFetchState = { transformed: transformAvailability(results), params };
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
@@ -1005,15 +996,14 @@
             }
         }
     }
-
     // Cache of date string -> percentage change of rain so we only fetch weather once per session.
-    const rainPredictionCache = {};
-    let weatherFetchPromise = null;
+    const weather = {
+        cache: {},
+        promise: null,
+    };
     const MIN_RAIN_PERCENTAGE_FOR_ALERT = 20;
 
     async function fetchWeatherForecast() {
-        // Fetch up to 16 days of daily precipitation probability in one call.
-        // Open-Meteo requires no API key and covers all Bay Area clubs with a single coordinate.
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&daily=precipitation_probability_max&timezone=America%2FLos_Angeles&forecast_days=16';
         try {
             const response = await fetch(url);
@@ -1021,7 +1011,7 @@
             const dates = data?.daily?.time || [];
             const probs = data?.daily?.precipitation_probability_max || [];
             dates.forEach((date, i) => {
-                rainPredictionCache[date] = probs[i];
+                weather.cache[date] = probs[i];
             });
         } catch (e) {
             // Fail silently — weather is a hint, not critical.
@@ -1029,7 +1019,7 @@
     }
 
     function rainPercentageForDate(dateString) {
-        return rainPredictionCache[dateString]
+        return weather.cache[dateString];
     }
 
     function isRainPredictedForDate(dateString) {
@@ -1055,5 +1045,5 @@
     watchForContainerChanges();
     watchForDurationSelectorPage();
     watchForNavigationAwayFromBooking();
-    weatherFetchPromise = fetchWeatherForecast();
+    weather.promise = fetchWeatherForecast();
 })();
