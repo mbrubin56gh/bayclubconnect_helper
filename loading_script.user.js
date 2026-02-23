@@ -23,8 +23,8 @@
         outline: 1px solid rgba(255,255,255,0.5) !important;
     }
 `;
-
     document.head.appendChild(style);
+
     // These are the uuids the app natively uses for each site.
     const CLUBS = {
         broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
@@ -936,21 +936,35 @@
         }
     }
 
+    // When we navigate away from the booking screen, we want to clean up any of our injected content
+    // and restore whatever was there natively we might have hidden.
     function watchForNavigationAwayFromBooking() {
-        let lastHref = location.href;
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
 
-        setInterval(() => {
-            if (location.href === lastHref) return;
-            lastHref = location.href;
-
-            // If we've navigated away from the court booking flow, clean up.
+        function onNavigate() {
             if (!location.href.includes('create-booking')) {
+                history.pushState = originalPushState;
+                history.replaceState = originalReplaceState;
+                window.removeEventListener('popstate', onNavigate);
                 removeOurContentAndUnhideNativeContent();
                 lastTransformed = null;
                 lastFetchParams = null;
                 pendingSlotBooking = null;
             }
-        }, 300);
+        }
+
+        history.pushState = function (...args) {
+            originalPushState.apply(this, args);
+            onNavigate();
+        };
+
+        history.replaceState = function (...args) {
+            originalReplaceState.apply(this, args);
+            onNavigate();
+        };
+
+        window.addEventListener('popstate', onNavigate);
     }
 
     // Fetch availability info for all the clubs in parallel, and combine their results.
