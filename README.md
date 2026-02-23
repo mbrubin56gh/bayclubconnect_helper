@@ -35,6 +35,8 @@ Be aware that Tampermonktoey allows you or someone to install scripts that injec
 
 ## Demonstration
 
+This video is now a little out of date, but it gives you the idea. I'll record a new one when feature development has settled down a bit:
+
 https://github.com/user-attachments/assets/d185d02a-5226-4f5b-8e11-e7019d1bbc05
 
 
