@@ -686,6 +686,21 @@
             });
         }
 
+        // Wait for the weather forecast to be ready, then update the indoor toggle hint if rain is predicted.
+        weatherFetchPromise.then(() => {
+            if (!isRainPredictedForDate(fetchDate)) return;
+            anchorElement.querySelectorAll('.bc-indoor-checkbox').forEach(checkbox => {
+                const label = checkbox.closest('label');
+                if (label && !label.querySelector('.bc-rain-hint')) {
+                    const hint = document.createElement('span');
+                    hint.className = 'bc-rain-hint';
+                    hint.textContent = `🌧️ Rain predicted: ${rainPercentageForDate(fetchDate)}%`;
+                    hint.style.cssText = 'color: rgba(100, 180, 255, 0.9); font-size: 12px; margin-left: 4px;';
+                    label.appendChild(hint);
+                }
+            });
+        });
+
         // We'll take over handling the Next button.
         initNextButton();
 
@@ -889,9 +904,40 @@
         }
     }
 
+    // Cache of date string -> percentage change of rain so we only fetch weather once per session.
+    const rainPredictionCache = {};
+    let weatherFetchPromise = null;
+    const MIN_RAIN_PERCENTAGE_FOR_ALERT = 20;
+
+    async function fetchWeatherForecast() {
+        // Fetch up to 16 days of daily precipitation probability in one call.
+        // Open-Meteo requires no API key and covers all Bay Area clubs with a single coordinate.
+        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&daily=precipitation_probability_max&timezone=America%2FLos_Angeles&forecast_days=16';
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            const dates = data?.daily?.time || [];
+            const probs = data?.daily?.precipitation_probability_max || [];
+            dates.forEach((date, i) => {
+                rainPredictionCache[date] = probs[i];
+            });
+        } catch (e) {
+            // Fail silently — weather is a hint, not critical.
+        }
+    }
+
+    function rainPercentageForDate(dateString) {
+        return rainPredictionCache[dateString]
+    }
+
+    function isRainPredictedForDate(dateString) {
+        return rainPercentageForDate(dateString) > MIN_RAIN_PERCENTAGE_FOR_ALERT ?? false;
+    }
+
     // Let's actually start our program! We'll keep watch on the DOM starting here.
     interceptBackToHomeButton();
     watchForContainerChanges();
     watchForDurationSelectorPage();
     watchForNavigationAwayFromBooking();
+    weatherFetchPromise = fetchWeatherForecast();
 })();
