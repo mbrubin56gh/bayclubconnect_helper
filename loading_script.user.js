@@ -207,7 +207,7 @@
     }
 
     // Call this once after renderAllClubsAvailability injects the HTML. It allows us to hear the Next button click
-    // when a slot has been selected and take action.
+    // when a slot has been selected so we can take action.
     function initNextButton() {
         const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
             .find(btn => btn.textContent.trim().includes('NEXT'));
@@ -250,7 +250,6 @@
 
         const clubOrder = getClubOrder();
 
-        // Friendlier names
         const CLUB_SHORT_NAMES = {
             [CLUBS.broadway]: 'Broadway',
             [CLUBS.redwoodShores]: 'Redwood Shores',
@@ -316,6 +315,7 @@
         });
     }
 
+    // We use this to store whether or not to show only clubs with indoor courts.
     const INDOOR_ONLY_KEY = 'bc_indoor_only';
 
     function getShowIndoorClubsOnly() {
@@ -340,7 +340,8 @@
     </div>`;
     }
 
-    // We add a widget to allow users to filter availability by time range.
+    // We add a widget to allow users to filter availability by time range. We store their settings
+    // using TIMER_RANGE_KEY.
     const TIME_RANGE_KEY = 'bc_time_range';
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
     const SLIDER_MAX_MINUTES = 1200; // 8:00 pm
@@ -467,6 +468,7 @@
         document.addEventListener('touchend', onMouseUp);
     }
 
+    // Apply any filters to our court data (e.g. filter by time range, indoor/outdoor courts).
     function applyFilters(startMinutes, endMinutes, indoorOnly) {
         document.querySelectorAll('.bc-court-option').forEach(el => {
             const from = parseInt(el.dataset.fromMinutes);
@@ -532,6 +534,9 @@
             .map(id => clubMeta[id].shortName);
     }
 
+    // We secretly select a natively rendered slot for a court to trigger the Angular state machine to transition.
+    // Without a native slot to select, we can't book via one of our synthetically rendered slots. So if we run
+    // into this case, we need to warn the user we can't book without their changing their club or date.
     function buildNoNativeSlotWarningHtml(allClubIds, clubMeta, byClubAndTod) {
         const clubsWithAvailability = getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod);
         return `
@@ -663,15 +668,15 @@
         return html;
     }
 
-    function getOrCreateInfoCol(bottomBar) {
-        let infoCol = bottomBar.querySelector('.bc-injected-info');
-        if (!infoCol) {
-            infoCol = document.createElement('div');
-            infoCol.className = 'col-12 col-md-auto black-gray size-12 text-center text-md-right my-auto p-2 bc-injected-info';
+    function getOrCreateSelectedBookingInfoHolder(bottomBar) {
+        let selectedBookingInfoHolder = bottomBar.querySelector('.bc-injected-info');
+        if (!selectedBookingInfoHolder) {
+            selectedBookingInfoHolder = document.createElement('div');
+            selectedBookingInfoHolder.className = 'col-12 col-md-auto black-gray size-12 text-center text-md-right my-auto p-2 bc-injected-info';
             const row = bottomBar.querySelector('.row');
-            row.insertBefore(infoCol, row.firstChild);
+            row.insertBefore(selectedBookingInfoHolder, row.firstChild);
         }
-        return infoCol;
+        return selectedBookingInfoHolder;
     }
 
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
@@ -818,7 +823,7 @@
 
                 const bottomBar = document.querySelector('.white-bg.p-2 .container');
                 if (!bottomBar) return;
-                const infoCol = getOrCreateInfoCol(bottomBar);
+                const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
 
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
                 if (nativeSlot) {
@@ -828,12 +833,12 @@
                         if (nativeInfo) nativeInfo.style.display = 'none';
                     }, 0);
                 } else {
-                    infoCol.textContent = `⚠️ To book, set your home club to one with availability: ${getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod).join(', ')}`;
+                    selectedBookingInfoHolder.textContent = `⚠️ To book, set your home club to one with availability: ${getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod).join(', ')}`;
                     pendingSlotBooking = null;
                     return;
                 }
 
-                infoCol.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
+                selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
 
                 const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
                     .find(btn => btn.textContent.trim().includes('NEXT'));
@@ -883,7 +888,7 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    // When the duration selector page appears, we'll inject our own widget for club ordering.
+    // When the native app's duration selector page appears, we'll inject our own widget for club ordering.
     function watchForDurationSelectorPage() {
         const observer = new MutationObserver(() => {
             const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
