@@ -50,27 +50,6 @@
         // santaClara: TBD
     };
 
-    // We're going to synthesize our own duration picker, and substitute it in for
-    // the native one that we hide. We do this so that we can select a 30 minute
-    // duration for the native app, increasing our likelihood that some time slot
-    // will be available for the default club. Unfortunately, without that's being
-    // the case, we can't drive the Angular state machine when one of our slots
-    // is selected: we need to secretly select one that Angular rendered on its own,
-    // and so we want to do everything we can to maximize the chances that Angular
-    // creates one. That includes minimizing the duration of reservation we request.
-    // This mapping helps us create a synthetic duration picker.
-    const DURATION_LABEL_TO_TIMESLOT = {
-        '30 minutes': TIMESLOTS.min30,
-        '60 minutes': TIMESLOTS.min60,
-        '90 minutes': TIMESLOTS.min90,
-    };
-
-    function getOurTimeSlotId() {
-        const saved = localStorage.getItem(DURATION_KEY);
-        return DURATION_LABEL_TO_TIMESLOT[saved] ?? null;
-    }
-
-
     // We want to abort our multiple availability requests in flight if the user clicks BACK TO HOME.
     let currentAbortController = null;
 
@@ -92,9 +71,55 @@
     };
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-        // We stash the url and method for our use in send.
+        this.addEventListener('load', function () {
+            if (this.status < 200 || this.status >= 300) return;
+            if (!this.responseText || this.responseText.trim() === '') return;
+            try {
+                const data = JSON.parse(this.responseText);
+                if (!data.clubsAvailabilities) return;
+                const clubAvail = data.clubsAvailabilities[0];
+                const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
+                console.log('[bc] clubsAvailabilities found, slots:', slotCount, 'courts:', clubAvail?.courts?.length);
+                if (slotCount > 0) return;
+                const court = clubAvail?.courts?.[0];
+                if (!court) { console.log('[bc] no courts either, cannot inject'); return; }
+                clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
+                Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
+                Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data) });
+                console.log('[bc] fake slot injected');
+            } catch (e) {
+                console.log('[bc] error:', e);
+            }
+        });
         this._url = url;
         this._method = method;
+        if (url.includes('connect-api.bayclubs.io/court-booking/api/1.0/availability')) {
+            this.addEventListener('load', function () {
+                try {
+                    const data = JSON.parse(this.responseText);
+                    const clubAvail = data?.clubsAvailabilities?.[0];
+                    if (!clubAvail) return;
+                    const hasSlots = clubAvail.availableTimeSlots?.length > 0;
+                    if (hasSlots) return;
+
+                    // No slots — inject one fake slot so Angular renders something we can click.
+                    const court = clubAvail.courts?.[0];
+                    if (!court) return;
+                    clubAvail.availableTimeSlots = [{
+                        timeOfDay: 'Morning',
+                        fromInMinutes: 420,
+                        toInMinutes: 450,
+                        courtId: court.courtId,
+                        courtsVersionsIds: [court.courtSetupVersionId || court.courtId],
+                    }];
+
+                    // Override responseText with our modified data.
+                    Object.defineProperty(this, 'responseText', {
+                        get: () => JSON.stringify(data),
+                    });
+                } catch (e) { }
+            });
+        }
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
@@ -111,7 +136,7 @@
                     date: parsedUrl.searchParams.get('date'),
                     categoryCode: parsedUrl.searchParams.get('categoryCode'),
                     categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
-                    timeSlotId: getOurTimeSlotId() ?? parsedUrl.searchParams.get('timeSlotId'),
+                    timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
                     nativeClubId: parsedUrl.searchParams.get('clubId'),
                 };
                 fetchAllClubs(params);
@@ -246,41 +271,16 @@
     // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
     const DURATION_KEY = 'bc_duration';
 
-    function autoSelectPlayerAndDuration() {
-        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
-        if (!container) return;
-
-        if (!container.dataset.bcListening) {
-            // Save on click via delegation.
-            container.addEventListener('click', e => {
-                const btn = e.target.closest('app-button-select .btn');
-                if (!btn) return;
-                const group = btn.closest('.btn-group');
-                const labels = Array.from(group.querySelectorAll('.btn'))
-                    .map(b => b.textContent.trim());
-                const key = labels.includes('Singles') ? PLAYERS_KEY
-                    : labels.includes('30 minutes') ? DURATION_KEY
-                        : null;
-                if (key) localStorage.setItem(key, btn.textContent.trim());
-            });
-
-            // Watch the container for Angular adding the button groups.
-            const observer = new MutationObserver(() => tryToAutoSelectDurationAndPlayers(container, observer));
-            observer.observe(container, { childList: true, subtree: true });
-            container.dataset.bcListening = 'true';
-        }
-
-        tryToAutoSelectDurationAndPlayers(container, null);
-    }
-
     function tryToAutoSelectDurationAndPlayers(container) {
         document.querySelectorAll('app-button-select .btn-group').forEach(group => {
             if (group.dataset.bcAutoSelected) return;
-            if (group.dataset.bcSyntheticDuration) return;
             const labels = Array.from(group.querySelectorAll('.btn'))
                 .map(b => b.textContent.trim());
-            if (!labels.includes('Singles')) return; // only handle players group here
-            const saved = localStorage.getItem(PLAYERS_KEY);
+            const isPlayers = labels.includes('Singles');
+            const isDuration = labels.includes('30 minutes');
+            if (!isPlayers && !isDuration) return;
+            const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
+            const saved = localStorage.getItem(key);
             if (saved) {
                 const btn = Array.from(group.querySelectorAll('.btn'))
                     .find(b => b.textContent.trim() === saved);
@@ -313,79 +313,6 @@
         localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
     }
 
-    // We inject our own duration picker, hiding the native one. We want the native
-    // one to have 30 minutes selected so that we increase the chances that there
-    // are found open slots at our default club, but also want to allow the user
-    // to tell us what duration they really want for their reservation slots.
-    function injectSyntheticDurationPicker() {
-        const filter = document.querySelector('app-racquet-sports-filter');
-        if (!filter) return;
-
-        // If our picker is already present, nothing to do.
-        if (filter.querySelector('[data-bc-synthetic-duration]')) return;
-
-        // If we're already observing, nothing to do — the observer will fire when the content appears.
-        if (filter.dataset.bcDurationObserving) return;
-
-        filter.dataset.bcDurationObserving = 'true';
-
-        function tryInjectPicker() {
-            const timeCol = Array.from(filter.querySelectorAll('.mt-3.col-12.col-md'))
-                .find(col => col.querySelector('.size-14.mb-2')?.textContent.trim() === 'Time');
-            if (!timeCol || timeCol.dataset.bcDurationInjected) return;
-
-            const nativeButtonSelect = timeCol.querySelector('app-button-select');
-            if (!nativeButtonSelect) return;
-
-            nativeButtonSelect.style.display = 'none';
-
-            const saved = localStorage.getItem(DURATION_KEY) || '30 minutes';
-            const options = ['30 minutes', '60 minutes', '90 minutes'];
-
-            const ourPicker = document.createElement('div');
-            ourPicker.className = 'btn-group w-100';
-            ourPicker.dataset.bcSyntheticDuration = 'true';
-            ourPicker.innerHTML = options.map(opt => `
-    <div class="btn btn-outline-dark-grey size-10 py-2${opt === saved ? ' btn-selected' : ''}"
-         data-duration="${opt}"
-         style="${opt === saved ? 'background: rgba(255,255,255,0.15);' : ''}">
-        <span>${opt}</span>
-    </div>
-`).join('');
-            ourPicker.style.cssText = 'border-left: 2px solid rgba(0,188,212,0.4);';
-
-            nativeButtonSelect.insertAdjacentElement('afterend', ourPicker);
-
-            ourPicker.querySelectorAll('.btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    ourPicker.querySelectorAll('.btn').forEach(b => {
-                        b.classList.remove('btn-selected');
-                        b.style.background = '';
-                    });
-                    btn.classList.add('btn-selected');
-                    btn.style.background = 'rgba(255,255,255,0.15)';
-                    localStorage.setItem(DURATION_KEY, btn.dataset.duration);
-
-                    const nativeThirtyBtn = Array.from(nativeButtonSelect.querySelectorAll('.btn'))
-                        .find(b => b.textContent.trim() === '30 minutes');
-                    if (nativeThirtyBtn && !nativeThirtyBtn.classList.contains('btn-selected')) {
-                        nativeThirtyBtn.click();
-                    }
-                });
-            });
-
-            timeCol.dataset.bcDurationInjected = 'true';
-            delete filter.dataset.bcDurationObserving;
-            observer.disconnect();
-        }
-
-        const observer = new MutationObserver(() => tryInjectPicker());
-        observer.observe(filter, { childList: true, subtree: true });
-
-        // Also try immediately in case Angular already rendered the content.
-        tryInjectPicker();
-    }
-
     // We will automatically select the 30 minute duration in the native duration picker.
     // This maximizes the chances that there be a reservation slot available for the native
     // club.
@@ -399,11 +326,12 @@
                 const btn = e.target.closest('app-button-select .btn');
                 if (!btn) return;
                 const group = btn.closest('.btn-group');
-                if (group?.dataset.bcSyntheticDuration) return; // ignore our own picker
                 const labels = Array.from(group.querySelectorAll('.btn'))
                     .map(b => b.textContent.trim());
                 if (labels.includes('Singles')) {
                     localStorage.setItem(PLAYERS_KEY, btn.textContent.trim());
+                } else if (labels.includes('30 minutes')) {
+                    localStorage.setItem(DURATION_KEY, btn.textContent.trim());
                 }
             });
             container.dataset.bcListening = 'true';
@@ -411,14 +339,6 @@
 
         // Auto-select saved player preference.
         tryToAutoSelectDurationAndPlayers(container);
-
-        // Secretly ensure native 30-minute button is selected.
-        const nativeThirtyBtn = Array.from(
-            document.querySelectorAll('app-racquet-sports-filter app-button-select .btn'))
-            .find(b => b.textContent.trim() === '30 minutes');
-        if (nativeThirtyBtn && !nativeThirtyBtn.classList.contains('btn-selected')) {
-            nativeThirtyBtn.click();
-        }
     }
 
     function injectClubOrderWidget() {
@@ -629,7 +549,7 @@
             dragging = null;
             saveTimeRangeForSlider(startMinutes, endMinutes);
             // Re-filter visible slots.
-            applyFilters(startMinutes, endMinutes, getShowIndoorClubsOnly());
+            applyFilters(startMinutes, endMinutes);
         }
 
         [startHandle, endHandle].forEach(handle => {
@@ -698,26 +618,6 @@
         allClubIds.sort((a, b) => preferredOrder.indexOf(a) - preferredOrder.indexOf(b));
 
         return { allClubIds, clubMeta, byClubAndTod };
-    }
-
-    function getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod) {
-        return allClubIds
-            .filter(id => id !== lastFetchState.params.nativeClubId)
-            .filter(id => TIME_OF_DAYS.some(tod =>
-                ((byClubAndTod[id] || {})[tod] || []).length > 0
-            ))
-            .map(id => clubMeta[id].shortName);
-    }
-
-    // We secretly select a natively rendered slot for a court to trigger the Angular state machine to transition.
-    // Without a native slot to select, we can't book via one of our synthetically rendered slots. So if we run
-    // into this case, we need to warn the user we can't book without their changing their club or date.
-    function buildNoNativeSlotWarningHtml(allClubIds, clubMeta, byClubAndTod) {
-        const clubsWithAvailability = getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod);
-        return `
-    <div style="background-color: rgba(255, 180, 0, 0.15); border: 1px solid rgba(255, 180, 0, 0.4); border-radius: 4px; padding: 10px 12px; margin-bottom: 16px; color: rgba(255, 220, 100, 0.9); font-size: 12px;">
-        ⚠️ Your home club has no availability. To book at another location, change your home club to one with availability or change to a different date when the club does have availability. These clubs have availability on the date selected: ${clubsWithAvailability.join(', ')}
-    </div>`;
     }
 
     function buildSlotHtml(slot, fetchDate, limitDate, meta, clubId) {
@@ -863,30 +763,14 @@
 
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
 
-        const nativeClubHasAvailability = !!document.querySelector('app-court-time-slot-item div.time-slot');
+        const nativeClubHasAvailability = TIME_OF_DAYS.some(tod =>
+            ((byClubAndTod[lastFetchState.params.nativeClubId] || {})[tod] || []).length > 0
+        );
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
         html += buildShowIndoorCourtsOnlyToggleHtml();
         html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
-
-        // We're going to render our slots for all the clubs. But we have to handle an edge case.
-        // After a user selects one of our presented slots and then clicks Next, we want to fire off
-        // a reservation request to the server and advance the UI to showing the partner picker, just
-        // as the app natively would. But our slots are not hooked up to Angular and so clicking on them
-        // does not advance the Angular state machine. It's not simple to force an update to the Angular
-        // state machine and we'd rather not own replacing the rest of the flow (e. g. create our
-        // own partner picker flow). So what we do is inject our own time slots for all the clubs while
-        // hiding (not removing) the native Angular slots for the selected club, and when one
-        // of our slots is selected, we secretly select one of the Angular slots. That advances Angular's state
-        // machine. But then we watch request going out and create our own, so the request for the secretly
-        // selected slot never goes out. Unfortunately, sometimes -- rarely -- the selected club has no availability
-        // for a day (maybe there's a tournament going on all day, so all courts are pre-booked). In that case,
-        // we have no native slot to select and we're out of luck. We'll show a warning message to the user to
-        // select a different default club or date.
-        if (!nativeClubHasAvailability) {
-            html += buildNoNativeSlotWarningHtml(allClubIds, clubMeta, byClubAndTod);
-        }
 
         // Render the time slots for all clubs.
         for (const clubId of allClubIds) {
@@ -1003,9 +887,7 @@
                         if (nativeInfo) nativeInfo.style.display = 'none';
                     }, 0);
                 } else {
-                    selectedBookingInfoHolder.textContent = `⚠️ To book, set your home club to one with availability: ${getClubsWithAvailability(allClubIds, clubMeta, byClubAndTod).join(', ')}`;
-                    pendingSlotBooking = null;
-                    return;
+                    console.log("No native slot to click");
                 }
 
                 selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
@@ -1060,7 +942,6 @@
                     injectClubOrderWidget();
                 }
                 autoSelectPlayerAndDuration();
-                injectSyntheticDurationPicker();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });

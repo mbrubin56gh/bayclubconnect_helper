@@ -25,6 +25,24 @@ The script patches `XMLHttpRequest.prototype.open`, `send`, and `setRequestHeade
 2. Capture `Authorization` and `X-SessionId` headers for reuse in our own requests
 3. Intercept the `courtbookings` POST and replace it with our own booking body (correct club, court, time)
 
+## XHR Response Interception (Fake Slot Injection)
+
+Angular reads the availability response via the `response` property (not `responseText`) on the XHR object. 
+We intercept this in `XMLHttpRequest.prototype.open` by attaching a `load` event listener to any request 
+matching `connect-api.bayclubs.io/court-booking/api/1.0/availability`. If the response contains zero 
+available time slots but does have courts, we inject a single fake 7:00–7:30 AM slot using a real courtId 
+from the response, then override both `response` and `responseText` via `Object.defineProperty` so Angular 
+renders it as a clickable native slot.
+
+This solves the fundamental problem that our multi-club UI needs a native Angular slot to secretly click 
+in order to advance the Angular state machine when the user hits Next. Without this, if the home club has 
+no availability for the selected date, there would be nothing to click and the booking flow would be dead. 
+The fake slot is never actually booked — our `send` interceptor replaces the outgoing booking request with 
+the user's real selection before it reaches the server.
+
+Note: `configurable: true` is required on the `Object.defineProperty` calls to avoid errors if the 
+property is defined more than once.
+
 ### Angular State Machine Hack
 The app is Angular-based. We can't easily drive its state machine directly, so when a user selects one of our injected slots, we secretly click a native Angular time slot to advance Angular's state. We then intercept the outgoing booking request and replace it with our own. This means the native club must have at least one available slot on the selected date — if not, we show a warning.
 
@@ -44,10 +62,6 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
 - **Weather hint**: Shows rain probability from Open-Meteo API next to the indoor toggle when rain > 20%
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
-
-### Synthetic Duration Picker Hack
-In order to increate the likelihood that there is a dartion slot natively rendered by Angular for the default selected club, we will always force the app natively request 30 minute booking slot durations by automatically selecting the 30 minute duration on the native duration picker. We hide that native picker from our user and present our own synthetic duration picker (with a slightly different visual treatment so we can notice it when debugging) that allows our user to select the duration they really want. We include an XHR request to the default club for that user selected duration so that we can show our own duration slots for all the clubs. But now it's more likely we have some duration for the native club to secretly click on.
-
 
 ## Code Conventions
 
