@@ -15,16 +15,6 @@
 (function () {
     'use strict';
 
-    // Set up a style for selected card appearance.
-    const style = document.createElement('style');
-    style.textContent = `
-    .bc-court-option[data-selected] {
-        background-color: rgba(255,255,255,0.2) !important;
-        outline: 1px solid rgba(255,255,255,0.5) !important;
-    }
-`;
-    document.head.appendChild(style);
-
     // These are the uuids the app natively uses for each site.
     const CLUBS = {
         broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
@@ -1033,7 +1023,21 @@
         return (rainPercentageForDate(dateString) ?? 0) > MIN_RAIN_PERCENTAGE_FOR_ALERT;
     }
 
+
+    function createCardSelectionStyle() {
+        // Set up a style for selected card appearance.
+        const style = document.createElement('style');
+        style.textContent = `
+    .bc-court-option[data-selected] {
+        background-color: rgba(255,255,255,0.2) !important;
+        outline: 1px solid rgba(255,255,255,0.5) !important;
+    }
+`;
+        document.head.appendChild(style);
+    }
+
     // Let's actually start our program! We'll keep watch on the DOM starting here.
+    createCardSelectionStyle();
     interceptBackToHomeButton();
     watchForContainerChanges();
     watchForDurationSelectorPage();
