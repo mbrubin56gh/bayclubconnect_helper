@@ -50,6 +50,27 @@
         // santaClara: TBD
     };
 
+    // We're going to synthesize our own duration picker, and substitute it in for
+    // the native one that we hide. We do this so that we can select a 30 minute
+    // duration for the native app, increasing our likelihood that some time slot
+    // will be available for the default club. Unfortunately, without that's being
+    // the case, we can't drive the Angular state machine when one of our slots
+    // is selected: we need to secretly select one that Angular rendered on its own,
+    // and so we want to do everything we can to maximize the chances that Angular
+    // creates one. That includes minimizing the duration of reservation we request.
+    // This mapping helps us create a synthetic duration picker.
+    const DURATION_LABEL_TO_TIMESLOT = {
+        '30 minutes': TIMESLOTS.min30,
+        '60 minutes': TIMESLOTS.min60,
+        '90 minutes': TIMESLOTS.min90,
+    };
+
+    function getOurTimeSlotId() {
+        const saved = localStorage.getItem(DURATION_KEY);
+        return DURATION_LABEL_TO_TIMESLOT[saved] ?? null;
+    }
+
+
     // We want to abort our multiple availability requests in flight if the user clicks BACK TO HOME.
     let currentAbortController = null;
 
@@ -90,10 +111,12 @@
                     date: parsedUrl.searchParams.get('date'),
                     categoryCode: parsedUrl.searchParams.get('categoryCode'),
                     categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
-                    timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+                    timeSlotId: getOurTimeSlotId() ?? parsedUrl.searchParams.get('timeSlotId'),
                     nativeClubId: parsedUrl.searchParams.get('clubId'),
                 };
                 fetchAllClubs(params);
+                // Fall through intentionally — let Angular's original 30-minute request
+                // go out unmodified so it renders native slots we can secretly click.
             }
 
             if (this._url &&
@@ -242,24 +265,22 @@
             });
 
             // Watch the container for Angular adding the button groups.
-            const observer = new MutationObserver(() => tryAutoSelect(container, observer));
+            const observer = new MutationObserver(() => tryToAutoSelectDurationAndPlayers(container, observer));
             observer.observe(container, { childList: true, subtree: true });
             container.dataset.bcListening = 'true';
         }
 
-        tryAutoSelect(container, null);
+        tryToAutoSelectDurationAndPlayers(container, null);
     }
 
-    function tryAutoSelect(container, observer) {
+    function tryToAutoSelectDurationAndPlayers(container) {
         document.querySelectorAll('app-button-select .btn-group').forEach(group => {
             if (group.dataset.bcAutoSelected) return;
+            if (group.dataset.bcSyntheticDuration) return;
             const labels = Array.from(group.querySelectorAll('.btn'))
                 .map(b => b.textContent.trim());
-            const key = labels.includes('Singles') ? PLAYERS_KEY
-                : labels.includes('30 minutes') ? DURATION_KEY
-                    : null;
-            if (!key) return;
-            const saved = localStorage.getItem(key);
+            if (!labels.includes('Singles')) return; // only handle players group here
+            const saved = localStorage.getItem(PLAYERS_KEY);
             if (saved) {
                 const btn = Array.from(group.querySelectorAll('.btn'))
                     .find(b => b.textContent.trim() === saved);
@@ -267,17 +288,8 @@
             }
             group.dataset.bcAutoSelected = 'true';
         });
-
-        // Disconnect observer once both groups have been handled.
-        if (observer) {
-            const allHandled = ['Singles', '30 minutes'].every(label =>
-                Array.from(document.querySelectorAll('app-button-select .btn'))
-                    .some(b => b.textContent.trim() === label &&
-                        b.closest('.btn-group').dataset.bcAutoSelected)
-            );
-            if (allHandled) observer.disconnect();
-        }
     }
+
     // Use this key to store the club ordering selected by the user for future sessions. We'll use
     // a default order if nothing is stored at this key.
     const CLUB_ORDER_KEY = 'bc_club_order';
@@ -299,6 +311,114 @@
 
     function saveClubOrder(order) {
         localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
+    }
+
+    // We inject our own duration picker, hiding the native one. We want the native
+    // one to have 30 minutes selected so that we increase the chances that there
+    // are found open slots at our default club, but also want to allow the user
+    // to tell us what duration they really want for their reservation slots.
+    function injectSyntheticDurationPicker() {
+        const filter = document.querySelector('app-racquet-sports-filter');
+        if (!filter) return;
+
+        // If our picker is already present, nothing to do.
+        if (filter.querySelector('[data-bc-synthetic-duration]')) return;
+
+        // If we're already observing, nothing to do — the observer will fire when the content appears.
+        if (filter.dataset.bcDurationObserving) return;
+
+        filter.dataset.bcDurationObserving = 'true';
+
+        function tryInjectPicker() {
+            const timeCol = Array.from(filter.querySelectorAll('.mt-3.col-12.col-md'))
+                .find(col => col.querySelector('.size-14.mb-2')?.textContent.trim() === 'Time');
+            if (!timeCol || timeCol.dataset.bcDurationInjected) return;
+
+            const nativeButtonSelect = timeCol.querySelector('app-button-select');
+            if (!nativeButtonSelect) return;
+
+            nativeButtonSelect.style.display = 'none';
+
+            const saved = localStorage.getItem(DURATION_KEY) || '30 minutes';
+            const options = ['30 minutes', '60 minutes', '90 minutes'];
+
+            const ourPicker = document.createElement('div');
+            ourPicker.className = 'btn-group w-100';
+            ourPicker.dataset.bcSyntheticDuration = 'true';
+            ourPicker.innerHTML = options.map(opt => `
+    <div class="btn btn-outline-dark-grey size-10 py-2${opt === saved ? ' btn-selected' : ''}"
+         data-duration="${opt}"
+         style="${opt === saved ? 'background: rgba(255,255,255,0.15);' : ''}">
+        <span>${opt}</span>
+    </div>
+`).join('');
+            ourPicker.style.cssText = 'border-left: 2px solid rgba(0,188,212,0.4);';
+
+            nativeButtonSelect.insertAdjacentElement('afterend', ourPicker);
+
+            ourPicker.querySelectorAll('.btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    ourPicker.querySelectorAll('.btn').forEach(b => {
+                        b.classList.remove('btn-selected');
+                        b.style.background = '';
+                    });
+                    btn.classList.add('btn-selected');
+                    btn.style.background = 'rgba(255,255,255,0.15)';
+                    localStorage.setItem(DURATION_KEY, btn.dataset.duration);
+
+                    const nativeThirtyBtn = Array.from(nativeButtonSelect.querySelectorAll('.btn'))
+                        .find(b => b.textContent.trim() === '30 minutes');
+                    if (nativeThirtyBtn && !nativeThirtyBtn.classList.contains('btn-selected')) {
+                        nativeThirtyBtn.click();
+                    }
+                });
+            });
+
+            timeCol.dataset.bcDurationInjected = 'true';
+            delete filter.dataset.bcDurationObserving;
+            observer.disconnect();
+        }
+
+        const observer = new MutationObserver(() => tryInjectPicker());
+        observer.observe(filter, { childList: true, subtree: true });
+
+        // Also try immediately in case Angular already rendered the content.
+        tryInjectPicker();
+    }
+
+    // We will automatically select the 30 minute duration in the native duration picker.
+    // This maximizes the chances that there be a reservation slot available for the native
+    // club.
+    function autoSelectPlayerAndDuration() {
+        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        if (!container) return;
+
+        if (!container.dataset.bcListening) {
+            // Save player selection on click via delegation.
+            container.addEventListener('click', e => {
+                const btn = e.target.closest('app-button-select .btn');
+                if (!btn) return;
+                const group = btn.closest('.btn-group');
+                if (group?.dataset.bcSyntheticDuration) return; // ignore our own picker
+                const labels = Array.from(group.querySelectorAll('.btn'))
+                    .map(b => b.textContent.trim());
+                if (labels.includes('Singles')) {
+                    localStorage.setItem(PLAYERS_KEY, btn.textContent.trim());
+                }
+            });
+            container.dataset.bcListening = 'true';
+        }
+
+        // Auto-select saved player preference.
+        tryToAutoSelectDurationAndPlayers(container);
+
+        // Secretly ensure native 30-minute button is selected.
+        const nativeThirtyBtn = Array.from(
+            document.querySelectorAll('app-racquet-sports-filter app-button-select .btn'))
+            .find(b => b.textContent.trim() === '30 minutes');
+        if (nativeThirtyBtn && !nativeThirtyBtn.classList.contains('btn-selected')) {
+            nativeThirtyBtn.click();
+        }
     }
 
     function injectClubOrderWidget() {
@@ -742,9 +862,7 @@
 
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
 
-        const nativeClubHasAvailability = TIME_OF_DAYS.some(tod =>
-            ((byClubAndTod[lastFetchState.params.nativeClubId] || {})[tod] || []).length > 0
-        );
+        const nativeClubHasAvailability = !!document.querySelector('app-court-time-slot-item div.time-slot');
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
@@ -931,14 +1049,17 @@
     // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
     // or popStates, etc. So we'll be a bit brute force here and watch for container changes. This is how
     // we know to update our time slots for a new date, for example.
+
     function watchForContainerChanges() {
         const observer = new MutationObserver(() => {
             injectIntoAllContainers();
-            // When the native app's duration selector page appears, we'll inject our own widget for club ordering.
             const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
-            if (container && !container.nextSibling?.classList?.contains('bc-club-order-widget')) {
-                injectClubOrderWidget();
+            if (container) {
+                if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
+                    injectClubOrderWidget();
+                }
                 autoSelectPlayerAndDuration();
+                injectSyntheticDurationPicker();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });

@@ -45,6 +45,10 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - **Weather hint**: Shows rain probability from Open-Meteo API next to the indoor toggle when rain > 20%
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 
+### Synthetic Duration Picker Hack
+In order to increate the likelihood that there is a dartion slot natively rendered by Angular for the default selected club, we will always force the app natively request 30 minute booking slot durations by automatically selecting the 30 minute duration on the native duration picker. We hide that native picker from our user and present our own synthetic duration picker (with a slightly different visual treatment so we can notice it when debugging) that allows our user to select the duration they really want. We include an XHR request to the default club for that user selected duration so that we can show our own duration slots for all the clubs. But now it's more likely we have some duration for the native club to secretly click on.
+
+
 ## Code Conventions
 
 - **Prefer `data-*` attributes over structural CSS selectors** for targeting injected elements
