@@ -74,4 +74,4 @@ Single file: `loading_script.user.js`. The whole script is wrapped in an IIFE fo
 
 ## Linting
 
-ESLint with flat config (`eslint.config.mjs`). Parameters intentionally unused (e.g. in XHR overrides) are prefixed with `_` and ignored via `argsIgnorePattern: '^_'`.
+ESLint with flat config (`eslint.config.mjs`). Parameters intentionally unused (e.g. in XHR overrides) are prefixed with `_` and ignored via `argsIgnorePattern: '^_'`. When you lint, check for function calls that don't agree with the arity of the functions being called.

@@ -741,16 +741,19 @@
             });
         }
 
-        // Wait for the weather forecast to be ready, then update the indoor toggle hint if rain is predicted.
+        // Wait for the weather forecast to be ready, then update the indoor 
+        // toggle hint to reflect the predicted weather condtions.
         weather.promise.then(() => {
-            if (!isRainPredictedForDate(fetchDate)) return;
+            const summary = weatherSummaryForDate(fetchDate);
+            if (!summary) return;
             anchorElement.querySelectorAll('.bc-indoor-checkbox').forEach(checkbox => {
                 const label = checkbox.closest('label');
-                if (label && !label.querySelector('.bc-rain-hint')) {
+                if (label && !label.querySelector('.bc-weather-hint')) {
                     const hint = document.createElement('span');
-                    hint.className = 'bc-rain-hint';
-                    hint.textContent = `🌧️ Rain predicted: ${rainPercentageForDate(fetchDate)}%`;
-                    hint.style.cssText = 'color: rgba(100, 180, 255, 0.9); font-size: 12px; margin-left: 4px;';
+                    hint.className = 'bc-weather-hint';
+                    hint.textContent = summary;
+                    const isRainy = (weather.cache[fetchDate]?.rainPct ?? 0) > 20;
+                    hint.style.cssText = `font-size: 12px; margin-left: 8px; color: ${isRainy ? 'rgba(100, 180, 255, 0.9)' : 'rgba(255,255,255,0.6)'};`;
                     label.appendChild(hint);
                 }
             });
@@ -1004,31 +1007,48 @@
         cache: {},
         promise: null,
     };
-    const MIN_RAIN_PERCENTAGE_FOR_ALERT = 20;
 
     async function fetchWeatherForecast() {
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&daily=precipitation_probability_max&timezone=America%2FLos_Angeles&forecast_days=16';
+        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&daily=precipitation_probability_max,weathercode,cloudcover_mean&timezone=America%2FLos_Angeles&forecast_days=16';
         try {
             const response = await fetch(url);
             const data = await response.json();
             const dates = data?.daily?.time || [];
             const probs = data?.daily?.precipitation_probability_max || [];
+            const codes = data?.daily?.weathercode || [];
+            const clouds = data?.daily?.cloudcover_mean || [];
             dates.forEach((date, i) => {
-                weather.cache[date] = probs[i];
+                weather.cache[date] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
             });
-        } catch (_e) {
+        } catch (e) {
             // Fail silently — weather is a hint, not critical.
         }
     }
 
-    function rainPercentageForDate(dateString) {
-        return weather.cache[dateString];
+    function weatherEmojiForDate(dateString) {
+        const w = weather.cache[dateString];
+        if (!w) return null;
+        const { rainPct, code, cloudPct } = w;
+
+        // WMO weather codes: 0=clear, 1-3=partly cloudy, 45/48=fog,
+        // 51-67=drizzle/rain, 71-77=snow, 80-82=showers, 95+=thunderstorm
+        if (code >= 95) return '⛈️';
+        if (code >= 71 && code <= 77) return '🌨️';
+        if (code >= 51 || rainPct > 50) return '🌧️';
+        if (rainPct > 20) return '🌦️';
+        if (cloudPct > 75) return '☁️';
+        if (cloudPct > 30) return '⛅';
+        return '☀️';
     }
 
-    function isRainPredictedForDate(dateString) {
-        return (rainPercentageForDate(dateString) ?? 0) > MIN_RAIN_PERCENTAGE_FOR_ALERT;
+    function weatherSummaryForDate(dateString) {
+        const w = weather.cache[dateString];
+        if (!w) return null;
+        const emoji = weatherEmojiForDate(dateString);
+        const { rainPct } = w;
+        const isRainEmoji = ['🌧️', '🌦️', '⛈️'].includes(emoji);
+        return isRainEmoji ? `${emoji} ${rainPct}% rain` : emoji;
     }
-
 
     function createCardSelectionStyle() {
         // Set up a style for selected card appearance.
