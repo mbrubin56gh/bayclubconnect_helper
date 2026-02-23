@@ -857,8 +857,9 @@
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const limitDate = new Date();
         limitDate.setDate(limitDate.getDate() + 3);
+        // Floor to current 30-minute window start.
         const mins = limitDate.getMinutes();
-        limitDate.setMinutes(mins <= 30 ? 30 : 60, 0, 0);
+        limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
 
