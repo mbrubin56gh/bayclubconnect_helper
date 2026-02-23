@@ -521,7 +521,7 @@
     // using TIMER_RANGE_KEY.
     const TIME_RANGE_KEY = 'bc_time_range';
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
-    const SLIDER_MAX_MINUTES = 1200; // 8:00 pm
+    const SLIDER_MAX_MINUTES = 1320; // 10:00 pm
     const SLIDER_STEP_MINUTES = 30;
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 28 intervals
 
