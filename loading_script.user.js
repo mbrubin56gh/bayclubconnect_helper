@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.2
+// @version      0.3
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
