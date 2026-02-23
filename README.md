@@ -24,8 +24,8 @@ Be aware that Tampermonktoey allows you or someone to install scripts that injec
 - Available slots across all clubs will appear automatically.
 - Note that you have a time range slider to limit the court availability search to your desired times.
 - Note also that you have a checkbox to show clubs only with indoor courts. There's some weather prediction built in: if it's predicted to be >20% chance of rain, there's a hint next to the checkbox that rain is predicted.
-- Unlike the native time slot selector in Hour View, we show a slot for each court open at that time with a label telling you the court name.
-- Courts that are on the ends (so they are less likely to have balls from other courts spray onto them or vice versa) are outlined in gold with a gold star.
+- Unlike the native time slot selector in Hour View, we show all the courts available for a time slot, and you can choose which one you want to book. Click on a card for a time slot with multiple courts listed, and it will expand to allow you to choose your court.
+- Cards for times with edge courts are outlined in gold with gold stars: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa).
 - Select any slot, then click NEXT to proceed with booking.
 - There's an odd boundary case: if there is no court availability at any time for the default selected club for the day you've selected, this enhanced functionality won't work, so you'll have to pick another default club or another day. You'll see messaging to let you know if you run into this.
 
