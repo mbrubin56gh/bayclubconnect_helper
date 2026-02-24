@@ -316,6 +316,15 @@
     // We will automatically select the 30 minute duration in the native duration picker.
     // This maximizes the chances that there be a reservation slot available for the native
     // club.
+    function tryToAutoSelectPickleball() {
+        const pickleballIcon = document.querySelector('app-court-booking-category-select .i-pickleball-white');
+        if (!pickleballIcon) return;
+        const tile = pickleballIcon.closest('.item-tile');
+        if (!tile || tile.dataset.bcAutoSelected) return;
+        tile.dataset.bcAutoSelected = 'true';
+        if (!tile.classList.contains('category-selected')) tile.click();
+    }
+
     function autoSelectPlayerAndDuration() {
         const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
         if (!container) return;
@@ -944,6 +953,7 @@
                 }
                 autoSelectPlayerAndDuration();
             }
+            tryToAutoSelectPickleball();
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
