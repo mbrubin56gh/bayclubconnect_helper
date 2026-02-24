@@ -271,6 +271,9 @@
     // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
     const DURATION_KEY = 'bc_duration';
 
+    // Set to true while programmatically clicking a fallback duration so the save listener skips it.
+    let suppressDurationSave = false;
+
     function tryToAutoSelectDurationAndPlayers(container) {
         document.querySelectorAll('app-button-select .btn-group').forEach(group => {
             if (group.dataset.bcAutoSelected) return;
@@ -282,9 +285,21 @@
             const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
             const saved = localStorage.getItem(key);
             if (saved) {
-                const btn = Array.from(group.querySelectorAll('.btn'))
-                    .find(b => b.textContent.trim() === saved);
-                if (btn && !btn.classList.contains('btn-selected')) btn.click();
+                const buttons = Array.from(group.querySelectorAll('.btn'));
+                const btn = buttons.find(b => b.textContent.trim() === saved);
+                if (btn) {
+                    if (!btn.classList.contains('btn-selected')) btn.click();
+                } else if (isDuration) {
+                    // Saved duration isn't available (e.g. 90 min saved but max is 60 min).
+                    // Click the highest available option without overwriting the saved preference.
+                    const parseMinutes = b => parseInt(b.textContent.trim()) || 0;
+                    const fallbackBtn = buttons.reduce((best, b) => parseMinutes(b) > parseMinutes(best) ? b : best);
+                    if (!fallbackBtn.classList.contains('btn-selected')) {
+                        suppressDurationSave = true;
+                        fallbackBtn.click();
+                        suppressDurationSave = false;
+                    }
+                }
             }
             group.dataset.bcAutoSelected = 'true';
         });
@@ -333,7 +348,7 @@
             // Save player selection on click via delegation.
             container.addEventListener('click', e => {
                 const btn = e.target.closest('app-button-select .btn');
-                if (!btn) return;
+                if (!btn || suppressDurationSave) return;
                 const group = btn.closest('.btn-group');
                 const labels = Array.from(group.querySelectorAll('.btn'))
                     .map(b => b.textContent.trim());
