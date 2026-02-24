@@ -47,8 +47,12 @@
         [CLUBS.broadway]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
         [CLUBS.redwoodShores]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4'], // all courts equally good
         [CLUBS.southSF]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
-        // santaClara: TBD
+        [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4', 'Pickleball 5', 'Pickleball 6', 'Pickleball 7', 'Pickleball 8', 'Pickleball 9', 'Pickleball 10'],
     };
+
+    const ISOLATED_COURTS = {
+        [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
+    }
 
     // We want to abort our multiple availability requests in flight if the user clicks BACK TO HOME.
     let currentAbortController = null;
@@ -724,7 +728,7 @@
                 data-from-minutes="${slot.fromInMinutes}"
                 data-to-minutes="${slot.toInMinutes}"`;
             return `
-    <div data-slot-wrapper style="margin-bottom: 8px; margin-left: 4px; margin-right: 4px; width: 100%;">
+    <div data-slot-wrapper class="col-6" style="margin-bottom: 8px;">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            ${dataAttrs} style="${disabledStyle}${isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
@@ -760,7 +764,7 @@
         }).join('');
 
         return `
-    <div data-slot-wrapper style="margin-bottom: 8px; margin-left: 4px; margin-right: 4px; width: 100%;">
+    <div data-slot-wrapper class="col-6" style="margin-bottom: 8px;">
       <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            style="${disabledStyle}${hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
