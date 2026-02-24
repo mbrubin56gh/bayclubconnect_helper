@@ -38,7 +38,7 @@ Be aware that Tampermonkey allows you or someone to install scripts that inject 
 - You can also temporarily disable this for as long as you like via the Tampermonkey extension's Dashboard UI.
 
 ## Refreshing
-- As I fix bugs or release new features, I'll update the version number for the script. But the Tampermonkey extension may take several hours to refresh the script. You can trigger a refresh yourself by clicking on the Utilities menu item for the extension and then clicking on the Check for userscript updates entry. Or you can select Dashboard and delete the script and reinstall it.
+- As I fix bugs or release new features, I'll update the version number for the script. But the Tampermonkey extension may take several hours to refresh the script. You can trigger a refresh yourself by clicking on the Utilities menu item for the extension and then clicking on the "Check for userscript updates" entry. Or you can select Dashboard and delete the script and reinstall it.
 
 ## Demonstration
 
