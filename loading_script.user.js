@@ -780,7 +780,7 @@
 
         let html = `
         <div data-club-id="${clubId}" style="margin-bottom: 24px;">
-        <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
+        <div style="font-size: 20px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0;">
             ${meta.shortName}
         </div>
         <div class="row bc-filter-message" style="display: none;">
@@ -844,7 +844,7 @@
             const { fromHumanTime, toHumanTime } = entries[0].slot;
             html += `
         <div data-time-group data-from-minutes="${fromMinutes}" style="margin-bottom: 20px;">
-            <div style="font-size: 16px; font-weight: bold; color: white; margin-bottom: 8px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">${fromHumanTime} – ${toHumanTime}</div>
+            <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 8px; padding: 6px 0;">${fromHumanTime} – ${toHumanTime}</div>
             <div class="row gutter-1">`;
             for (const { clubId, slot, meta } of entries) {
                 html += buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, LABEL_MODE_CLUB);
