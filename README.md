@@ -31,6 +31,7 @@ Be aware that Tampermonkey allows you or someone to install scripts that inject 
 - Unlike the native time slot selector in Hour View, we show all the courts available for a time slot. The native one just shows that some court is available for that time slot and it picks an arbitrary court for you if more than one is available. With this extension, you can choose which one you want to book: click on a card for a time slot with multiple courts listed, and it will expand to allow you to choose your court. That court remains selected until you actually select another court (and not merely expand another card). The court you selected also shows on the bottom information bar.
 - Cards for times with edge courts are outlined in gold with gold stars: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa).
 - If a time slot is available, but not within the 3 day booking period, it will display, but dimmed with a lock on it (matching the native picker).
+- There's a toggle to switch between BY CLUB and BY TIME sorting: when BY CLUB is selected, you'll see a list of clubs, and under each club, the available slots for that club; when BY TIME is selected, you'll see a list of times, and under each time, the available slots for that time, in club sorted order.
 - Select your time slot and court and then click the button to proceed with booking.
 
 ## Disabling
