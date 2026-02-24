@@ -14,7 +14,7 @@ This is a Tampermonkey script to show pickleball court availability across multi
 Be aware that Tampermonkey allows you or someone to install scripts that inject into web pages and alter their behavior. Be careful.
 2. Click "Add to Chrome" and confirm.
 3. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js)
-4. Tampermonkey will show an install dialog — click "Install"
+4. Tampermonkey will show an install dialog. Click "Install".
 5. Done! The script runs automatically on [bayclubconnect.com](bayclubconnect.com).
 6. It might be convenient to have the Tampermonkey extension pinned. More on that in the [Demonstration](#demonstration) section.
 
@@ -44,5 +44,11 @@ Be aware that Tampermonkey allows you or someone to install scripts that inject 
 
 Here's a video of manipulating the Tampermonkey extension:
 
+https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
+
+
 Here's a video of the extension in action:
+
+https://github.com/user-attachments/assets/279b8096-4b44-4f77-9dd7-5d1720e49518
+
 
