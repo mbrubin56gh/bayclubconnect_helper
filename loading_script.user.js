@@ -590,10 +590,10 @@
 
             const anyTodVisible = Array.from(clubDiv.querySelectorAll('[data-tod-col]'))
                 .some(col => col.style.display !== 'none');
+            const hasTodCols = clubDiv.querySelectorAll('[data-tod-col]').length > 0;
 
             const filterMsg = clubDiv.querySelector('.bc-filter-message');
-            if (filterMsg) filterMsg.style.display = anyTodVisible ? 'none' : '';
-        });
+            if (filterMsg) filterMsg.style.display = (hasTodCols && !anyTodVisible) ? '' : 'none';        });
     }
 
     // Create a data structure well-tailored for rendering our slots by time of day per club.
@@ -702,13 +702,13 @@
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
 
         let html = `
-    <div data-club-id="${clubId}" style="margin-bottom: 24px;">
-      <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
-        ${meta.shortName}
-      </div>
-      <div class="row bc-filter-message">
-        <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">There are available slots at this location, but none match your time range filter.</div>
-      </div>`;
+        <div data-club-id="${clubId}" style="margin-bottom: 24px;">
+        <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.2);">
+            ${meta.shortName}
+        </div>
+        <div class="row bc-filter-message" style="display: none;">
+            <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">There are available slots at this location, but none match your time range filter.</div>
+        </div>`;
 
         if (!hasAnySlots) {
             html += `
