@@ -801,7 +801,8 @@
         if (indoorCheckbox) {
             indoorCheckbox.addEventListener('change', () => {
                 saveShowIndoorClubsOnly(indoorCheckbox.checked);
-                applyFilters(startMinutes, endMinutes);
+                const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
+                applyFilters(curStart, curEnd);
             });
         }
 
