@@ -62,6 +62,7 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
 - **Weather hint**: Shows rain probability from Open-Meteo API next to the indoor toggle when rain > 20%
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
+- **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
 
 ## Code Conventions
 
@@ -71,6 +72,9 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
+- **Prefer explicit enum-like values over nullable/optional parameters for behavioral variation** — when a parameter controls which behavior a function performs, always pass an explicit string constant (e.g. `LABEL_MODE_TIME`, `LABEL_MODE_CLUB`) rather than a nullable or omitted argument (e.g. `labelOverride = null`). Nullable optionals hide intent at call sites and are easy to accidentally omit. Explicit constants make every call self-documenting.
+- **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
+- **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
 
 ## Global State (intentional)
 
@@ -85,6 +89,7 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - `bc_club_order` — JSON array of club UUIDs in user's preferred display order
 - `bc_time_range` — `{ startMinutes, endMinutes }` — time range filter state
 - `bc_indoor_only` — boolean — indoor courts filter state
+- `bc_view_mode` — `'by-club'` | `'by-time'` — availability panel layout mode
 
 ## File
 
