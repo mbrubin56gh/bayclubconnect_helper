@@ -455,8 +455,6 @@
         };
     })();
 
-    const bookingDomQueryService = createBookingDomQueryService();
-
     const createLocalStorageService = (() => {
         let serviceInstance = null;
 
@@ -543,7 +541,7 @@
             }
 
             function autoSelectPlayersAndDuration() {
-                const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
+                const container = createBookingDomQueryService().getDurationAndPlayersFilterContainer();
                 if (!container) return;
 
                 if (!container.dataset.bcListening) {
@@ -616,7 +614,7 @@
     }
 
     function injectClubOrderWidget() {
-        const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
+        const container = createBookingDomQueryService().getDurationAndPlayersFilterContainer();
         if (!container || container.nextSibling?.classList?.contains('bc-club-order-widget')) return;
 
         const clubOrder = getClubOrder();
@@ -1414,17 +1412,17 @@
         // Clear injected slot UI only when we are inside the booking flow shell but none of the
         // supported booking-step hosts are present. This avoids brittle title-text matching and
         // preserves behavior on the duration/player screen where controls still need augmentation.
-        if (bookingDomQueryService.hasBookingFlowShellVisible() &&
-            !bookingDomQueryService.hasTimeSlotHostsVisible() &&
-            !bookingDomQueryService.hasHourViewControlsVisible() &&
-            !bookingDomQueryService.hasDurationAndPlayersFilterVisible()) {
+        if (createBookingDomQueryService().hasBookingFlowShellVisible() &&
+            !createBookingDomQueryService().hasTimeSlotHostsVisible() &&
+            !createBookingDomQueryService().hasHourViewControlsVisible() &&
+            !createBookingDomQueryService().hasDurationAndPlayersFilterVisible()) {
             createBookingStateService().clearPendingSlotBooking();
             removeOurContentAndUnhideNativeContent();
             return;
         }
 
         injectIntoAllContainers();
-        const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
+        const container = createBookingDomQueryService().getDurationAndPlayersFilterContainer();
         if (container) {
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
@@ -1517,7 +1515,7 @@
 
             document.addEventListener('click', event => {
                 const target = event.target;
-                if (!bookingDomQueryService.isBackControlClickTarget(target)) return;
+                if (!createBookingDomQueryService().isBackControlClickTarget(target)) return;
 
                 clearBookingStateAndUi();
             }, true);
@@ -1708,18 +1706,18 @@
                 : el.style.display = 'none';
         });
 
-        const hourViewBtn = bookingDomQueryService.findHourViewButton();
+        const hourViewBtn = createBookingDomQueryService().findHourViewButton();
         if (hourViewBtn && !hourViewBtn.classList.contains('btn-selected') && !hourViewBtn.dataset.bcAutoSelected) {
             hourViewBtn.dataset.bcAutoSelected = 'true';
             hourViewBtn.click();
         }
 
-        const tile = bookingDomQueryService.getDesktopTimeSlotHost();
+        const tile = createBookingDomQueryService().getDesktopTimeSlotHost();
         if (tile && !tile.querySelector('.all-clubs-availability')) {
             createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
         }
 
-        const mobileContainer = bookingDomQueryService.getMobileTimeSlotHost();
+        const mobileContainer = createBookingDomQueryService().getMobileTimeSlotHost();
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
             createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
