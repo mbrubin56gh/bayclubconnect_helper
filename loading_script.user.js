@@ -377,12 +377,6 @@
         }
     }
 
-    // Use this key to store the previously selected number of players for a booking (Singles or Doubles).
-    const PLAYERS_KEY = 'bc_players';
-
-    // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
-    const DURATION_KEY = 'bc_duration';
-
     const createBookingDomQueryService = (() => {
         let serviceInstance = null;
 
@@ -509,6 +503,9 @@
 
         return function createPreferenceAutoSelectService() {
             if (serviceInstance) return serviceInstance;
+            // Use these keys to store previously selected players and duration choices.
+            const PLAYERS_KEY = 'bc_players';
+            const DURATION_KEY = 'bc_duration';
             // Set to true while programmatically clicking a fallback duration so the save listener skips it.
             let suppressDurationSave = false;
 
@@ -598,11 +595,9 @@
         [CLUBS.santaClara]: 'Santa Clara',
     };
 
-    // Use this key to store the club ordering selected by the user for future sessions. We'll use
-    // a default order if nothing is stored at this key.
-    const CLUB_ORDER_KEY = 'bc_club_order';
-
     function getClubOrder() {
+        // Use this key to store the club ordering selected by the user for future sessions.
+        const CLUB_ORDER_KEY = 'bc_club_order';
         const parsed = createLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
         if (Array.isArray(parsed) &&
             parsed.length === Object.values(CLUBS).length &&
@@ -616,6 +611,7 @@
     }
 
     function saveClubOrder(order) {
+        const CLUB_ORDER_KEY = 'bc_club_order';
         createLocalStorageService().setJson(CLUB_ORDER_KEY, order);
     }
 
@@ -711,15 +707,16 @@
     const clubOrderWidgetController = createClubOrderWidgetController();
 
     // We use this to store whether the user prefers the BY CLUB or BY TIME layout.
-    const VIEW_MODE_KEY = 'bc_view_mode';
     const VIEW_MODE_BY_CLUB = 'by-club';
     const VIEW_MODE_BY_TIME = 'by-time';
 
     function getViewMode() {
+        const VIEW_MODE_KEY = 'bc_view_mode';
         return createLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
     }
 
     function saveViewMode(mode) {
+        const VIEW_MODE_KEY = 'bc_view_mode';
         createLocalStorageService().setString(VIEW_MODE_KEY, mode);
     }
 
@@ -739,10 +736,8 @@
         });
     }
 
-    // We use this to store whether or not to show only clubs with indoor courts.
-    const INDOOR_ONLY_KEY = 'bc_indoor_only';
-
     function getShowIndoorClubsOnly() {
+        const INDOOR_ONLY_KEY = 'bc_indoor_only';
         const saved = createLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
         if (typeof saved === 'boolean') {
             return saved;
@@ -751,6 +746,7 @@
     }
 
     function saveShowIndoorClubsOnly(value) {
+        const INDOOR_ONLY_KEY = 'bc_indoor_only';
         createLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
     }
 
@@ -775,15 +771,14 @@
     </div>`;
     }
 
-    // We add a widget to allow users to filter availability by time range. We store their settings
-    // using TIME_RANGE_KEY.
-    const TIME_RANGE_KEY = 'bc_time_range';
+    // We add a widget to allow users to filter availability by time range.
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
     const SLIDER_MAX_MINUTES = 1320; // 10:00 pm
     const SLIDER_STEP_MINUTES = 30;
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 32 intervals (16 hours × 2)
 
     function getTimeRangeForSlider() {
+        const TIME_RANGE_KEY = 'bc_time_range';
         const parsed = createLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
         if (parsed &&
             typeof parsed.startMinutes === 'number' &&
@@ -794,6 +789,7 @@
     }
 
     function saveTimeRangeForSlider(startMinutes, endMinutes) {
+        const TIME_RANGE_KEY = 'bc_time_range';
         createLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
     }
 
