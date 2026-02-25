@@ -82,6 +82,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Grouped time slots**: Multiple courts at the same time shown as a single expandable card; single-court slots are directly selectable
 - **Edge court indicators**: ★ marks courts on the edges of the court area (less ball spillage)
 - **Club preference ordering**: Drag-and-drop widget on the duration selector page, persisted to localStorage
+  Drag lifecycle wiring for this widget is encapsulated in `createClubOrderWidgetController()`, keeping transient drag state private.
 - **Time range filter**: Dual-handle slider to filter slots by time of day, persisted to localStorage
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
 - **Hourly weather**: Fetches hourly forecast from Open-Meteo API; shows the relevant emoji below each hour label on the time range slider; rain emojis are accompanied by a centred rain-probability percentage
@@ -96,6 +97,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Encode state in the DOM where possible** rather than global variables (e.g. `data-bc-auto-selected`, `data-selected`, `data-bc-intercepted`)
 - **Prefer event-driven detection first, then add polling only as a reliability backstop** — this SPA sometimes does not emit dependable history signals, so scoped pollers are acceptable when lifecycle-managed
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
+  For example, drag-and-drop item reordering state is scoped inside `createClubOrderWidgetController()` rather than script scope.
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
 - **Prefer explicit enum-like values over nullable/optional parameters for behavioral variation** — when a parameter controls which behavior a function performs, always pass an explicit string constant (e.g. `LABEL_MODE_TIME`, `LABEL_MODE_CLUB`) rather than a nullable or omitted argument (e.g. `labelOverride = null`). Nullable optionals hide intent at call sites and are easy to accidentally omit. Explicit constants make every call self-documenting.
