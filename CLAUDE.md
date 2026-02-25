@@ -4,6 +4,14 @@
 
 A Tampermonkey userscript (`loading_script.user.js`) that improves the court booking experience on bayclubconnect.com. The app natively only shows availability for a single "home" club, but Bay Club members can book at any club. This script fetches availability across all four Bay Area clubs in parallel and displays them in a unified UI.
 
+## Working style
+
+This is a JavaScript project. Use JavaScript for all new files and modifications unless otherwise specified.
+
+After completing a set of changes, offer to commit and push with a descriptive commit message summarizing what changed.
+
+When resuming work from a previous session, start by reading recent git log and checking git status to understand current state.
+
 ## The Four Clubs
 
 ```javascript

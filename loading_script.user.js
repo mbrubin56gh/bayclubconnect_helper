@@ -50,6 +50,7 @@
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4', 'Pickleball 5', 'Pickleball 6', 'Pickleball 7', 'Pickleball 8', 'Pickleball 9', 'Pickleball 10'],
     };
 
+    // Isolated single courts, such as those surrounded by fences are the most prized of all.
     const ISOLATED_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
     }
@@ -65,6 +66,7 @@
     const originalXhrSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+        // Capture these so we can authenticate our own requests to the Bay Club's APIs.
         if (name === 'Authorization' || name === 'X-SessionId') {
             capturedHeaders[name] = value;
         }
@@ -76,6 +78,16 @@
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         this.addEventListener('load', function () {
+            // We need Angular to think there is at least one available time slot for the native
+            // app's default selected club so Angular will render that slot in the hour view. 
+            // Without that Angular rendered slot, we're not able to drive the Angular state
+            // machine forward to issue a booking request after one of our slots is selected:
+            // we fake a click on that slot, which allows the click on the Next button in the
+            // hour view to issue the booking request and render the partner selector (we make
+            // sure that the only booking requests that actually go out from the hour view are
+            // our own). So we need to make sure the request for court availabilities for the home
+            // club for a date always returns at least one slot. We do that here.
+
             if (this.status < 200 || this.status >= 300) return;
             if (!this.responseText || this.responseText.trim() === '') return;
             try {
@@ -83,47 +95,22 @@
                 if (!data.clubsAvailabilities) return;
                 const clubAvail = data.clubsAvailabilities[0];
                 const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
-                console.log('[bc] clubsAvailabilities found, slots:', slotCount, 'courts:', clubAvail?.courts?.length);
+                // If the club actually has availability for that date, we're good!
                 if (slotCount > 0) return;
+                // Let's make sure some court was returned to us in the API response so we can
+                // use it to synthesize an available slot for it.
                 const court = clubAvail?.courts?.[0];
-                if (!court) { console.log('[bc] no courts either, cannot inject'); return; }
+                if (!court) return;
+                // Let's make up a slot.
                 clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
                 Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
                 Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data) });
-                console.log('[bc] fake slot injected');
             } catch (e) {
                 console.log('[bc] error:', e);
             }
         });
         this._url = url;
         this._method = method;
-        if (url.includes('connect-api.bayclubs.io/court-booking/api/1.0/availability')) {
-            this.addEventListener('load', function () {
-                try {
-                    const data = JSON.parse(this.responseText);
-                    const clubAvail = data?.clubsAvailabilities?.[0];
-                    if (!clubAvail) return;
-                    const hasSlots = clubAvail.availableTimeSlots?.length > 0;
-                    if (hasSlots) return;
-
-                    // No slots — inject one fake slot so Angular renders something we can click.
-                    const court = clubAvail.courts?.[0];
-                    if (!court) return;
-                    clubAvail.availableTimeSlots = [{
-                        timeOfDay: 'Morning',
-                        fromInMinutes: 420,
-                        toInMinutes: 450,
-                        courtId: court.courtId,
-                        courtsVersionsIds: [court.courtSetupVersionId || court.courtId],
-                    }];
-
-                    // Override responseText with our modified data.
-                    Object.defineProperty(this, 'responseText', {
-                        get: () => JSON.stringify(data),
-                    });
-                } catch (e) { }
-            });
-        }
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
@@ -134,6 +121,9 @@
         let lastBookingRequestId = null;
 
         return function (_body) {
+            // Detect the native app's native request for court availability and use it to add our own
+            // for data we actually want based on what our user selected for duration across
+            // all clubs.
             if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
                 const parsedUrl = new URL(this._url);
                 const params = {
@@ -144,15 +134,16 @@
                     nativeClubId: parsedUrl.searchParams.get('clubId'),
                 };
                 fetchAllClubs(params);
-                // Fall through intentionally — let Angular's original 30-minute request
-                // go out unmodified so it renders native slots we can secretly click.
             }
 
+            // Intercept the native app's booking request and replace it with our own
+            // for the selected club and time slot.
             if (this._url &&
                 this._url.match(/courtbookings$/) &&
                 this._method === 'POST' &&
                 pendingSlotBooking) {
 
+                // Dedupe any requests, just in case.
                 const requestId = this._requestId;
                 if (requestId === lastBookingRequestId) {
                     return;
@@ -255,8 +246,8 @@
         return output;
     }
 
-    // Call this once after renderAllClubsAvailability injects the HTML. It allows us to hear the Next button click
-    // when a slot has been selected so we can take action.
+    // Call this once after renderAllClubsAvailability injects the HTML. It disables the Next button until
+    // the user selects a slot; the court option click handler re-enables it.
     function initNextButton() {
         const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
             .find(btn => btn.textContent.trim().includes('NEXT'));
@@ -278,6 +269,8 @@
     // Set to true while programmatically clicking a fallback duration so the save listener skips it.
     let suppressDurationSave = false;
 
+    // The native app does not remember the previously selected player count and duration, so
+    // we augment it here to do that.
     function tryToAutoSelectDurationAndPlayers(container) {
         document.querySelectorAll('app-button-select .btn-group').forEach(group => {
             if (group.dataset.bcAutoSelected) return;
@@ -309,42 +302,7 @@
         });
     }
 
-    // Use this key to store the club ordering selected by the user for future sessions. We'll use
-    // a default order if nothing is stored at this key.
-    const CLUB_ORDER_KEY = 'bc_club_order';
-
-    function getClubOrder() {
-        const saved = localStorage.getItem(CLUB_ORDER_KEY);
-        if (saved) {
-            const parsed = JSON.parse(saved);
-            // Validate that it contains exactly our club IDs
-            if (parsed.length === Object.values(CLUBS).length &&
-                parsed.every(id => Object.values(CLUBS).includes(id))) {
-                return parsed;
-            }
-        }
-
-        // Default order
-        return [CLUBS.redwoodShores, CLUBS.broadway, CLUBS.southSF, CLUBS.santaClara];
-    }
-
-    function saveClubOrder(order) {
-        localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
-    }
-
-    // We will automatically select the 30 minute duration in the native duration picker.
-    // This maximizes the chances that there be a reservation slot available for the native
-    // club.
-    function tryToAutoSelectPickleball() {
-        const pickleballIcon = document.querySelector('app-court-booking-category-select .i-pickleball-white');
-        if (!pickleballIcon) return;
-        const tile = pickleballIcon.closest('.item-tile');
-        if (!tile || tile.dataset.bcAutoSelected) return;
-        tile.dataset.bcAutoSelected = 'true';
-        if (!tile.classList.contains('category-selected')) tile.click();
-    }
-
-    function autoSelectPlayerAndDuration() {
+    function autoSelectPlayersAndDuration() {
         const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
         if (!container) return;
 
@@ -369,12 +327,47 @@
         tryToAutoSelectDurationAndPlayers(container);
     }
 
+    // Some clubs only let you reserve pickleball courts, but some offer the option to
+    // reserve tennis and/or squash courts as well. Let's automatically select the pickleball
+    // option if they do.
+    function tryToAutoSelectPickleball() {
+        const pickleballIcon = document.querySelector('app-court-booking-category-select .i-pickleball-white');
+        if (!pickleballIcon) return;
+        const tile = pickleballIcon.closest('.item-tile');
+        if (!tile || tile.dataset.bcAutoSelected) return;
+        tile.dataset.bcAutoSelected = 'true';
+        if (!tile.classList.contains('category-selected')) tile.click();
+    }
+
     const CLUB_SHORT_NAMES = {
         [CLUBS.broadway]: 'Broadway',
         [CLUBS.redwoodShores]: 'Redwood Shores',
         [CLUBS.southSF]: 'South SF',
         [CLUBS.santaClara]: 'Santa Clara',
     };
+
+    // Use this key to store the club ordering selected by the user for future sessions. We'll use
+    // a default order if nothing is stored at this key.
+    const CLUB_ORDER_KEY = 'bc_club_order';
+
+    function getClubOrder() {
+        const saved = localStorage.getItem(CLUB_ORDER_KEY);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            // Validate that it contains exactly our club IDs
+            if (parsed.length === Object.values(CLUBS).length &&
+                parsed.every(id => Object.values(CLUBS).includes(id))) {
+                return parsed;
+            }
+        }
+
+        // Default order
+        return [CLUBS.redwoodShores, CLUBS.broadway, CLUBS.southSF, CLUBS.santaClara];
+    }
+
+    function saveClubOrder(order) {
+        localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
+    }
 
     function injectClubOrderWidget() {
         const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
@@ -401,7 +394,7 @@
     `;
 
         container.insertAdjacentElement('afterend', widget);
-        initClubOrderingDragAndDrop(widget, CLUB_SHORT_NAMES);
+        initClubOrderingDragAndDrop(widget);
     }
 
     function initClubOrderingDragAndDrop(widget) {
@@ -442,7 +435,7 @@
         });
     }
 
-    // We use this to store whether the user prefers the by-club or by-time layout.
+    // We use this to store whether the user prefers the BY CLUB or BY TIME layout.
     const VIEW_MODE_KEY = 'bc_view_mode';
     const VIEW_MODE_BY_CLUB = 'by-club';
     const VIEW_MODE_BY_TIME = 'by-time';
@@ -453,6 +446,21 @@
 
     function saveViewMode(mode) {
         localStorage.setItem(VIEW_MODE_KEY, mode);
+    }
+
+    function initViewToggle(anchorElement) {
+        anchorElement.querySelectorAll('.bc-view-toggle .btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const newMode = btn.dataset.view;
+                if (newMode === getViewMode()) return;
+                saveViewMode(newMode);
+                const existing = anchorElement.querySelector('.all-clubs-availability');
+                if (existing) existing.remove();
+                if (lastFetchState) {
+                    renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
+                }
+            });
+        });
     }
 
     // We use this to store whether or not to show only clubs with indoor courts.
@@ -490,7 +498,7 @@
     }
 
     // We add a widget to allow users to filter availability by time range. We store their settings
-    // using TIMER_RANGE_KEY.
+    // using TIME_RANGE_KEY.
     const TIME_RANGE_KEY = 'bc_time_range';
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
     const SLIDER_MAX_MINUTES = 1320; // 10:00 pm
@@ -863,6 +871,7 @@
         return html;
     }
 
+    // We show the selected reservation time slot in the native app's bottom bar.
     function getOrCreateSelectedBookingInfoHolder(bottomBar) {
         let selectedBookingInfoHolder = bottomBar.querySelector('.bc-injected-info');
         if (!selectedBookingInfoHolder) {
@@ -874,21 +883,6 @@
         return selectedBookingInfoHolder;
     }
 
-    function initViewToggle(anchorElement) {
-        anchorElement.querySelectorAll('.bc-view-toggle .btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const newMode = btn.dataset.view;
-                if (newMode === getViewMode()) return;
-                saveViewMode(newMode);
-                const existing = anchorElement.querySelector('.all-clubs-availability');
-                if (existing) existing.remove();
-                if (lastFetchState) {
-                    renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
-                }
-            });
-        });
-    }
-
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const limitDate = new Date();
         limitDate.setDate(limitDate.getDate() + 3);
@@ -897,10 +891,6 @@
         limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
-
-        const nativeClubHasAvailability = TIME_OF_DAYS.some(tod =>
-            ((byClubAndTod[lastFetchState.params.nativeClubId] || {})[tod] || []).length > 0
-        );
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
@@ -1082,7 +1072,6 @@
     // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
     // or popStates, etc. So we'll be a bit brute force here and watch for container changes. This is how
     // we know to update our time slots for a new date, for example.
-
     function watchForContainerChanges() {
         const observer = new MutationObserver(() => {
             injectIntoAllContainers();
@@ -1091,7 +1080,7 @@
                 if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                     injectClubOrderWidget();
                 }
-                autoSelectPlayerAndDuration();
+                autoSelectPlayersAndDuration();
             }
             tryToAutoSelectPickleball();
         });
@@ -1140,7 +1129,7 @@
     function watchForNavigationAwayFromBooking() {
         let lastHref = location.href;
 
-        // Belt and suspeners. The push, pop, and replace state listeners might work, but this is
+        // Belt and suspenders. The push, pop, and replace state listeners might work, but this is
         // a SPA and an Angular one at that, so it's not always easy to detect URL navigations.
         // We set up an interval timer, too, just in case. This is what is handling clearing
         // when we navigate to the bookings page (https://bayclubconnect.com/bookings).
@@ -1218,7 +1207,8 @@
             }
         }
     }
-    // Cache of date string -> percentage change of rain so we only fetch weather once per session.
+    
+    // Cache of hourly datetime string (e.g. '2024-01-15T07:00') -> { rainPct, code, cloudPct } so we only fetch weather once per session.
     const weather = {
         cache: {},
         promise: null,
