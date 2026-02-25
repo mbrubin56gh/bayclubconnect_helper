@@ -17,7 +17,7 @@
     'use strict';
 
     // #region Core constants and club metadata.
-    // These are the uuids the app natively uses for each site.
+    // These are the UUIDs the app natively uses for each site.
     const CLUBS = {
         broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
         redwoodShores: '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',
@@ -28,7 +28,7 @@
     // These clubs have only indoor courts.
     const INDOOR_CLUBS = new Set([CLUBS.broadway, CLUBS.southSF]);
 
-    // These are the uuids the app natively uses for time slot lengths.
+    // These are the UUIDs the app natively uses for time slot lengths.
     const TIMESLOTS = {
         min30: '37ef7bde-8580-48c3-aced-776ada7c2832',
         min60: '89a1327a-c893-49f6-88a9-be4c9ab4d481',
@@ -54,7 +54,7 @@
     // Isolated single courts, such as those surrounded by fences are the most prized of all.
     const ISOLATED_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
-    }
+    };
     // #endregion Core constants and club metadata.
 
     // #region Booking state and XHR interception.
@@ -340,9 +340,9 @@
                             const court = courtByVersionId[versionId] || courtById[versionId] || {};
                             slotMap.get(slot.fromInMinutes).courts.push({
                                 courtId: court.courtId || versionId,
-                                // Ugh. The server adds a space at the end of "Pickleball 1" only 
-                                // for Santa Clara and only for that court. Clearly a bug on the
-                                // server end. We'll trim() here to be safe.
+                                // The server adds a trailing space to "Pickleball 1" for Santa Clara
+                                // and only for that court. This appears to be a server-side bug, so
+                                // we trim here defensively.
                                 courtName: (court.courtName || '').trim() || null,
                                 courtOrder: court.order ?? 999,
                             });
@@ -947,7 +947,6 @@
     })();
     // #endregion DOM query and preference services.
 
-
     // #region Availability rendering and interaction pipeline.
     // Create a data structure well-tailored for rendering our slots by time of day per club.
     function buildClubIndex(transformed, failedClubIds) {
@@ -1484,259 +1483,259 @@
             if (alreadyInitialized) return;
             alreadyInitialized = true;
 
-        const BOOKING_FLOW_CONTAINER_OBSERVER_KEY = 'booking-flow-container-observer';
-        const BOOKING_FLOW_NAVIGATION_POLLER_KEY = 'booking-flow-navigation-poller';
-        const BOOKING_FLOW_BOOTSTRAP_POLLER_KEY = 'booking-flow-bootstrap-poller';
-        const observersByKey = new Map();
-        const intervalsByKey = new Map();
+            const BOOKING_FLOW_CONTAINER_OBSERVER_KEY = 'booking-flow-container-observer';
+            const BOOKING_FLOW_NAVIGATION_POLLER_KEY = 'booking-flow-navigation-poller';
+            const BOOKING_FLOW_BOOTSTRAP_POLLER_KEY = 'booking-flow-bootstrap-poller';
+            const observersByKey = new Map();
+            const intervalsByKey = new Map();
 
-        // Keep watcher lifecycle state private so we don't leak more script-level mutable state.
-        // This monitor has two modes:
-        // 1) Active booking mode: observers + fast URL pollers are on.
-        // 2) Bootstrap mode: only a slow re-entry poller is on.
-        // Why we need both: this Angular SPA often swaps what look like full screens without
-        // reliable URL updates or consistently observable history events. In practice we may see
-        // no pushState/replaceState/popstate for transitions that still require cleanup/re-init.
-        // So we use event hooks first, plus polling as a reliability backstop.
-        let lastObservedHref = location.href;
-        let isMonitoringBookingFlow = false;
-        let historyMonitoringInstalled = false;
-        let visibilityMonitoringInstalled = false;
-        let backToHomeClickMonitoringInstalled = false;
-        let bookingDomTasksScheduled = false;
+            // Keep watcher lifecycle state private so we do not leak more script-level mutable state.
+            // This monitor has two modes:
+            // 1) Active booking mode: observers and fast URL pollers are on.
+            // 2) Bootstrap mode: only a slow re-entry poller is on.
+            // Why we need both: this Angular SPA often swaps what look like full screens without
+            // reliable URL updates or consistently observable history events. In practice we may see
+            // no pushState/replaceState/popstate for transitions that still require cleanup and
+            // reinitialization. So we use event hooks first, with polling as a reliability backstop.
+            let lastObservedHref = location.href;
+            let isMonitoringBookingFlow = false;
+            let historyMonitoringInstalled = false;
+            let visibilityMonitoringInstalled = false;
+            let backToHomeClickMonitoringInstalled = false;
+            let bookingDomTasksScheduled = false;
 
-        function ensureObserver(key, createObserver, observeObserver) {
-            if (observersByKey.has(key)) return;
-            const observer = createObserver();
-            observeObserver(observer);
-            observersByKey.set(key, observer);
-        }
-
-        function clearObserver(key) {
-            const observer = observersByKey.get(key);
-            if (!observer) return;
-            observer.disconnect();
-            observersByKey.delete(key);
-        }
-
-        function ensureInterval(key, callback, delayMs) {
-            if (intervalsByKey.has(key)) return;
-            intervalsByKey.set(key, setInterval(callback, delayMs));
-        }
-
-        function clearIntervalByKey(key) {
-            const timer = intervalsByKey.get(key);
-            if (!timer) return;
-            clearInterval(timer);
-            intervalsByKey.delete(key);
-        }
-
-        function isOnBookingFlowUrl() {
-            return location.href.includes('create-booking');
-        }
-
-        function scheduleBookingDomTasks() {
-            if (bookingDomTasksScheduled) return;
-            bookingDomTasksScheduled = true;
-            // Mutation bursts are common in this SPA. Schedule one reconcile per frame to avoid
-            // running the full DOM task pipeline on every individual mutation callback.
-            requestAnimationFrame(() => {
-                bookingDomTasksScheduled = false;
-                if (!isMonitoringBookingFlow) return;
-                runBookingDomTasks();
-            });
-        }
-
-        // Handle both mobile and desktop back controls via one delegated capture listener.
-        // This avoids scanning the whole DOM on mutations just to attach click handlers.
-        function installBackToHomeClickMonitoring() {
-            if (backToHomeClickMonitoringInstalled) return;
-            backToHomeClickMonitoringInstalled = true;
-
-            document.addEventListener('click', event => {
-                const target = event.target;
-                if (!createBookingDomQueryService().isBackControlClickTarget(target)) return;
-
-                clearBookingStateAndUi();
-            }, true);
-        }
-
-        // As a single page app, we get very few hints as to when the user has taken action that causes
-        // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
-        // or popStates, etc. We keep this observer active only while we're in the booking flow.
-        function startContainerChangeObserver() {
-            ensureObserver(
-                BOOKING_FLOW_CONTAINER_OBSERVER_KEY,
-                () => new MutationObserver(() => {
-                    scheduleBookingDomTasks();
-                }),
-                observer => {
-                    observer.observe(document.body, { childList: true, subtree: true });
-                }
-            );
-        }
-
-        function stopContainerChangeObserver() {
-            clearObserver(BOOKING_FLOW_CONTAINER_OBSERVER_KEY);
-        }
-
-        function startNavigationPoller() {
-            lastObservedHref = location.href;
-            // Fast poll while inside booking flow. The UI can transition to/from booking sub-screens
-            // without a dependable history signal, and sometimes without a visible URL change until
-            // after Angular has already swapped DOM. This catches those transitions quickly.
-            ensureInterval(
-                BOOKING_FLOW_NAVIGATION_POLLER_KEY,
-                () => {
-                    if (location.href === lastObservedHref) return;
-                    lastObservedHref = location.href;
-                    evaluateBookingFlowMonitoringState();
-                },
-                200
-            );
-        }
-
-        function stopNavigationPoller() {
-            clearIntervalByKey(BOOKING_FLOW_NAVIGATION_POLLER_KEY);
-        }
-
-        function startBootstrapPoller() {
-            // Slow poll outside booking flow to detect eventual re-entry while avoiding always-on
-            // heavy observers/polling on unrelated app pages.
-            ensureInterval(
-                BOOKING_FLOW_BOOTSTRAP_POLLER_KEY,
-                () => {
-                    if (isOnBookingFlowUrl()) {
-                        evaluateBookingFlowMonitoringState();
-                    }
-                },
-                1000
-            );
-        }
-
-        function stopBootstrapPoller() {
-            clearIntervalByKey(BOOKING_FLOW_BOOTSTRAP_POLLER_KEY);
-        }
-
-        function startBookingFlowActiveWatchers() {
-            startContainerChangeObserver();
-            startNavigationPoller();
-        }
-
-        function stopBookingFlowActiveWatchers() {
-            stopContainerChangeObserver();
-            stopNavigationPoller();
-        }
-
-        function stopAllBookingFlowWatchersAndPollers() {
-            stopBookingFlowActiveWatchers();
-            stopBootstrapPoller();
-        }
-
-        function startBookingFlowMonitoring() {
-            if (isMonitoringBookingFlow) return;
-            isMonitoringBookingFlow = true;
-            stopBootstrapPoller();
-            if (document.visibilityState === 'hidden') return;
-            startBookingFlowActiveWatchers();
-            // Run once immediately so controls are auto-selected even before the next mutation tick.
-            runBookingDomTasks();
-        }
-
-        function stopBookingFlowMonitoring() {
-            if (!isMonitoringBookingFlow) return;
-            isMonitoringBookingFlow = false;
-            stopBookingFlowActiveWatchers();
-            if (document.visibilityState !== 'hidden') {
-                startBootstrapPoller();
+            function ensureObserver(key, createObserver, observeObserver) {
+                if (observersByKey.has(key)) return;
+                const observer = createObserver();
+                observeObserver(observer);
+                observersByKey.set(key, observer);
             }
-            bookingDomTasksScheduled = false;
-        }
 
-        function evaluateBookingFlowMonitoringState() {
-            if (isOnBookingFlowUrl()) {
-                startBookingFlowMonitoring();
-                return;
+            function clearObserver(key) {
+                const observer = observersByKey.get(key);
+                if (!observer) return;
+                observer.disconnect();
+                observersByKey.delete(key);
             }
-            // Only clear/stop when transitioning from active booking mode.
-            if (!isMonitoringBookingFlow) return;
-            clearBookingStateAndUi();
-            stopBookingFlowMonitoring();
-        }
 
-        function installHistoryMonitoring() {
-            if (historyMonitoringInstalled) return;
-            historyMonitoringInstalled = true;
+            function ensureInterval(key, callback, delayMs) {
+                if (intervalsByKey.has(key)) return;
+                intervalsByKey.set(key, setInterval(callback, delayMs));
+            }
 
-            const originalPushState = history.pushState;
-            const originalReplaceState = history.replaceState;
+            function clearIntervalByKey(key) {
+                const timer = intervalsByKey.get(key);
+                if (!timer) return;
+                clearInterval(timer);
+                intervalsByKey.delete(key);
+            }
 
-            // We intentionally leave these wrappers installed for the page lifetime.
-            // Restoring and re-installing them around booking-flow transitions increases the chance of
-            // missing slippery SPA transitions that do not emit consistent navigation signals.
-            // The wrapper cost is low, and heavy work remains gated by monitor state.
-            history.pushState = function (...args) {
-                originalPushState.apply(this, args);
-                evaluateBookingFlowMonitoringState();
-            };
+            function isOnBookingFlowUrl() {
+                return location.href.includes('create-booking');
+            }
 
-            history.replaceState = function (...args) {
-                originalReplaceState.apply(this, args);
-                evaluateBookingFlowMonitoringState();
-            };
-
-            window.addEventListener('popstate', evaluateBookingFlowMonitoringState);
-        }
-
-        // This SPA can navigate internally while a tab is backgrounded, and we do not need to spend
-        // CPU tracking those transitions in real time while hidden. We pause all monitor activity on
-        // hide, then perform an immediate state reconciliation on visibility return.
-        function pauseBookingFlowMonitoringWhileHidden() {
-            // Pause all monitoring work while the tab is hidden.
-            stopAllBookingFlowWatchersAndPollers();
-            bookingDomTasksScheduled = false;
-        }
-
-        function resumeBookingFlowMonitoringAfterVisible() {
-            // Resume immediately when visible so we do not miss latent SPA transitions.
-            if (isMonitoringBookingFlow) {
-                // If we were actively monitoring booking flow before hiding, restore the active
-                // observers and poller first, then immediately reconcile to catch latent DOM changes.
-                startBookingFlowActiveWatchers();
-                evaluateBookingFlowMonitoringState();
-                if (isMonitoringBookingFlow) {
+            function scheduleBookingDomTasks() {
+                if (bookingDomTasksScheduled) return;
+                bookingDomTasksScheduled = true;
+                // Mutation bursts are common in this SPA. Schedule one reconcile per frame to avoid
+                // running the full DOM task pipeline on every individual mutation callback.
+                requestAnimationFrame(() => {
+                    bookingDomTasksScheduled = false;
+                    if (!isMonitoringBookingFlow) return;
                     runBookingDomTasks();
-                }
-                return;
+                });
             }
 
-            // If we were not in active booking mode, restart lightweight bootstrap detection and
-            // evaluate immediately in case the app moved into booking flow while hidden.
-            startBootstrapPoller();
-            evaluateBookingFlowMonitoringState();
-        }
+            // Handle both mobile and desktop back controls via one delegated capture listener.
+            // This avoids scanning the whole DOM on mutations just to attach click handlers.
+            function installBackToHomeClickMonitoring() {
+                if (backToHomeClickMonitoringInstalled) return;
+                backToHomeClickMonitoringInstalled = true;
 
-        function installVisibilityMonitoring() {
-            if (visibilityMonitoringInstalled) return;
-            visibilityMonitoringInstalled = true;
+                document.addEventListener('click', event => {
+                    const target = event.target;
+                    if (!createBookingDomQueryService().isBackControlClickTarget(target)) return;
 
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'hidden') {
-                    pauseBookingFlowMonitoringWhileHidden();
+                    clearBookingStateAndUi();
+                }, true);
+            }
+
+            // As a single page app, we get very few hints as to when user actions trigger what appears
+            // to be a screen update. The URL rarely changes, and we often see few pushState/popstate
+            // events. We keep this observer active only while we are in the booking flow.
+            function startContainerChangeObserver() {
+                ensureObserver(
+                    BOOKING_FLOW_CONTAINER_OBSERVER_KEY,
+                    () => new MutationObserver(() => {
+                        scheduleBookingDomTasks();
+                    }),
+                    observer => {
+                        observer.observe(document.body, { childList: true, subtree: true });
+                    }
+                );
+            }
+
+            function stopContainerChangeObserver() {
+                clearObserver(BOOKING_FLOW_CONTAINER_OBSERVER_KEY);
+            }
+
+            function startNavigationPoller() {
+                lastObservedHref = location.href;
+                // Poll quickly inside booking flow. The UI can move between booking sub-screens
+                // without reliable history signals, and sometimes without a visible URL change
+                // until after Angular has already swapped DOM.
+                ensureInterval(
+                    BOOKING_FLOW_NAVIGATION_POLLER_KEY,
+                    () => {
+                        if (location.href === lastObservedHref) return;
+                        lastObservedHref = location.href;
+                        evaluateBookingFlowMonitoringState();
+                    },
+                    200
+                );
+            }
+
+            function stopNavigationPoller() {
+                clearIntervalByKey(BOOKING_FLOW_NAVIGATION_POLLER_KEY);
+            }
+
+            function startBootstrapPoller() {
+                // Poll slowly outside booking flow to detect re-entry while avoiding always-on,
+                // heavyweight monitoring on unrelated app pages.
+                ensureInterval(
+                    BOOKING_FLOW_BOOTSTRAP_POLLER_KEY,
+                    () => {
+                        if (isOnBookingFlowUrl()) {
+                            evaluateBookingFlowMonitoringState();
+                        }
+                    },
+                    1000
+                );
+            }
+
+            function stopBootstrapPoller() {
+                clearIntervalByKey(BOOKING_FLOW_BOOTSTRAP_POLLER_KEY);
+            }
+
+            function startBookingFlowActiveWatchers() {
+                startContainerChangeObserver();
+                startNavigationPoller();
+            }
+
+            function stopBookingFlowActiveWatchers() {
+                stopContainerChangeObserver();
+                stopNavigationPoller();
+            }
+
+            function stopAllBookingFlowWatchersAndPollers() {
+                stopBookingFlowActiveWatchers();
+                stopBootstrapPoller();
+            }
+
+            function startBookingFlowMonitoring() {
+                if (isMonitoringBookingFlow) return;
+                isMonitoringBookingFlow = true;
+                stopBootstrapPoller();
+                if (document.visibilityState === 'hidden') return;
+                startBookingFlowActiveWatchers();
+                // Run once immediately so controls are auto-selected before the next mutation tick.
+                runBookingDomTasks();
+            }
+
+            function stopBookingFlowMonitoring() {
+                if (!isMonitoringBookingFlow) return;
+                isMonitoringBookingFlow = false;
+                stopBookingFlowActiveWatchers();
+                if (document.visibilityState !== 'hidden') {
+                    startBootstrapPoller();
+                }
+                bookingDomTasksScheduled = false;
+            }
+
+            function evaluateBookingFlowMonitoringState() {
+                if (isOnBookingFlowUrl()) {
+                    startBookingFlowMonitoring();
                     return;
                 }
-                resumeBookingFlowMonitoringAfterVisible();
-            });
-        }
+                // Only clear and stop when transitioning from active booking mode.
+                if (!isMonitoringBookingFlow) return;
+                clearBookingStateAndUi();
+                stopBookingFlowMonitoring();
+            }
 
-        function initialize() {
-            // Start in lightweight mode and let state evaluation upgrade to active mode if needed.
-            installHistoryMonitoring();
-            installVisibilityMonitoring();
-            installBackToHomeClickMonitoring();
-            startBootstrapPoller();
-            evaluateBookingFlowMonitoringState();
-        }
+            function installHistoryMonitoring() {
+                if (historyMonitoringInstalled) return;
+                historyMonitoringInstalled = true;
+
+                const originalPushState = history.pushState;
+                const originalReplaceState = history.replaceState;
+
+                // We intentionally leave these wrappers installed for the page lifetime.
+                // Restoring and reinstalling them around booking-flow transitions increases the
+                // chance of missing SPA transitions that do not emit consistent navigation signals.
+                // The wrapper cost is low, and heavyweight work remains gated by monitor state.
+                history.pushState = function (...args) {
+                    originalPushState.apply(this, args);
+                    evaluateBookingFlowMonitoringState();
+                };
+
+                history.replaceState = function (...args) {
+                    originalReplaceState.apply(this, args);
+                    evaluateBookingFlowMonitoringState();
+                };
+
+                window.addEventListener('popstate', evaluateBookingFlowMonitoringState);
+            }
+
+            // This SPA can navigate internally while a tab is backgrounded, and we do not need to
+            // spend CPU tracking those transitions in real time while hidden. We pause all monitor
+            // activity on hide, then perform an immediate state reconciliation on visibility return.
+            function pauseBookingFlowMonitoringWhileHidden() {
+                // Pause all monitoring work while the tab is hidden.
+                stopAllBookingFlowWatchersAndPollers();
+                bookingDomTasksScheduled = false;
+            }
+
+            function resumeBookingFlowMonitoringAfterVisible() {
+                // Resume immediately when visible so we do not miss latent SPA transitions.
+                if (isMonitoringBookingFlow) {
+                    // If we were actively monitoring booking flow before hiding, restore the active
+                    // observers and poller first, then immediately reconcile to catch latent changes.
+                    startBookingFlowActiveWatchers();
+                    evaluateBookingFlowMonitoringState();
+                    if (isMonitoringBookingFlow) {
+                        runBookingDomTasks();
+                    }
+                    return;
+                }
+
+                // If we were not in active booking mode, restart lightweight bootstrap detection
+                // and evaluate immediately in case the app moved into booking flow while hidden.
+                startBootstrapPoller();
+                evaluateBookingFlowMonitoringState();
+            }
+
+            function installVisibilityMonitoring() {
+                if (visibilityMonitoringInstalled) return;
+                visibilityMonitoringInstalled = true;
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'hidden') {
+                        pauseBookingFlowMonitoringWhileHidden();
+                        return;
+                    }
+                    resumeBookingFlowMonitoringAfterVisible();
+                });
+            }
+
+            function initialize() {
+                // Start in lightweight mode and let state evaluation upgrade to active mode if needed.
+                installHistoryMonitoring();
+                installVisibilityMonitoring();
+                installBackToHomeClickMonitoring();
+                startBootstrapPoller();
+                evaluateBookingFlowMonitoringState();
+            }
 
             initialize();
         };
@@ -1933,7 +1932,7 @@
         };
     })();
 
-    // Let's actually start our program! We'll keep watch on the DOM starting here.
+    // Start script services and monitoring.
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
     createBookingFlowMonitor();
