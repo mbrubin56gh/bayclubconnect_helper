@@ -101,16 +101,18 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
   For example, drag-and-drop item reordering state is scoped inside `createClubOrderWidgetController()` rather than script scope.
   Time-range slider drag state is similarly scoped inside `createTimeRangeSliderController()`.
+- **Prefer service-shaped modules for non-trivial logic** — when logic has internal state or lifecycle, place it behind an in-file service/controller creator rather than free-floating functions and variables.
+- **Service creators own singleton behavior** — if a service should be singleton for the page lifecycle, implement singleton ownership inside the service creator itself.
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
-- **Centralized local storage access** — preference persistence reads and writes flow through a singleton `getLocalStorageService()` accessor so parsing, serialization, and parse-failure logging behavior are consistent.
+- **Centralized local storage access** — preference persistence reads and writes flow through a singleton `createLocalStorageService()` creator so parsing, serialization, and parse-failure logging behavior are consistent.
 - **Prefer explicit enum-like values over nullable/optional parameters for behavioral variation** — when a parameter controls which behavior a function performs, always pass an explicit string constant (e.g. `LABEL_MODE_TIME`, `LABEL_MODE_CLUB`) rather than a nullable or omitted argument (e.g. `labelOverride = null`). Nullable optionals hide intent at call sites and are easy to accidentally omit. Explicit constants make every call self-documenting.
 - **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
 - **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
 
 ## Global State (intentional)
 
-Most mutable booking/network state is encapsulated in a singleton in-file service (`getBookingStateService()`), rather than free-floating script-level variables.
+Most mutable booking/network state is encapsulated in a singleton in-file service (`createBookingStateService()`), rather than free-floating script-level variables.
 Duration/player preference auto-selection also uses an in-file closure service (`createPreferenceAutoSelectService()`) so transient selection-suppression state is not exposed at script scope.
 
 - `lastFetchState` — `{ transformed, params, failedClubIds }` — the last fetched and transformed availability data plus request params and per-club failure markers
