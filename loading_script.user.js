@@ -162,6 +162,92 @@
             return { method: metadata.method, url: metadata.url };
         }
 
+        function maybePatchAvailabilityResponseForAngular(xhr) {
+            // We need Angular to think there is at least one available time slot for the native
+            // app's default selected club so Angular will render that slot in the hour view.
+            // Without that Angular rendered slot, we're not able to drive the Angular state
+            // machine forward to issue a booking request after one of our slots is selected:
+            // we fake a click on that slot, which allows the click on the Next button in the
+            // hour view to issue the booking request and render the partner selector (we make
+            // sure that the only booking requests that actually go out from the hour view are
+            // our own). So we need to make sure the request for court availabilities for the home
+            // club for a date always returns at least one slot. We do that here.
+            if (xhr.status < 200 || xhr.status >= 300) return;
+            if (!xhr.responseText || xhr.responseText.trim() === '') return;
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (!data.clubsAvailabilities) return;
+                const clubAvail = data.clubsAvailabilities[0];
+                const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
+                // If the club actually has availability for that date, we are good.
+                if (slotCount > 0) return;
+                // Make sure a real court is present so we can synthesize one fake slot.
+                const court = clubAvail?.courts?.[0];
+                if (!court) return;
+                // Inject one synthetic slot so Angular can continue its booking flow.
+                clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
+                Object.defineProperty(xhr, 'response', { get: () => JSON.stringify(data), configurable: true });
+                Object.defineProperty(xhr, 'responseText', { get: () => JSON.stringify(data), configurable: true });
+            } catch (e) {
+                console.log('[bc] error:', e);
+            }
+        }
+
+        function fetchAvailabilityAcrossAllClubsForRequestUrl(requestUrl) {
+            if (!requestUrl || !requestUrl.includes(AVAILABILITY_API_PATH)) return;
+            const parsedUrl = new URL(requestUrl);
+            const params = {
+                date: parsedUrl.searchParams.get('date'),
+                categoryCode: parsedUrl.searchParams.get('categoryCode'),
+                categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
+                timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+                nativeClubId: parsedUrl.searchParams.get('clubId'),
+            };
+            fetchAllClubs(params);
+        }
+
+        function maybeRewriteBookingRequestToPendingSelection(xhr, requestUrl, requestMethod, originalArgs) {
+            // Intercept the native app's booking request and replace it with our own
+            // for the selected club and time slot.
+            if (!requestUrl ||
+                !requestUrl.match(/courtbookings$/) ||
+                requestMethod !== 'POST' ||
+                !createBookingStateService().getPendingSlotBooking()) {
+                return { handled: false };
+            }
+
+            const pendingSlotBooking = createBookingStateService().getPendingSlotBooking();
+            const lastFetchState = createBookingStateService().getLastFetchState();
+            if (!pendingSlotBooking || !lastFetchState) {
+                return { handled: true, value: originalXhrSend.apply(xhr, originalArgs) };
+            }
+
+            // Dedupe any requests, just in case.
+            const requestId = getRequestId(xhr);
+            if (requestId && requestId === lastBookingRequestId) {
+                return { handled: true, value: undefined };
+            }
+            if (requestId) {
+                lastBookingRequestId = requestId;
+            }
+
+            const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
+                lastFetchState.params.timeSlotId === TIMESLOTS.min90
+                ? CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId]
+                : lastFetchState.params.timeSlotId;
+            const ourBody = JSON.stringify({
+                clubId: pendingSlotBooking.clubId,
+                courtId: pendingSlotBooking.courtId,
+                date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
+                timeFromInMinutes: pendingSlotBooking.fromMinutes,
+                timeToInMinutes: pendingSlotBooking.toMinutes,
+                categoryOptionsId: lastFetchState.params.categoryOptionsId,
+                timeSlotId: timeSlotId,
+            });
+            createBookingStateService().clearPendingSlotBooking();
+            return { handled: true, value: originalXhrSend.call(xhr, ourBody) };
+        }
+
         XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             // Capture these so we can authenticate our own requests to the Bay Club's APIs.
             if (name === 'Authorization' || name === 'X-SessionId') {
@@ -176,35 +262,7 @@
         XMLHttpRequest.prototype.open = function (method, url, ...rest) {
             if (typeof url === 'string' && url.includes(AVAILABILITY_API_PATH)) {
                 this.addEventListener('load', function () {
-                    // We need Angular to think there is at least one available time slot for the native
-                    // app's default selected club so Angular will render that slot in the hour view.
-                    // Without that Angular rendered slot, we're not able to drive the Angular state
-                    // machine forward to issue a booking request after one of our slots is selected:
-                    // we fake a click on that slot, which allows the click on the Next button in the
-                    // hour view to issue the booking request and render the partner selector (we make
-                    // sure that the only booking requests that actually go out from the hour view are
-                    // our own). So we need to make sure the request for court availabilities for the home
-                    // club for a date always returns at least one slot. We do that here.
-
-                    if (this.status < 200 || this.status >= 300) return;
-                    if (!this.responseText || this.responseText.trim() === '') return;
-                    try {
-                        const data = JSON.parse(this.responseText);
-                        if (!data.clubsAvailabilities) return;
-                        const clubAvail = data.clubsAvailabilities[0];
-                        const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
-                        // If the club actually has availability for that date, we are good.
-                        if (slotCount > 0) return;
-                        // Make sure a real court is present so we can synthesize one fake slot.
-                        const court = clubAvail?.courts?.[0];
-                        if (!court) return;
-                        // Inject one synthetic slot so Angular can continue its booking flow.
-                        clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
-                        Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
-                        Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data), configurable: true });
-                    } catch (e) {
-                        console.log('[bc] error:', e);
-                    }
+                    maybePatchAvailabilityResponseForAngular(this);
                 });
             }
             setRequestInfo(this, method, url);
@@ -219,56 +277,10 @@
             const requestUrl = requestInfo?.url;
             const requestMethod = requestInfo?.method;
 
-            if (requestUrl && requestUrl.includes(AVAILABILITY_API_PATH)) {
-                const parsedUrl = new URL(requestUrl);
-                const params = {
-                    date: parsedUrl.searchParams.get('date'),
-                    categoryCode: parsedUrl.searchParams.get('categoryCode'),
-                    categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
-                    timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
-                    nativeClubId: parsedUrl.searchParams.get('clubId'),
-                };
-                fetchAllClubs(params);
-            }
+            fetchAvailabilityAcrossAllClubsForRequestUrl(requestUrl);
 
-            // Intercept the native app's booking request and replace it with our own
-            // for the selected club and time slot.
-            if (requestUrl &&
-                requestUrl.match(/courtbookings$/) &&
-                requestMethod === 'POST' &&
-                createBookingStateService().getPendingSlotBooking()) {
-
-                const pendingSlotBooking = createBookingStateService().getPendingSlotBooking();
-                const lastFetchState = createBookingStateService().getLastFetchState();
-                if (!pendingSlotBooking || !lastFetchState) {
-                    return originalXhrSend.apply(this, arguments);
-                }
-
-                // Dedupe any requests, just in case.
-                const requestId = getRequestId(this);
-                if (requestId && requestId === lastBookingRequestId) {
-                    return;
-                }
-                if (requestId) {
-                    lastBookingRequestId = requestId;
-                }
-
-                const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
-                    lastFetchState.params.timeSlotId === TIMESLOTS.min90
-                    ? CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId]
-                    : lastFetchState.params.timeSlotId;
-                const ourBody = JSON.stringify({
-                    clubId: pendingSlotBooking.clubId,
-                    courtId: pendingSlotBooking.courtId,
-                    date: { value: pendingSlotBooking.date, date: pendingSlotBooking.date },
-                    timeFromInMinutes: pendingSlotBooking.fromMinutes,
-                    timeToInMinutes: pendingSlotBooking.toMinutes,
-                    categoryOptionsId: lastFetchState.params.categoryOptionsId,
-                    timeSlotId: timeSlotId,
-                });
-                createBookingStateService().clearPendingSlotBooking();
-                return originalXhrSend.call(this, ourBody);
-            }
+            const rewrittenSendResult = maybeRewriteBookingRequestToPendingSelection(this, requestUrl, requestMethod, arguments);
+            if (rewrittenSendResult.handled) return rewrittenSendResult.value;
 
             return originalXhrSend.apply(this, arguments);
         };
