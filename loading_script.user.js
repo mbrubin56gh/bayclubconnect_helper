@@ -734,7 +734,7 @@
                 if (existing) existing.remove();
                 const lastFetchState = createBookingStateService().getLastFetchState();
                 if (lastFetchState) {
-                    renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
+                    createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
                 }
             });
         });
@@ -907,7 +907,7 @@
                 dragging = null;
                 saveTimeRangeForSlider(startMinutes, endMinutes);
                 // Re-filter visible slots.
-                applyFilters(startMinutes, endMinutes);
+                createAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
                 removeDragListeners();
             }
 
@@ -937,64 +937,6 @@
 
     const timeRangeSliderController = createTimeRangeSliderController();
 
-    function filterSlotsByTimeRange(startMinutes, endMinutes) {
-        document.querySelectorAll('[data-slot-wrapper][data-from-minutes]').forEach(wrapper => {
-            const from = parseInt(wrapper.dataset.fromMinutes);
-            wrapper.style.display = from >= startMinutes && from < endMinutes ? '' : 'none';
-        });
-    }
-
-    function filterOutdoorSlotsFromTimeGroups() {
-        if (!getShowIndoorClubsOnly()) return;
-        document.querySelectorAll('[data-time-group] [data-slot-wrapper]').forEach(wrapper => {
-            if (wrapper.style.display === 'none') return;
-            const opt = wrapper.querySelector('.bc-court-option');
-            if (opt && !INDOOR_CLUBS.has(opt.dataset.clubId)) wrapper.style.display = 'none';
-        });
-    }
-
-    function collapseEmptyTimeGroups() {
-        document.querySelectorAll('[data-time-group]').forEach(group => {
-            const anyVisible = [...group.querySelectorAll('[data-slot-wrapper]')]
-                .some(el => el.style.display !== 'none');
-            group.style.display = anyVisible ? '' : 'none';
-        });
-    }
-
-    function updateByClubViewVisibility() {
-        document.querySelectorAll('.all-clubs-availability > [data-club-id]').forEach(clubDiv => {
-            const clubId = clubDiv.dataset.clubId;
-
-            if (getShowIndoorClubsOnly() && !INDOOR_CLUBS.has(clubId)) {
-                clubDiv.style.display = 'none';
-                return;
-            }
-            clubDiv.style.display = '';
-
-            clubDiv.querySelectorAll('[data-tod-col]').forEach(todCol => {
-                const anyVisible = Array.from(todCol.querySelectorAll('[data-slot-wrapper]'))
-                    .some(el => el.style.display !== 'none');
-                todCol.style.display = anyVisible ? '' : 'none';
-            });
-
-            const anyTodVisible = Array.from(clubDiv.querySelectorAll('[data-tod-col]'))
-                .some(col => col.style.display !== 'none');
-            const hasTodCols = clubDiv.querySelectorAll('[data-tod-col]').length > 0;
-
-            const filterMsg = clubDiv.querySelector('.bc-filter-message');
-            if (filterMsg) filterMsg.style.display = (hasTodCols && !anyTodVisible) ? '' : 'none';
-        });
-    }
-
-    function applyFilters(startMinutes, endMinutes) {
-        filterSlotsByTimeRange(startMinutes, endMinutes);
-        if (getViewMode() === VIEW_MODE_BY_TIME) {
-            filterOutdoorSlotsFromTimeGroups();
-            collapseEmptyTimeGroups();
-        } else {
-            updateByClubViewVisibility();
-        }
-    }
 
     // Create a data structure well-tailored for rendering our slots by time of day per club.
     function buildClubIndex(transformed, failedClubIds) {
@@ -1223,173 +1165,247 @@
     </div>`;
     }
 
-    function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
-        const limitDate = new Date();
-        limitDate.setDate(limitDate.getDate() + 3);
-        // Floor to current 30-minute window start.
-        const mins = limitDate.getMinutes();
-        limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
+    // Availability filtering and rendering orchestration are encapsulated in this pipeline service.
+    const createAvailabilityRenderPipeline = (() => {
+        let serviceInstance = null;
 
-        const lastFetchState = createBookingStateService().getLastFetchState();
-        if (!lastFetchState) return;
-        const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
-        const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
+        return function createAvailabilityRenderPipeline() {
+            if (serviceInstance) return serviceInstance;
 
-        const { startMinutes, endMinutes } = getTimeRangeForSlider();
-        let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
-        html += buildShowIndoorCourtsOnlyToggleHtml();
-        html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
-        html += buildViewToggleHtml();
-        html += buildFailedClubsWarningHtml(failedClubIdsSet);
-
-        // Render the time slots in the selected layout mode.
-        if (getViewMode() === VIEW_MODE_BY_TIME) {
-            html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
-        } else {
-            for (const clubId of allClubIds) {
-                html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
+            function filterSlotsByTimeRange(startMinutes, endMinutes) {
+                document.querySelectorAll('[data-slot-wrapper][data-from-minutes]').forEach(wrapper => {
+                    const from = parseInt(wrapper.dataset.fromMinutes);
+                    wrapper.style.display = from >= startMinutes && from < endMinutes ? '' : 'none';
+                });
             }
-        }
 
-        html += `</div>`;
-
-        // Hide native content but keep it in DOM so we can secretly select a slot when the user selects one of ours.
-        Array.from(anchorElement.children).forEach(child => {
-            if (!child.classList.contains('all-clubs-availability')) {
-                child.style.display = 'none';
+            function filterOutdoorSlotsFromTimeGroups() {
+                if (!getShowIndoorClubsOnly()) return;
+                document.querySelectorAll('[data-time-group] [data-slot-wrapper]').forEach(wrapper => {
+                    if (wrapper.style.display === 'none') return;
+                    const opt = wrapper.querySelector('.bc-court-option');
+                    if (opt && !INDOOR_CLUBS.has(opt.dataset.clubId)) wrapper.style.display = 'none';
+                });
             }
-        });
 
-        // Append our content instead of replacing.
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = html;
-        anchorElement.appendChild(wrapper.firstChild);
+            function collapseEmptyTimeGroups() {
+                document.querySelectorAll('[data-time-group]').forEach(group => {
+                    const anyVisible = [...group.querySelectorAll('[data-slot-wrapper]')]
+                        .some(el => el.style.display !== 'none');
+                    group.style.display = anyVisible ? '' : 'none';
+                });
+            }
 
-        // Add our time range slider widget.
-        const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
-        if (sliderWidget) timeRangeSliderController.init(sliderWidget);
-        initViewToggle(anchorElement);
-        applyFilters(startMinutes, endMinutes);
+            function updateByClubViewVisibility() {
+                document.querySelectorAll('.all-clubs-availability > [data-club-id]').forEach(clubDiv => {
+                    const clubId = clubDiv.dataset.clubId;
 
-        // Listen to our indoor courts only toggle.
-        const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
-        if (indoorCheckbox) {
-            indoorCheckbox.addEventListener('change', () => {
-                saveShowIndoorClubsOnly(indoorCheckbox.checked);
-                const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
-                applyFilters(curStart, curEnd);
-            });
-        }
-
-        // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
-        weatherService.whenReady().then(() => {
-            const widget = anchorElement.querySelector('.bc-time-range-widget');
-            if (!widget) return;
-            widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
-                if (tickDiv.querySelector('.bc-weather-tick')) return;
-                const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
-                const emoji = weatherService.emojiForHour(fetchDate, fromMinutes);
-                if (!emoji) return;
-                const emojiEl = document.createElement('div');
-                emojiEl.className = 'bc-weather-tick';
-                emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
-                emojiEl.textContent = emoji;
-                if (RAIN_EMOJIS.includes(emoji)) {
-                    const pct = weatherService.rainPctForHour(fetchDate, fromMinutes);
-                    if (pct != null) {
-                        const pctEl = document.createElement('div');
-                        pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
-                        pctEl.textContent = `${pct}%`;
-                        emojiEl.appendChild(pctEl);
+                    if (getShowIndoorClubsOnly() && !INDOOR_CLUBS.has(clubId)) {
+                        clubDiv.style.display = 'none';
+                        return;
                     }
-                }
-                tickDiv.appendChild(emojiEl);
-            });
-        });
+                    clubDiv.style.display = '';
 
-        // We'll take over handling the Next button.
-        initNextButton();
+                    clubDiv.querySelectorAll('[data-tod-col]').forEach(todCol => {
+                        const anyVisible = Array.from(todCol.querySelectorAll('[data-slot-wrapper]'))
+                            .some(el => el.style.display !== 'none');
+                        todCol.style.display = anyVisible ? '' : 'none';
+                    });
 
-        // Expand/collapse slot cards on click.
-        anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
-            card.addEventListener('click', e => {
-                if (card.classList.contains('time-slot-disabled')) return;
-                if (e.target.closest('.bc-court-option')) return;
+                    const anyTodVisible = Array.from(clubDiv.querySelectorAll('[data-tod-col]'))
+                        .some(col => col.style.display !== 'none');
+                    const hasTodCols = clubDiv.querySelectorAll('[data-tod-col]').length > 0;
 
-                const expand = card.querySelector('.bc-court-expand');
-                if (!expand) return;
+                    const filterMsg = clubDiv.querySelector('.bc-filter-message');
+                    if (filterMsg) filterMsg.style.display = (hasTodCols && !anyTodVisible) ? '' : 'none';
+                });
+            }
 
-                const isOpen = expand.style.display !== 'none';
-                const hasSelection = !!card.querySelector('.bc-court-option[data-selected]');
-
-                // Toggle open/closed, but never collapse if a selection is active within.
-                if (isOpen && !hasSelection) {
-                    expand.style.display = 'none';
+            function applyFilters(startMinutes, endMinutes) {
+                filterSlotsByTimeRange(startMinutes, endMinutes);
+                if (getViewMode() === VIEW_MODE_BY_TIME) {
+                    filterOutdoorSlotsFromTimeGroups();
+                    collapseEmptyTimeGroups();
                 } else {
-                    expand.style.display = 'block';
+                    updateByClubViewVisibility();
                 }
-            });
-        });
+            }
 
-        // Select a specific court when an expanded court option or single-court card is clicked.
-        anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
-            el.addEventListener('click', () => {
-                // Deselect any previously selected option.
-                anchorElement.querySelectorAll('.bc-court-option[data-selected]').forEach(prev => {
-                    prev.removeAttribute('data-selected');
-                });
-
-                // Collapse all expanded cards except the one containing the new selection.
-                // Collapsing is a consequence of selection, not of expansion.
-                const parentCard = el.closest('.bc-slot-card');
-                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
-                    if (card === parentCard) return;
-                    const otherExpand = card.querySelector('.bc-court-expand');
-                    if (otherExpand) otherExpand.style.display = 'none';
-                });
-
-                // Select this court option.
-                el.setAttribute('data-selected', '')
+            function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
+                const limitDate = new Date();
+                limitDate.setDate(limitDate.getDate() + 3);
+                // Floor to current 30-minute window start.
+                const mins = limitDate.getMinutes();
+                limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
                 const lastFetchState = createBookingStateService().getLastFetchState();
                 if (!lastFetchState) return;
-                createBookingStateService().setPendingSlotBooking({
-                    clubId: el.dataset.clubId,
-                    courtId: el.dataset.courtId,
-                    date: lastFetchState.params.date,
-                    fromMinutes: parseInt(el.dataset.fromMinutes),
-                    toMinutes: parseInt(el.dataset.toMinutes),
+                const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
+                const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
+
+                const { startMinutes, endMinutes } = getTimeRangeForSlider();
+                let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
+                html += buildShowIndoorCourtsOnlyToggleHtml();
+                html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
+                html += buildViewToggleHtml();
+                html += buildFailedClubsWarningHtml(failedClubIdsSet);
+
+                // Render the time slots in the selected layout mode.
+                if (getViewMode() === VIEW_MODE_BY_TIME) {
+                    html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
+                } else {
+                    for (const clubId of allClubIds) {
+                        html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
+                    }
+                }
+
+                html += `</div>`;
+
+                // Hide native content but keep it in DOM so we can secretly select a slot when the user selects one of ours.
+                Array.from(anchorElement.children).forEach(child => {
+                    if (!child.classList.contains('all-clubs-availability')) {
+                        child.style.display = 'none';
+                    }
                 });
 
-                const bottomBar = document.querySelector('.white-bg.p-2 .container');
-                if (!bottomBar) return;
-                const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+                // Append our content instead of replacing.
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = html;
+                anchorElement.appendChild(wrapper.firstChild);
 
-                const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
-                if (nativeSlot) {
-                    nativeSlot.click();
-                    setTimeout(() => {
-                        const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
-                        if (nativeInfo) nativeInfo.style.display = 'none';
-                    }, 0);
-                } else {
-                    console.log("No native slot to click");
+                // Add our time range slider widget.
+                const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
+                if (sliderWidget) timeRangeSliderController.init(sliderWidget);
+                initViewToggle(anchorElement);
+                applyFilters(startMinutes, endMinutes);
+
+                // Listen to our indoor courts only toggle.
+                const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
+                if (indoorCheckbox) {
+                    indoorCheckbox.addEventListener('change', () => {
+                        saveShowIndoorClubsOnly(indoorCheckbox.checked);
+                        const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
+                        applyFilters(curStart, curEnd);
+                    });
                 }
 
-                selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
+                // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
+                weatherService.whenReady().then(() => {
+                    const widget = anchorElement.querySelector('.bc-time-range-widget');
+                    if (!widget) return;
+                    widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
+                        if (tickDiv.querySelector('.bc-weather-tick')) return;
+                        const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
+                        const emoji = weatherService.emojiForHour(fetchDate, fromMinutes);
+                        if (!emoji) return;
+                        const emojiEl = document.createElement('div');
+                        emojiEl.className = 'bc-weather-tick';
+                        emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
+                        emojiEl.textContent = emoji;
+                        if (RAIN_EMOJIS.includes(emoji)) {
+                            const pct = weatherService.rainPctForHour(fetchDate, fromMinutes);
+                            if (pct != null) {
+                                const pctEl = document.createElement('div');
+                                pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
+                                pctEl.textContent = `${pct}%`;
+                                emojiEl.appendChild(pctEl);
+                            }
+                        }
+                        tickDiv.appendChild(emojiEl);
+                    });
+                });
 
-                const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                    .find(btn => btn.textContent.trim().includes('NEXT'));
-                if (nextButton) {
-                    nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
-                    nextButton.style.borderColor = 'rgb(0, 188, 212)';
-                    nextButton.style.opacity = '1';
-                    nextButton.style.cursor = 'pointer';
-                    nextButton.removeAttribute('disabled');
-                }
-            });
-        });
-    }
+                // We'll take over handling the Next button.
+                initNextButton();
+
+                // Expand/collapse slot cards on click.
+                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+                    card.addEventListener('click', e => {
+                        if (card.classList.contains('time-slot-disabled')) return;
+                        if (e.target.closest('.bc-court-option')) return;
+
+                        const expand = card.querySelector('.bc-court-expand');
+                        if (!expand) return;
+
+                        const isOpen = expand.style.display !== 'none';
+                        const hasSelection = !!card.querySelector('.bc-court-option[data-selected]');
+
+                        // Toggle open/closed, but never collapse if a selection is active within.
+                        if (isOpen && !hasSelection) {
+                            expand.style.display = 'none';
+                        } else {
+                            expand.style.display = 'block';
+                        }
+                    });
+                });
+
+                // Select a specific court when an expanded court option or single-court card is clicked.
+                anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
+                    el.addEventListener('click', () => {
+                        // Deselect any previously selected option.
+                        anchorElement.querySelectorAll('.bc-court-option[data-selected]').forEach(prev => {
+                            prev.removeAttribute('data-selected');
+                        });
+
+                        // Collapse all expanded cards except the one containing the new selection.
+                        // Collapsing is a consequence of selection, not of expansion.
+                        const parentCard = el.closest('.bc-slot-card');
+                        anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+                            if (card === parentCard) return;
+                            const otherExpand = card.querySelector('.bc-court-expand');
+                            if (otherExpand) otherExpand.style.display = 'none';
+                        });
+
+                        // Select this court option.
+                        el.setAttribute('data-selected', '')
+
+                        const lastFetchState = createBookingStateService().getLastFetchState();
+                        if (!lastFetchState) return;
+                        createBookingStateService().setPendingSlotBooking({
+                            clubId: el.dataset.clubId,
+                            courtId: el.dataset.courtId,
+                            date: lastFetchState.params.date,
+                            fromMinutes: parseInt(el.dataset.fromMinutes),
+                            toMinutes: parseInt(el.dataset.toMinutes),
+                        });
+
+                        const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                        if (!bottomBar) return;
+                        const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+
+                        const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
+                        if (nativeSlot) {
+                            nativeSlot.click();
+                            setTimeout(() => {
+                                const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                                if (nativeInfo) nativeInfo.style.display = 'none';
+                            }, 0);
+                        } else {
+                            console.log("No native slot to click");
+                        }
+
+                        selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
+
+                        const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                            .find(btn => btn.textContent.trim().includes('NEXT'));
+                        if (nextButton) {
+                            nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
+                            nextButton.style.borderColor = 'rgb(0, 188, 212)';
+                            nextButton.style.opacity = '1';
+                            nextButton.style.cursor = 'pointer';
+                            nextButton.removeAttribute('disabled');
+                        }
+                    });
+                });
+            }
+
+            serviceInstance = {
+                applyFilters,
+                renderAllClubsAvailability,
+            };
+            return serviceInstance;
+        };
+    })();
 
     function clearBookingStateAndUi() {
         createBookingStateService().abortFetch();
@@ -1660,12 +1676,12 @@
 
         const tile = bookingDomQueryService.getDesktopTimeSlotHost();
         if (tile && !tile.querySelector('.all-clubs-availability')) {
-            renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
+            createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
         }
 
         const mobileContainer = bookingDomQueryService.getMobileTimeSlotHost();
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
-            renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
+            createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
     }
 
