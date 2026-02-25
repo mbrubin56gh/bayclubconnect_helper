@@ -60,7 +60,7 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 - **Club preference ordering**: Drag-and-drop widget on the duration selector page, persisted to localStorage
 - **Time range filter**: Dual-handle slider to filter slots by time of day, persisted to localStorage
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
-- **Weather hint**: Shows rain probability from Open-Meteo API next to the indoor toggle when rain > 20%
+- **Hourly weather**: Fetches hourly forecast from Open-Meteo API; shows the relevant emoji below each hour label on the time range slider; rain emojis are accompanied by a centred rain-probability percentage
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
 

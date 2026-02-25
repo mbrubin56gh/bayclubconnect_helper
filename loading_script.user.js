@@ -533,7 +533,7 @@
             const pct = minutesToSliderPercent(m);
             const isHour = m % 60 === 0;
             ticks += `
-            <div style="position: absolute; left: ${pct}%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center;">
+            <div style="position: absolute; left: ${pct}%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center;"${isHour ? ` data-tick-minutes="${m}"` : ''}>
                 <div style="width: 1px; height: ${isHour ? '8px' : '5px'}; background: rgba(255,255,255,${isHour ? '0.4' : '0.2'}); margin-top: 2px;"></div>
                 ${isHour ? `<div style="font-size: 9px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap;">${minutesToHumanTime(m)}</div>` : ''}
             </div>`;
@@ -555,7 +555,7 @@
             <div class="bc-slider-handle bc-slider-end" data-type="end" style="position: absolute; top: 0; left: ${endPct}%; transform: translateX(-50%); width: 20px; height: 20px; background: rgb(0, 188, 212); border-radius: 50%; cursor: grab; z-index: 2; box-shadow: 0 1px 4px rgba(0,0,0,0.4);"></div>
         </div>
         <!-- Ticks and labels -->
-        <div style="position: relative; height: 28px; margin: 0 8px;">
+        <div style="position: relative; height: 54px; margin: 0 8px;">
             ${ticks}
         </div>
     </div>`;
@@ -947,21 +947,29 @@
             });
         }
 
-        // Wait for the weather forecast to be ready, then update the indoor 
-        // toggle hint to reflect the predicted weather condtions.
+        // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
         weather.promise.then(() => {
-            const summary = weatherSummaryForDate(fetchDate);
-            if (!summary) return;
-            anchorElement.querySelectorAll('.bc-indoor-checkbox').forEach(checkbox => {
-                const label = checkbox.closest('label');
-                if (label && !label.querySelector('.bc-weather-hint')) {
-                    const hint = document.createElement('span');
-                    hint.className = 'bc-weather-hint';
-                    hint.textContent = summary;
-                    const isRainy = (weather.cache[fetchDate]?.rainPct ?? 0) > 20;
-                    hint.style.cssText = `font-size: 12px; margin-left: 8px; color: ${isRainy ? 'rgba(100, 180, 255, 0.9)' : 'rgba(255,255,255,0.6)'};`;
-                    label.appendChild(hint);
+            const widget = anchorElement.querySelector('.bc-time-range-widget');
+            if (!widget) return;
+            widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
+                if (tickDiv.querySelector('.bc-weather-tick')) return;
+                const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
+                const emoji = weatherEmojiForHour(fetchDate, fromMinutes);
+                if (!emoji) return;
+                const emojiEl = document.createElement('div');
+                emojiEl.className = 'bc-weather-tick';
+                emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
+                emojiEl.textContent = emoji;
+                if (RAIN_EMOJIS.includes(emoji)) {
+                    const pct = rainPctForHour(fetchDate, fromMinutes);
+                    if (pct != null) {
+                        const pctEl = document.createElement('div');
+                        pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
+                        pctEl.textContent = `${pct}%`;
+                        emojiEl.appendChild(pctEl);
+                    }
                 }
+                tickDiv.appendChild(emojiEl);
             });
         });
 
@@ -1217,24 +1225,28 @@
     };
 
     async function fetchWeatherForecast() {
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&daily=precipitation_probability_max,weathercode,cloudcover_mean&timezone=America%2FLos_Angeles&forecast_days=16';
+        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&hourly=precipitation_probability,weathercode,cloudcover&timezone=America%2FLos_Angeles&forecast_days=16';
         try {
             const response = await fetch(url);
             const data = await response.json();
-            const dates = data?.daily?.time || [];
-            const probs = data?.daily?.precipitation_probability_max || [];
-            const codes = data?.daily?.weathercode || [];
-            const clouds = data?.daily?.cloudcover_mean || [];
-            dates.forEach((date, i) => {
-                weather.cache[date] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
+            const times = data?.hourly?.time || [];
+            const probs = data?.hourly?.precipitation_probability || [];
+            const codes = data?.hourly?.weathercode || [];
+            const clouds = data?.hourly?.cloudcover || [];
+            times.forEach((time, i) => {
+                weather.cache[time] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
             });
         } catch (e) {
             // Fail silently — weather is a hint, not critical.
         }
     }
 
-    function weatherEmojiForDate(dateString) {
-        const w = weather.cache[dateString];
+    const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
+
+    function weatherEmojiForHour(dateString, fromInMinutes) {
+        const hour = Math.floor(fromInMinutes / 60);
+        const key = `${dateString}T${String(hour).padStart(2, '0')}:00`;
+        const w = weather.cache[key];
         if (!w) return null;
         const { rainPct, code, cloudPct } = w;
 
@@ -1249,13 +1261,10 @@
         return '☀️';
     }
 
-    function weatherSummaryForDate(dateString) {
-        const w = weather.cache[dateString];
-        if (!w) return null;
-        const emoji = weatherEmojiForDate(dateString);
-        const { rainPct } = w;
-        const isRainEmoji = ['🌧️', '🌦️', '⛈️'].includes(emoji);
-        return isRainEmoji ? `${emoji} ${rainPct}% rain` : emoji;
+    function rainPctForHour(dateString, fromInMinutes) {
+        const hour = Math.floor(fromInMinutes / 60);
+        const key = `${dateString}T${String(hour).padStart(2, '0')}:00`;
+        return weather.cache[key]?.rainPct ?? null;
     }
 
     function createCardSelectionStyle() {
