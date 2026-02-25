@@ -1128,7 +1128,32 @@
         removeOurContentAndUnhideNativeContent();
     }
 
+    function isCourtBookingTitleVisible() {
+        // Check both mobile and desktop title render paths by scanning all uppercase page-title labels.
+        return Array.from(document.querySelectorAll('app-page-title .text-uppercase'))
+            .some(el => el.textContent.trim() === 'COURT BOOKING');
+    }
+
+    function hasHourViewControlsVisible() {
+        return Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
+            .some(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+    }
+
+    function hasDurationAndPlayersFilterVisible() {
+        return !!document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+    }
+
     function runBookingDomTasks() {
+        // When the app returns to the generic COURT BOOKING screen, clear any injected slot UI.
+        // We gate this on missing Hour View controls so we do not clear while on the actual slot screen.
+        // We also require that the duration/player filter is absent, because that filter screen still
+        // needs auto-selection and club-order widget injection even though its title is COURT BOOKING.
+        if (isCourtBookingTitleVisible() && !hasHourViewControlsVisible() && !hasDurationAndPlayersFilterVisible()) {
+            pendingSlotBooking = null;
+            removeOurContentAndUnhideNativeContent();
+            return;
+        }
+
         injectIntoAllContainers();
         const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
         if (container) {
