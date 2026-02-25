@@ -104,7 +104,7 @@
                 // Let's make up a slot.
                 clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
                 Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
-                Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data) });
+                Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data), configurable: true });
             } catch (e) {
                 console.log('[bc] error:', e);
             }
