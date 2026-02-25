@@ -697,86 +697,95 @@
     </div>`;
     }
 
-    function initTimeRangeSlider(container) {
-        const sliderContainer = container.querySelector('.bc-slider-container');
-        const fill = container.querySelector('.bc-slider-fill');
-        const label = container.querySelector('.bc-time-range-label');
-        const startHandle = container.querySelector('.bc-slider-start');
-        const endHandle = container.querySelector('.bc-slider-end');
+    function createTimeRangeSliderController() {
+        function init(container) {
+            const sliderContainer = container.querySelector('.bc-slider-container');
+            const fill = container.querySelector('.bc-slider-fill');
+            const label = container.querySelector('.bc-time-range-label');
+            const startHandle = container.querySelector('.bc-slider-start');
+            const endHandle = container.querySelector('.bc-slider-end');
+            if (!sliderContainer || !fill || !label || !startHandle || !endHandle) return;
 
-        let { startMinutes, endMinutes } = getTimeRangeForSlider();
-        let dragging = null;
+            let { startMinutes, endMinutes } = getTimeRangeForSlider();
+            let dragging = null;
 
-        function removeDragListeners() {
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('touchmove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-            document.removeEventListener('touchend', onMouseUp);
-            document.removeEventListener('touchcancel', onDragCancel);
-            window.removeEventListener('blur', onDragCancel);
-        }
-
-        function addDragListeners() {
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('touchmove', onMouseMove, { passive: false });
-            document.addEventListener('mouseup', onMouseUp);
-            document.addEventListener('touchend', onMouseUp);
-            document.addEventListener('touchcancel', onDragCancel);
-            window.addEventListener('blur', onDragCancel);
-        }
-
-        function startDrag(type, e) {
-            dragging = type;
-            removeDragListeners();
-            addDragListeners();
-            e.preventDefault();
-        }
-
-        function updateUI() {
-            const startPct = minutesToSliderPercent(startMinutes);
-            const endPct = minutesToSliderPercent(endMinutes);
-            startHandle.style.left = `${startPct}%`;
-            endHandle.style.left = `${endPct}%`;
-            fill.style.left = `${startPct}%`;
-            fill.style.right = `${100 - endPct}%`;
-            label.textContent = `${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}`;
-        }
-
-        function onMouseMove(e) {
-            if (!dragging) return;
-            const rect = sliderContainer.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const pct = Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
-            const snapped = sliderPercentToMinutes(pct);
-
-            if (dragging === 'start') {
-                startMinutes = Math.min(snapped, endMinutes - SLIDER_STEP_MINUTES);
-            } else {
-                endMinutes = Math.max(snapped, startMinutes + SLIDER_STEP_MINUTES);
+            function updateUi() {
+                const startPct = minutesToSliderPercent(startMinutes);
+                const endPct = minutesToSliderPercent(endMinutes);
+                startHandle.style.left = `${startPct}%`;
+                endHandle.style.left = `${endPct}%`;
+                fill.style.left = `${startPct}%`;
+                fill.style.right = `${100 - endPct}%`;
+                label.textContent = `${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}`;
             }
-            updateUI();
+
+            function removeDragListeners() {
+                document.removeEventListener('mousemove', onPointerMove);
+                document.removeEventListener('touchmove', onPointerMove);
+                document.removeEventListener('mouseup', onPointerUp);
+                document.removeEventListener('touchend', onPointerUp);
+                document.removeEventListener('touchcancel', onDragCancel);
+                window.removeEventListener('blur', onDragCancel);
+            }
+
+            function addDragListeners() {
+                document.addEventListener('mousemove', onPointerMove);
+                document.addEventListener('touchmove', onPointerMove, { passive: false });
+                document.addEventListener('mouseup', onPointerUp);
+                document.addEventListener('touchend', onPointerUp);
+                document.addEventListener('touchcancel', onDragCancel);
+                window.addEventListener('blur', onDragCancel);
+            }
+
+            function onPointerMove(event) {
+                if (!dragging) return;
+                const rect = sliderContainer.getBoundingClientRect();
+                const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+                const pct = Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
+                const snapped = sliderPercentToMinutes(pct);
+
+                if (dragging === 'start') {
+                    startMinutes = Math.min(snapped, endMinutes - SLIDER_STEP_MINUTES);
+                } else {
+                    endMinutes = Math.max(snapped, startMinutes + SLIDER_STEP_MINUTES);
+                }
+                updateUi();
+            }
+
+            function onPointerUp() {
+                if (!dragging) return;
+                dragging = null;
+                saveTimeRangeForSlider(startMinutes, endMinutes);
+                // Re-filter visible slots.
+                applyFilters(startMinutes, endMinutes);
+                removeDragListeners();
+            }
+
+            function onDragCancel() {
+                if (!dragging) return;
+                dragging = null;
+                removeDragListeners();
+            }
+
+            function startDrag(type, event) {
+                dragging = type;
+                removeDragListeners();
+                addDragListeners();
+                event.preventDefault();
+            }
+
+            [startHandle, endHandle].forEach(handle => {
+                handle.addEventListener('mousedown', event => startDrag(handle.dataset.type, event));
+                handle.addEventListener('touchstart', event => startDrag(handle.dataset.type, event), { passive: false });
+            });
         }
 
-        function onMouseUp() {
-            if (!dragging) return;
-            dragging = null;
-            saveTimeRangeForSlider(startMinutes, endMinutes);
-            // Re-filter visible slots.
-            applyFilters(startMinutes, endMinutes);
-            removeDragListeners();
-        }
-
-        function onDragCancel() {
-            if (!dragging) return;
-            dragging = null;
-            removeDragListeners();
-        }
-
-        [startHandle, endHandle].forEach(handle => {
-            handle.addEventListener('mousedown', e => startDrag(handle.dataset.type, e));
-            handle.addEventListener('touchstart', e => startDrag(handle.dataset.type, e), { passive: false });
-        });
+        return {
+            init,
+        };
     }
+
+    const timeRangeSliderController = createTimeRangeSliderController();
 
     function filterSlotsByTimeRange(startMinutes, endMinutes) {
         document.querySelectorAll('[data-slot-wrapper][data-from-minutes]').forEach(wrapper => {
@@ -1108,7 +1117,7 @@
 
         // Add our time range slider widget.
         const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
-        if (sliderWidget) initTimeRangeSlider(sliderWidget);
+        if (sliderWidget) timeRangeSliderController.init(sliderWidget);
         initViewToggle(anchorElement);
         applyFilters(startMinutes, endMinutes);
 
