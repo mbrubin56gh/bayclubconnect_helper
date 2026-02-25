@@ -12,11 +12,18 @@ This is a Tampermonkey script to show pickleball court availability across multi
 
 1. Install the [Tampermonkey Chrome extension](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
 Be aware that Tampermonkey allows you or someone to install scripts that inject into web pages and alter their behavior. Be careful.
-2. Click "Add to Chrome" and confirm.
-3. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js)
-4. Tampermonkey will show an install dialog. Click "Install".
-5. Done! The script runs automatically on [bayclubconnect.com](bayclubconnect.com).
-6. It might be convenient to have the Tampermonkey extension pinned. More on that in the [Demonstration](#demonstration) section.
+3. Click "Add to Chrome" and confirm.
+5. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js)
+6. Tampermonkey will show an install dialog. Click "Install".
+7. After you install it, click on the puzzle piece in your Chrome 
+toolbar, find the Tampermonkey extension listed there, click on the vertical three dots, and click on "Manage Extension".
+<img width="617" height="633" alt="Screenshot 2026-02-24 at 3 55 56 PM" src="https://github.com/user-attachments/assets/f440c6f2-1c46-4405-87d2-3426e9a49993" />
+
+8. Make sure the Developer Mode toggle in the top right is switched on, make sure the On button is switched on, and scroll to the Allow User Scripts button and turn that on.
+   <img width="1437" height="780" alt="Screenshot 2026-02-24 at 3 56 47 PM" src="https://github.com/user-attachments/assets/d5ea269a-329b-4532-b50c-ef351139fc9f" />
+9. If you're still seeing a warning from Tampermonkey that developer mode is not turned on, quit Chrome and restart it.
+10. Done! The script runs automatically on [bayclubconnect.com](bayclubconnect.com).
+11. It might be convenient to have the Tampermonkey extension pinned. More on that in the [Demonstration](#demonstration) section.
 
 ## Usage
 - Log in to your account at [bayclubconnect.com](bayclubconnect.com).
