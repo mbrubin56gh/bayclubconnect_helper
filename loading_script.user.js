@@ -55,11 +55,75 @@
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
     }
 
-    // We want to abort our multiple availability requests in flight if the user clicks BACK TO HOME.
-    let currentAbortController = null;
+    const createBookingStateService = (() => {
+        let serviceInstance = null;
 
-    // We capture some required headers from the app's native requests so we can reuse them for our own requests.
-    let capturedHeaders = {};
+        return function createBookingStateService() {
+            if (serviceInstance) return serviceInstance;
+            // Keep mutable booking/network state private and expose a narrow API for callers.
+            let currentAbortController = null;
+            const capturedHeaders = {};
+            let lastFetchState = null;
+            let pendingSlotBooking = null;
+
+            function captureHeader(name, value) {
+                capturedHeaders[name] = value;
+            }
+
+            function getCapturedHeader(name) {
+                return capturedHeaders[name];
+            }
+
+            function beginFetch() {
+                if (currentAbortController) currentAbortController.abort();
+                currentAbortController = new AbortController();
+                return currentAbortController.signal;
+            }
+
+            function abortFetch() {
+                if (currentAbortController) currentAbortController.abort();
+                currentAbortController = null;
+            }
+
+            function setLastFetchState(state) {
+                lastFetchState = state;
+            }
+
+            function getLastFetchState() {
+                return lastFetchState;
+            }
+
+            function clearLastFetchState() {
+                lastFetchState = null;
+            }
+
+            function setPendingSlotBooking(booking) {
+                pendingSlotBooking = booking;
+            }
+
+            function getPendingSlotBooking() {
+                return pendingSlotBooking;
+            }
+
+            function clearPendingSlotBooking() {
+                pendingSlotBooking = null;
+            }
+
+            serviceInstance = {
+                captureHeader,
+                getCapturedHeader,
+                beginFetch,
+                abortFetch,
+                setLastFetchState,
+                getLastFetchState,
+                clearLastFetchState,
+                setPendingSlotBooking,
+                getPendingSlotBooking,
+                clearPendingSlotBooking,
+            };
+            return serviceInstance;
+        };
+    })();
 
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     const originalXhrOpen = XMLHttpRequest.prototype.open;
@@ -69,7 +133,7 @@
     XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
         // Capture these so we can authenticate our own requests to the Bay Club's APIs.
         if (name === 'Authorization' || name === 'X-SessionId') {
-            capturedHeaders[name] = value;
+            createBookingStateService().captureHeader(name, value);
         }
         if (name === 'Request-Id') {
             this._requestId = value;
@@ -116,9 +180,6 @@
         return originalXhrOpen.apply(this, [method, url, ...rest]);
     };
 
-    let lastFetchState = null; // { transformed, params }
-    let pendingSlotBooking = null;
-
     XMLHttpRequest.prototype.send = (() => {
         let lastBookingRequestId = null;
 
@@ -143,7 +204,13 @@
             if (this._url &&
                 this._url.match(/courtbookings$/) &&
                 this._method === 'POST' &&
-                pendingSlotBooking) {
+                createBookingStateService().getPendingSlotBooking()) {
+
+                const pendingSlotBooking = createBookingStateService().getPendingSlotBooking();
+                const lastFetchState = createBookingStateService().getLastFetchState();
+                if (!pendingSlotBooking || !lastFetchState) {
+                    return originalXhrSend.apply(this, arguments);
+                }
 
                 // Dedupe any requests, just in case.
                 const requestId = this._requestId;
@@ -167,7 +234,7 @@
                     categoryOptionsId: lastFetchState.params.categoryOptionsId,
                     timeSlotId: timeSlotId,
                 });
-                pendingSlotBooking = null;
+                createBookingStateService().clearPendingSlotBooking();
                 return originalXhrSend.call(this, ourBody);
             }
 
@@ -467,6 +534,7 @@
                 saveViewMode(newMode);
                 const existing = anchorElement.querySelector('.all-clubs-availability');
                 if (existing) existing.remove();
+                const lastFetchState = createBookingStateService().getLastFetchState();
                 if (lastFetchState) {
                     renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
                 }
@@ -964,6 +1032,8 @@
         const mins = limitDate.getMinutes();
         limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
+        const lastFetchState = createBookingStateService().getLastFetchState();
+        if (!lastFetchState) return;
         const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
         const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
 
@@ -1083,13 +1153,15 @@
                 // Select this court option.
                 el.setAttribute('data-selected', '')
 
-                pendingSlotBooking = {
+                const lastFetchState = createBookingStateService().getLastFetchState();
+                if (!lastFetchState) return;
+                createBookingStateService().setPendingSlotBooking({
                     clubId: el.dataset.clubId,
                     courtId: el.dataset.courtId,
                     date: lastFetchState.params.date,
                     fromMinutes: parseInt(el.dataset.fromMinutes),
                     toMinutes: parseInt(el.dataset.toMinutes),
-                };
+                });
 
                 const bottomBar = document.querySelector('.white-bg.p-2 .container');
                 if (!bottomBar) return;
@@ -1122,9 +1194,9 @@
     }
 
     function clearBookingStateAndUi() {
-        if (currentAbortController) currentAbortController.abort();
-        lastFetchState = null;
-        pendingSlotBooking = null;
+        createBookingStateService().abortFetch();
+        createBookingStateService().clearLastFetchState();
+        createBookingStateService().clearPendingSlotBooking();
         removeOurContentAndUnhideNativeContent();
     }
 
@@ -1157,7 +1229,7 @@
             !hasTimeSlotHostsVisible() &&
             !hasHourViewControlsVisible() &&
             !hasDurationAndPlayersFilterVisible()) {
-            pendingSlotBooking = null;
+            createBookingStateService().clearPendingSlotBooking();
             removeOurContentAndUnhideNativeContent();
             return;
         }
@@ -1402,6 +1474,7 @@
     // Angular supports mobile and desktop views/containers, and renders them differently. We want
     // to make sure we can handle either.
     function injectIntoAllContainers() {
+        const lastFetchState = createBookingStateService().getLastFetchState();
         if (!lastFetchState) return;
 
         document.querySelectorAll('app-court-select').forEach(el => {
@@ -1430,9 +1503,7 @@
 
     // Fetch availability info for all the clubs in parallel, and combine their results.
     async function fetchAllClubs(params) {
-        if (currentAbortController) currentAbortController.abort();
-        currentAbortController = new AbortController();
-        const signal = currentAbortController.signal;
+        const signal = createBookingStateService().beginFetch();
 
         try {
             const settled = await Promise.all(Object.values(CLUBS).map(clubId => {
@@ -1443,8 +1514,8 @@
                 return fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${timeSlotId}`, {
                     signal,
                     headers: {
-                        'Authorization': capturedHeaders['Authorization'],
-                        'X-SessionId': capturedHeaders['X-SessionId'],
+                        'Authorization': createBookingStateService().getCapturedHeader('Authorization'),
+                        'X-SessionId': createBookingStateService().getCapturedHeader('X-SessionId'),
                         'Request-Id': crypto.randomUUID(),
                         'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
                         'Accept': 'application/json',
@@ -1471,7 +1542,7 @@
                 }
             });
 
-            lastFetchState = { transformed: transformAvailability(successfulResults), params, failedClubIds };
+            createBookingStateService().setLastFetchState({ transformed: transformAvailability(successfulResults), params, failedClubIds });
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {

@@ -101,11 +101,12 @@ The script uses a booking-flow monitor with lifecycle management:
 
 ## Global State (intentional)
 
-- `lastFetchState` — `{ transformed, params }` — the last fetched and transformed availability data plus request params
+Most mutable booking/network state is encapsulated in a singleton in-file service (`getBookingStateService()`), rather than free-floating script-level variables.
+
+- `lastFetchState` — `{ transformed, params, failedClubIds }` — the last fetched and transformed availability data plus request params and per-club failure markers
 - `pendingSlotBooking` — `{ clubId, courtId, date, fromMinutes, toMinutes }` — set when user selects a slot, consumed by the XHR interceptor
 - `currentAbortController` — lets us cancel in-flight fetches when user navigates away
 - `capturedHeaders` — auth headers captured from native XHR requests
-- `weather` — `{ cache, promise }` — rain prediction data from Open-Meteo
 
 ## localStorage Keys
 
