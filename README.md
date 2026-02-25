@@ -29,16 +29,26 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 - Log in to your account at [bayclubconnect.com](bayclubconnect.com).
 - Navigate to the court booking page as normal, regardless of what club you have selected.
 - Walk through Pickleball booking. When you get to the typical players count and duration selector, you can choose the order of club availabilities that will be displayed. That display order will be remembered across sessions, and you can always reorder them when you return to this screen.
+  
+<img width="1170" height="306" alt="Screenshot 2026-02-24 at 4 22 01 PM" src="https://github.com/user-attachments/assets/cab7cb67-eb6a-44b6-9060-622ed156b551" />
+
 - The players count and duration selection you choose will be remembered across booking sessions!
 - When you click Next to get to the availability listings, Hour View is now defaulted to instead of Court View. This helper only supports the Hour View, and this helper assumes you prefer it. You can always select Court View manually.
 - Available slots across all clubs will appear automatically.
-- Note that you have a time range slider to filter the court availabilities displayed to match your specified start and end times.
-- Note also that you have a checkbox to show clubs only with indoor courts or not. 
-- There's some weather prediction built in: an icon will show indicating level of rain, cloudiness, or sun. If >10% chaince of rain is predicted, that percentage is shown next to the rain cloud.
+- There is a time range slider to filter the court availabilities displayed to match your specified start and end times, a weather report for each hour on the slider, and a checkbox to show indoor courts only. There's a toggle to switch between BY CLUB and BY TIME sorting: when BY CLUB is selected, you'll see a list of clubs, and under each club, the available slots for that club; when BY TIME is selected, you'll see a list of times, and under each time, the available slots for that time, in club sorted order.
+
+
+| BY CLUB | BY TIME |
+| :---: | :---: |
+| <img width="1205" height="723" alt="Screenshot 2026-02-24 at 4 32 41 PM" src="https://github.com/user-attachments/assets/0d881664-b001-4750-859a-20c338307208"/> | <img width="1170" height="717" alt="Screenshot 2026-02-24 at 4 33 16 PM" src="https://github.com/user-attachments/assets/8ce9829a-f6c3-433b-96ab-68e3d992ad4f"/> |
+
 - Unlike the native time slot selector in Hour View, we show all the courts available for a time slot. The native one just shows that some court is available for that time slot and it picks an arbitrary court for you if more than one is available. With this extension, you can choose which one you want to book: click on a card for a time slot with multiple courts listed, and it will expand to allow you to choose your court. That court remains selected until you actually select another court (and not merely expand another card). The court you selected also shows on the bottom information bar.
-- Cards for times with edge courts are outlined in gold with gold stars: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa).
+
+<img width="1144" height="668" alt="Screenshot 2026-02-24 at 4 33 54 PM" src="https://github.com/user-attachments/assets/58412af9-e4b3-49e9-8dce-c85eaf55c0c7" />
+
+- Cards for times with edge courts are outlined in gold with gold stars: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa). Cards for times with courts that are isolated (e.g. surrounded by a fence) have a heavier gold border and a sparklier star (only Santa Clara has these courts).
 - If a time slot is available, but not within the 3 day booking period, it will display, but dimmed with a lock on it (matching the native picker).
-- There's a toggle to switch between BY CLUB and BY TIME sorting: when BY CLUB is selected, you'll see a list of clubs, and under each club, the available slots for that club; when BY TIME is selected, you'll see a list of times, and under each time, the available slots for that time, in club sorted order.
+<img width="1116" height="639" alt="Screenshot 2026-02-24 at 4 34 34 PM" src="https://github.com/user-attachments/assets/c360b0cf-db61-457f-8c74-40a058ec4f60" />
 - Select your time slot and court and then click the button to proceed with booking.
 
 ## Disabling
