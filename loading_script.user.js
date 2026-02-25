@@ -728,7 +728,7 @@
                 data-from-minutes="${slot.fromInMinutes}"
                 data-to-minutes="${slot.toInMinutes}"`;
             return `
-    <div data-slot-wrapper class="col-6" style="margin-bottom: 8px;">
+    <div data-slot-wrapper>
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            ${dataAttrs} style="${disabledStyle}${isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
@@ -764,7 +764,7 @@
         }).join('');
 
         return `
-    <div data-slot-wrapper class="col-6" style="margin-bottom: 8px;">
+    <div data-slot-wrapper>
       <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            style="${disabledStyle}${hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
@@ -805,8 +805,8 @@
 
                 html += `
           <div class="col" data-tod-col>
-            <div class="row"><div class="col text-center white-80 m-2">${tod.toUpperCase()}</div></div>
-            <div class="row gutter-1">`;
+            <div style="display: flex; flex-direction: column; gap: 4px; max-width: 260px;">
+            <div class="text-center white-80 m-2">${tod.toUpperCase()}</div>`;
 
                 for (const slot of slots) {
                     html += buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, LABEL_MODE_TIME);
@@ -849,7 +849,7 @@
             html += `
         <div data-time-group data-from-minutes="${fromMinutes}" style="margin-bottom: 20px;">
             <div style="font-size: 18px; font-weight: bold; color: white; margin-bottom: 8px; padding: 6px 0;">${fromHumanTime} – ${toHumanTime}</div>
-            <div class="row gutter-1">`;
+            <div style="display: flex; flex-direction: column; gap: 4px; max-width: 260px;">`;
             for (const { clubId, slot, meta } of entries) {
                 html += buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, LABEL_MODE_CLUB);
             }
