@@ -51,6 +51,23 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 <img width="1116" height="639" alt="Screenshot 2026-02-24 at 4 34 34 PM" src="https://github.com/user-attachments/assets/c360b0cf-db61-457f-8c74-40a058ec4f60" />
 - Select your time slot and court and then click the button to proceed with booking.
 
+## Debugging
+
+If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
+
+- You can enable debug mode from any Bay Club Connect page with either method:
+  -- Tap or click the top-left corner of the page five times within four seconds.
+  -- Type `debug` within five seconds (while your cursor is not in an input field).
+- When debug mode is enabled, you will see a debug panel on both helper screens:
+  The Player Count and Duration screen.
+  The court availability screen.
+- The debug panel includes:
+  `Copy logs` to copy a support packet to the clipboard.
+  `Email logs` to open a prefilled email draft.
+  `Download logs` to save a log file.
+  `Clear logs` to reset the stored debug entries.
+- You can disable debug mode from the panel by unchecking `Debug mode`.
+
 ## Disabling
 - If you're not enjoying this or you want to return to the native experience for any reason, you can disable the extension through Tampermonkey's Dashboard. You can also delete the installation of the script from there. If you didn't install TamperMonkey for other reasons, you can just uninstall Tampermonkey entirely by going through Chrome's extension management UI.
 - You can also temporarily disable this for as long as you like via the Tampermonkey extension's Dashboard UI.
@@ -72,5 +89,4 @@ https://github.com/user-attachments/assets/279b8096-4b44-4f77-9dd7-5d1720e49518
 ## Thanks
 
 Weather information is pulled from [Open-Meto](https://open-meteo.com/)
-
 
