@@ -68,6 +68,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - It patches `history.pushState` and `history.replaceState` (and listens to `popstate`) to detect flow transitions when Angular emits them.
 - While on the booking flow, it runs active monitoring (MutationObservers plus a fast URL poll) to catch transitions that Angular performs without reliable history events.
 - Outside the booking flow, it tears down active monitoring and switches to a lightweight bootstrap poll that only checks for re-entry.
+- On `visibilitychange`, it pauses monitoring while the tab is hidden and performs immediate state reconciliation when the tab becomes visible again.
 - On exit from booking flow, it cleans up injected content, clears booking state, and aborts in-flight availability fetches.
 - As an additional safeguard, if the page title is `COURT BOOKING` and Hour View controls are absent, injected slot UI is cleared. This guard is intentionally constrained so it does not trigger on the duration/player filter screen where auto-selection and club-order injection still need to run.
 

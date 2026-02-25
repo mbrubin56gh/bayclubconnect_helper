@@ -1181,6 +1181,7 @@
         let lastObservedHref = location.href;
         let isMonitoringBookingFlow = false;
         let historyMonitoringInstalled = false;
+        let visibilityMonitoringInstalled = false;
         let bookingDomTasksScheduled = false;
 
         function isOnBookingFlowUrl() {
@@ -1279,6 +1280,7 @@
             if (isMonitoringBookingFlow) return;
             isMonitoringBookingFlow = true;
             stopBootstrapPoller();
+            if (document.visibilityState === 'hidden') return;
             startBackToHomeObserver();
             startContainerChangeObserver();
             startNavigationPoller();
@@ -1292,7 +1294,9 @@
             stopBackToHomeObserver();
             stopContainerChangeObserver();
             stopNavigationPoller();
-            startBootstrapPoller();
+            if (document.visibilityState !== 'hidden') {
+                startBootstrapPoller();
+            }
             bookingDomTasksScheduled = false;
         }
 
@@ -1328,9 +1332,49 @@
             window.addEventListener('popstate', evaluateBookingFlowMonitoringState);
         }
 
+        // This SPA can navigate internally while a tab is backgrounded, and we do not need to spend
+        // CPU tracking those transitions in real time while hidden. We pause all monitor activity on
+        // hide, then perform an immediate state reconciliation on visibility return.
+        function installVisibilityMonitoring() {
+            if (visibilityMonitoringInstalled) return;
+            visibilityMonitoringInstalled = true;
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') {
+                    // Pause all monitoring work while the tab is hidden.
+                    stopBackToHomeObserver();
+                    stopContainerChangeObserver();
+                    stopNavigationPoller();
+                    stopBootstrapPoller();
+                    bookingDomTasksScheduled = false;
+                    return;
+                }
+
+                // Resume immediately when visible so we do not miss latent SPA transitions.
+                if (isMonitoringBookingFlow) {
+                    // If we were actively monitoring booking flow before hiding, restore the active
+                    // observers and poller first, then immediately reconcile to catch latent DOM changes.
+                    startBackToHomeObserver();
+                    startContainerChangeObserver();
+                    startNavigationPoller();
+                    evaluateBookingFlowMonitoringState();
+                    if (isMonitoringBookingFlow) {
+                        runBookingDomTasks();
+                    }
+                    return;
+                }
+
+                // If we were not in active booking mode, restart lightweight bootstrap detection and
+                // evaluate immediately in case the app moved into booking flow while hidden.
+                startBootstrapPoller();
+                evaluateBookingFlowMonitoringState();
+            });
+        }
+
         function initialize() {
             // Start in lightweight mode and let state evaluation upgrade to active mode if needed.
             installHistoryMonitoring();
+            installVisibilityMonitoring();
             startBootstrapPoller();
             evaluateBookingFlowMonitoringState();
         }
