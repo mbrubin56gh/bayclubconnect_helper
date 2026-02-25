@@ -504,6 +504,245 @@
         };
     })();
 
+    // #region Debug mode service, panel, and activation.
+    const createDebugService = (() => {
+        let serviceInstance = null;
+
+        return function createDebugService() {
+            if (serviceInstance) return serviceInstance;
+
+            const DEBUG_ENABLED_KEY = 'bc_debug_enabled';
+            const DEBUG_ENTRIES_KEY = 'bc_debug_entries';
+            const MAX_DEBUG_ENTRIES = 600;
+            let debugEnabled = createLocalStorageService().getString(DEBUG_ENABLED_KEY) === '1';
+            let logEntries = createLocalStorageService().getJson(DEBUG_ENTRIES_KEY, '[bc] failed to parse stored debug log JSON');
+            if (!Array.isArray(logEntries)) {
+                logEntries = [];
+            }
+
+            function persistDebugEnabled() {
+                createLocalStorageService().setString(DEBUG_ENABLED_KEY, debugEnabled ? '1' : '0');
+            }
+
+            function persistLogEntries() {
+                createLocalStorageService().setJson(DEBUG_ENTRIES_KEY, logEntries);
+            }
+
+            function sanitizePayload(payload, depth = 0) {
+                if (payload == null || typeof payload !== 'object') return payload;
+                if (depth > 3) return '[Max depth]';
+                if (Array.isArray(payload)) {
+                    return payload.map(item => sanitizePayload(item, depth + 1));
+                }
+
+                const output = {};
+                for (const [key, value] of Object.entries(payload)) {
+                    const normalizedKey = key.toLowerCase();
+                    if (normalizedKey.includes('authorization') ||
+                        normalizedKey.includes('session') ||
+                        normalizedKey.includes('token') ||
+                        normalizedKey.includes('request-id')) {
+                        output[key] = '[REDACTED]';
+                    } else {
+                        output[key] = sanitizePayload(value, depth + 1);
+                    }
+                }
+                return output;
+            }
+
+            function appendLogEntry(level, eventName, payload) {
+                const entry = {
+                    timestamp: new Date().toISOString(),
+                    level,
+                    eventName,
+                    payload: sanitizePayload(payload),
+                };
+
+                logEntries.push(entry);
+                if (logEntries.length > MAX_DEBUG_ENTRIES) {
+                    logEntries = logEntries.slice(logEntries.length - MAX_DEBUG_ENTRIES);
+                }
+                persistLogEntries();
+            }
+
+            function setEnabled(nextValue) {
+                debugEnabled = !!nextValue;
+                persistDebugEnabled();
+                appendLogEntry('info', 'debug-mode-changed', { enabled: debugEnabled });
+            }
+
+            function isEnabled() {
+                return debugEnabled;
+            }
+
+            function log(level, eventName, payload = null) {
+                if (!debugEnabled) return;
+                appendLogEntry(level, eventName, payload);
+                console.log(`[bc-debug:${level}] ${eventName}`, sanitizePayload(payload));
+            }
+
+            function getEntries() {
+                return [...logEntries];
+            }
+
+            function clearEntries() {
+                logEntries = [];
+                persistLogEntries();
+                if (debugEnabled) {
+                    appendLogEntry('info', 'debug-log-cleared', null);
+                }
+            }
+
+            function buildLogsText() {
+                return logEntries.map(entry => {
+                    const payloadText = entry.payload == null
+                        ? ''
+                        : ` ${JSON.stringify(entry.payload)}`;
+                    return `${entry.timestamp} [${entry.level}] ${entry.eventName}${payloadText}`;
+                }).join('\n');
+            }
+
+            async function copyLogsToClipboard() {
+                const text = buildLogsText();
+                if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+                    throw new Error('Clipboard API unavailable');
+                }
+                await navigator.clipboard.writeText(text);
+                log('info', 'debug-log-copied-to-clipboard', { lineCount: logEntries.length });
+            }
+
+            function downloadLogsFile() {
+                const text = buildLogsText();
+                const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                const timestamp = new Date().toISOString().replaceAll(':', '-');
+                anchor.href = url;
+                anchor.download = `bc-debug-${timestamp}.log`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                document.body.removeChild(anchor);
+                URL.revokeObjectURL(url);
+                log('info', 'debug-log-downloaded', { lineCount: logEntries.length });
+            }
+
+            serviceInstance = {
+                setEnabled,
+                isEnabled,
+                log,
+                getEntries,
+                clearEntries,
+                copyLogsToClipboard,
+                downloadLogsFile,
+            };
+            return serviceInstance;
+        };
+    })();
+
+    const createDashboardDebugActivationMonitor = (() => {
+        let alreadyInitialized = false;
+
+        return function createDashboardDebugActivationMonitor() {
+            if (alreadyInitialized) return;
+            alreadyInitialized = true;
+
+            // Use a hidden activation gesture that does not depend on page-specific navigation timing.
+            // Users can tap the top-left corner five times within a short window on any app page
+            // to enable debug mode.
+            const CORNER_TAP_REQUIRED_COUNT = 5;
+            const CORNER_TAP_WINDOW_MS = 4000;
+            const CORNER_HITBOX_SIZE_PX = 72;
+            let cornerTapCount = 0;
+            let cornerTapWindowTimer = null;
+
+            function resetCornerTapState() {
+                cornerTapCount = 0;
+                if (cornerTapWindowTimer) {
+                    clearTimeout(cornerTapWindowTimer);
+                    cornerTapWindowTimer = null;
+                }
+            }
+
+            function activateDebugMode(source) {
+                createDebugService().setEnabled(true);
+                createDebugService().log('info', 'debug-mode-activated', {
+                    source,
+                    path: location.pathname,
+                });
+                window.alert('Bay Club helper debug mode is now enabled. Continue into Court Booking to use the debug panel.');
+            }
+
+            document.addEventListener('pointerdown', event => {
+                if (event.clientX > CORNER_HITBOX_SIZE_PX || event.clientY > CORNER_HITBOX_SIZE_PX) return;
+
+                if (cornerTapCount === 0) {
+                    cornerTapWindowTimer = setTimeout(() => {
+                        resetCornerTapState();
+                    }, CORNER_TAP_WINDOW_MS);
+                }
+
+                cornerTapCount += 1;
+                if (cornerTapCount < CORNER_TAP_REQUIRED_COUNT) return;
+
+                resetCornerTapState();
+                activateDebugMode('corner-tap');
+            }, true);
+
+            // Provide a desktop-friendly fallback: type DEBUG on any app page.
+            const KEYBOARD_SEQUENCE = 'debug';
+            const KEYBOARD_SEQUENCE_WINDOW_MS = 5000;
+            let recentKeys = '';
+            let keyboardWindowTimer = null;
+
+            function resetKeyboardSequence() {
+                recentKeys = '';
+                if (keyboardWindowTimer) {
+                    clearTimeout(keyboardWindowTimer);
+                    keyboardWindowTimer = null;
+                }
+            }
+
+            document.addEventListener('keydown', event => {
+                const key = event.key?.toLowerCase();
+                if (!key || key.length !== 1 || !/[a-z]/.test(key)) return;
+                if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return;
+
+                if (!keyboardWindowTimer) {
+                    keyboardWindowTimer = setTimeout(() => {
+                        resetKeyboardSequence();
+                    }, KEYBOARD_SEQUENCE_WINDOW_MS);
+                }
+
+                recentKeys = (recentKeys + key).slice(-KEYBOARD_SEQUENCE.length);
+                if (recentKeys !== KEYBOARD_SEQUENCE) return;
+
+                resetKeyboardSequence();
+                activateDebugMode('keyboard-sequence');
+            }, true);
+        };
+    })();
+
+    function buildDebugPanelHtml() {
+        if (!createDebugService().isEnabled()) return '';
+
+        return `
+    <div class="bc-debug-panel" style="margin: 0 8px 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: rgba(255,255,255,0.92); font-size: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="checkbox" class="bc-debug-enabled" checked style="width: 14px; height: 14px; cursor: pointer;">
+                Debug mode
+            </label>
+            <span class="bc-debug-count" style="opacity: 0.8;">${createDebugService().getEntries().length} log entries</span>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-copy">Copy logs</button>
+            <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-download">Download logs</button>
+            <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-clear">Clear logs</button>
+        </div>
+    </div>`;
+    }
+    // #endregion Debug mode service, panel, and activation.
+
     const createPreferenceAutoSelectService = (() => {
         let serviceInstance = null;
 
@@ -1274,6 +1513,60 @@
                 });
             }
 
+            function bindDebugPanelControls(anchorElement) {
+                const panel = anchorElement.querySelector('.bc-debug-panel');
+                if (!panel) return;
+
+                const refreshEntryCount = () => {
+                    const count = panel.querySelector('.bc-debug-count');
+                    if (count) {
+                        count.textContent = `${createDebugService().getEntries().length} log entries`;
+                    }
+                };
+
+                const enabledCheckbox = panel.querySelector('.bc-debug-enabled');
+                if (enabledCheckbox) {
+                    enabledCheckbox.addEventListener('change', () => {
+                        createDebugService().setEnabled(enabledCheckbox.checked);
+                        if (!enabledCheckbox.checked) {
+                            panel.remove();
+                        }
+                    });
+                }
+
+                const copyButton = panel.querySelector('.bc-debug-copy');
+                if (copyButton) {
+                    copyButton.addEventListener('click', async () => {
+                        try {
+                            await createDebugService().copyLogsToClipboard();
+                            refreshEntryCount();
+                            copyButton.blur();
+                        } catch (error) {
+                            createDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
+                            console.log('[bc] failed to copy debug logs:', error);
+                        }
+                    });
+                }
+
+                const downloadButton = panel.querySelector('.bc-debug-download');
+                if (downloadButton) {
+                    downloadButton.addEventListener('click', () => {
+                        createDebugService().downloadLogsFile();
+                        refreshEntryCount();
+                        downloadButton.blur();
+                    });
+                }
+
+                const clearButton = panel.querySelector('.bc-debug-clear');
+                if (clearButton) {
+                    clearButton.addEventListener('click', () => {
+                        createDebugService().clearEntries();
+                        refreshEntryCount();
+                        clearButton.blur();
+                    });
+                }
+            }
+
             function appendWeatherTicksWhenReady(anchorElement, fetchDate) {
                 const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
                 createWeatherService().whenReady().then(() => {
@@ -1393,6 +1686,7 @@
             function wirePostRenderInteractions(anchorElement, startMinutes, endMinutes, fetchDate) {
                 initializeRenderControls(anchorElement, startMinutes, endMinutes);
                 bindIndoorOnlyToggle(anchorElement);
+                bindDebugPanelControls(anchorElement);
                 appendWeatherTicksWhenReady(anchorElement, fetchDate);
                 initNextButton();
                 bindSlotCardExpandCollapse(anchorElement);
@@ -1416,6 +1710,7 @@
                 html += buildShowIndoorCourtsOnlyToggleHtml();
                 html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
                 html += buildViewToggleHtml();
+                html += buildDebugPanelHtml();
                 html += buildFailedClubsWarningHtml(failedClubIdsSet);
 
                 // Render the time slots in the selected layout mode.
@@ -1445,6 +1740,7 @@
 
     // #region Booking flow monitor and DOM injection.
     function clearBookingStateAndUi() {
+        createDebugService().log('info', 'booking-flow-state-cleared', null);
         createBookingStateService().abortFetch();
         createBookingStateService().clearLastFetchState();
         createBookingStateService().clearPendingSlotBooking();
@@ -1460,6 +1756,9 @@
             !bookingDomQueryService.hasTimeSlotHostsVisible() &&
             !bookingDomQueryService.hasHourViewControlsVisible() &&
             !bookingDomQueryService.hasDurationAndPlayersFilterVisible()) {
+            createDebugService().log('info', 'stale-injected-slot-ui-cleared', {
+                reason: 'booking-shell-visible-without-supported-step-hosts',
+            });
             createBookingStateService().clearPendingSlotBooking();
             removeOurContentAndUnhideNativeContent();
             return;
@@ -1635,6 +1934,7 @@
             function startBookingFlowMonitoring() {
                 if (isMonitoringBookingFlow) return;
                 isMonitoringBookingFlow = true;
+                createDebugService().log('info', 'booking-flow-monitor-entered', { href: location.href });
                 stopBootstrapPoller();
                 if (document.visibilityState === 'hidden') return;
                 startBookingFlowActiveWatchers();
@@ -1645,6 +1945,7 @@
             function stopBookingFlowMonitoring() {
                 if (!isMonitoringBookingFlow) return;
                 isMonitoringBookingFlow = false;
+                createDebugService().log('info', 'booking-flow-monitor-exited', { href: location.href });
                 stopBookingFlowActiveWatchers();
                 if (document.visibilityState !== 'hidden') {
                     startBootstrapPoller();
@@ -1659,6 +1960,7 @@
                 }
                 // Only clear and stop when transitioning from active booking mode.
                 if (!isMonitoringBookingFlow) return;
+                createDebugService().log('info', 'booking-flow-transitioned-away', { href: location.href });
                 clearBookingStateAndUi();
                 stopBookingFlowMonitoring();
             }
@@ -1692,12 +1994,14 @@
             // activity on hide, then perform an immediate state reconciliation on visibility return.
             function pauseBookingFlowMonitoringWhileHidden() {
                 // Pause all monitoring work while the tab is hidden.
+                createDebugService().log('info', 'booking-flow-monitor-paused-hidden-tab', null);
                 stopAllBookingFlowWatchersAndPollers();
                 bookingDomTasksScheduled = false;
             }
 
             function resumeBookingFlowMonitoringAfterVisible() {
                 // Resume immediately when visible so we do not miss latent SPA transitions.
+                createDebugService().log('info', 'booking-flow-monitor-resumed-visible-tab', null);
                 if (isMonitoringBookingFlow) {
                     // If we were actively monitoring booking flow before hiding, restore the active
                     // observers and poller first, then immediately reconcile to catch latent changes.
@@ -1735,6 +2039,7 @@
                 installBackToHomeClickMonitoring();
                 startBootstrapPoller();
                 evaluateBookingFlowMonitoringState();
+                createDebugService().log('info', 'booking-flow-monitor-initialized', null);
             }
 
             initialize();
@@ -1783,6 +2088,11 @@
     // #region Cross-club fetch and weather enrichment.
     // Fetch availability info for all the clubs in parallel, and combine their results.
     async function fetchAllClubs(params) {
+        createDebugService().log('info', 'cross-club-fetch-started', {
+            date: params.date,
+            categoryCode: params.categoryCode,
+            timeSlotId: params.timeSlotId,
+        });
         const signal = createBookingStateService().beginFetch();
 
         try {
@@ -1817,18 +2127,28 @@
                 if (result.error) {
                     failedClubIds.push(result.clubId);
                     console.log(`[bc] failed to fetch availability for ${CLUB_SHORT_NAMES[result.clubId] || result.clubId}:`, result.error);
+                    createDebugService().log('warn', 'cross-club-fetch-failed-for-club', {
+                        clubId: result.clubId,
+                        error: result.error?.message || String(result.error),
+                    });
                 } else {
                     successfulResults.push(result.data);
                 }
             });
 
+            createDebugService().log('info', 'cross-club-fetch-finished', {
+                successCount: successfulResults.length,
+                failedCount: failedClubIds.length,
+            });
             createBookingStateService().setLastFetchState({ transformed: transformAvailability(successfulResults), params, failedClubIds });
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
             if (e.name === 'AbortError') {
                 console.log('[fetch] aborted');
+                createDebugService().log('info', 'cross-club-fetch-aborted', null);
             } else {
+                createDebugService().log('error', 'cross-club-fetch-threw', { message: e?.message || String(e) });
                 throw e;
             }
         }
@@ -1927,6 +2247,31 @@
         background-color: rgba(44, 154, 184, 0.25) !important;
         font-weight: 900;
     }
+    .bc-debug-panel .btn.btn-outline-dark-grey {
+        color: #e5e5e5;
+        border-color: #a6aaae;
+        background-color: rgba(255, 255, 255, 0.06);
+        font-weight: 700;
+    }
+    .bc-debug-panel .btn.btn-outline-dark-grey:hover {
+        color: #fff;
+        border-color: #2c9ab8;
+        background-color: rgba(44, 154, 184, 0.2) !important;
+    }
+    .bc-debug-panel .btn.bc-debug-action:focus,
+    .bc-debug-panel .btn.bc-debug-action:focus-visible {
+        color: #e5e5e5;
+        border-color: #a6aaae;
+        background-color: rgba(255, 255, 255, 0.06) !important;
+        box-shadow: none;
+    }
+    .bc-debug-panel .btn.btn-outline-dark-grey:active,
+    .bc-debug-panel .btn.btn-outline-dark-grey.btn-selected {
+        color: #e5e5e5;
+        border-color: #a6aaae;
+        background-color: rgba(255, 255, 255, 0.06) !important;
+        font-weight: 700;
+    }
 `;
             document.head.appendChild(style);
         };
@@ -1935,6 +2280,7 @@
     // Start script services and monitoring.
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
+    createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
     // #endregion Startup installers and bootstrap.
 })();
