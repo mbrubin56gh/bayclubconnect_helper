@@ -274,7 +274,7 @@
 
     // The native app does not remember the previously selected player count and duration, so
     // we augment it here to do that.
-    function tryToAutoSelectDurationAndPlayers(container) {
+    function tryToAutoSelectDurationAndPlayers() {
         document.querySelectorAll('app-button-select .btn-group').forEach(group => {
             if (group.dataset.bcAutoSelected) return;
             const labels = Array.from(group.querySelectorAll('.btn'))
@@ -327,7 +327,7 @@
         }
 
         // Auto-select saved player preference.
-        tryToAutoSelectDurationAndPlayers(container);
+        tryToAutoSelectDurationAndPlayers();
     }
 
     // Some clubs only let you reserve pickleball courts, but some offer the option to
@@ -363,7 +363,7 @@
                     parsed.every(id => Object.values(CLUBS).includes(id))) {
                     return parsed;
                 }
-            } catch (e) {
+            } catch (_e) {
                 console.log('[bc] failed to parse stored club order JSON');
             }
         }
@@ -478,7 +478,7 @@
         if (saved !== null) {
             try {
                 return JSON.parse(saved);
-            } catch (e) {
+            } catch (_e) {
                 console.log('[bc] failed to parse stored indoor-only JSON');
             }
         }
@@ -526,7 +526,7 @@
                 if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
                     return parsed;
                 }
-            } catch (e) {
+            } catch (_e) {
                 console.log('[bc] failed to parse stored time range JSON');
             }
         }
@@ -1307,7 +1307,7 @@
             times.forEach((time, i) => {
                 weather.cache[time] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
             });
-        } catch (e) {
+        } catch (_e) {
             // Fail silently — weather is a hint, not critical.
         }
     }
