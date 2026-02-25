@@ -605,6 +605,8 @@
             document.removeEventListener('touchmove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
             document.removeEventListener('touchend', onMouseUp);
+            document.removeEventListener('touchcancel', onDragCancel);
+            window.removeEventListener('blur', onDragCancel);
         }
 
         function addDragListeners() {
@@ -612,6 +614,8 @@
             document.addEventListener('touchmove', onMouseMove, { passive: false });
             document.addEventListener('mouseup', onMouseUp);
             document.addEventListener('touchend', onMouseUp);
+            document.addEventListener('touchcancel', onDragCancel);
+            window.addEventListener('blur', onDragCancel);
         }
 
         function startDrag(type, e) {
@@ -652,6 +656,12 @@
             saveTimeRangeForSlider(startMinutes, endMinutes);
             // Re-filter visible slots.
             applyFilters(startMinutes, endMinutes);
+            removeDragListeners();
+        }
+
+        function onDragCancel() {
+            if (!dragging) return;
+            dragging = null;
             removeDragListeners();
         }
 
