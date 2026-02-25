@@ -1156,9 +1156,22 @@
         let lastObservedHref = location.href;
         let isMonitoringBookingFlow = false;
         let historyMonitoringInstalled = false;
+        let bookingDomTasksScheduled = false;
 
         function isOnBookingFlowUrl() {
             return location.href.includes('create-booking');
+        }
+
+        function scheduleBookingDomTasks() {
+            if (bookingDomTasksScheduled) return;
+            bookingDomTasksScheduled = true;
+            // Mutation bursts are common in this SPA. Schedule one reconcile per frame to avoid
+            // running the full DOM task pipeline on every individual mutation callback.
+            requestAnimationFrame(() => {
+                bookingDomTasksScheduled = false;
+                if (!isMonitoringBookingFlow) return;
+                runBookingDomTasks();
+            });
         }
 
         // If the user selects BACK TO HOME, we need to clean ourselves up, cancel requests, etc.
@@ -1190,7 +1203,7 @@
         function startContainerChangeObserver() {
             if (containerChangeObserver) return;
             containerChangeObserver = new MutationObserver(() => {
-                runBookingDomTasks();
+                scheduleBookingDomTasks();
             });
             containerChangeObserver.observe(document.body, { childList: true, subtree: true });
         }
@@ -1255,6 +1268,7 @@
             stopContainerChangeObserver();
             stopNavigationPoller();
             startBootstrapPoller();
+            bookingDomTasksScheduled = false;
         }
 
         function evaluateBookingFlowMonitoringState() {
