@@ -505,6 +505,11 @@
     })();
 
     // #region Debug mode service, panel, and activation.
+    // These constants identify where a debug panel instance is rendered.
+    // They let us target cleanup and binding behavior without fragile selectors.
+    const DEBUG_PANEL_SURFACE_AVAILABILITY = 'availability';
+    const DEBUG_PANEL_SURFACE_DURATION = 'duration';
+
     const getDebugService = (() => {
         let serviceInstance = null;
 
@@ -756,11 +761,11 @@
         };
     })();
 
-    function buildDebugPanelHtml() {
+    function buildDebugPanelHtml(surface = DEBUG_PANEL_SURFACE_AVAILABILITY) {
         if (!getDebugService().isEnabled()) return '';
 
         return `
-    <div class="bc-debug-panel" style="margin: 0 8px 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: rgba(255,255,255,0.92); font-size: 12px;">
+    <div class="bc-debug-panel" data-bc-debug-surface="${surface}" style="margin: 0 8px 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: rgba(255,255,255,0.92); font-size: 12px;">
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
             <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
                 <input type="checkbox" class="bc-debug-enabled" checked style="width: 14px; height: 14px; cursor: pointer;">
@@ -775,6 +780,87 @@
             <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-clear">Clear logs</button>
         </div>
     </div>`;
+    }
+
+    function refreshAllDebugPanelEntryCounts() {
+        // Keep all visible debug panels in sync when logs are added, cleared, or exported.
+        document.querySelectorAll('.bc-debug-panel .bc-debug-count').forEach(countElement => {
+            countElement.textContent = `${getDebugService().getEntries().length} log entries`;
+        });
+    }
+
+    function bindDebugPanelControls(rootElement) {
+        // Multiple panel instances can exist across booking steps, so bind once per panel.
+        rootElement.querySelectorAll('.bc-debug-panel').forEach(panel => {
+            if (panel.dataset.bcDebugBound) return;
+            panel.dataset.bcDebugBound = 'true';
+
+            const enabledCheckbox = panel.querySelector('.bc-debug-enabled');
+            if (enabledCheckbox) {
+                enabledCheckbox.addEventListener('change', () => {
+                    getDebugService().setEnabled(enabledCheckbox.checked);
+                    if (!enabledCheckbox.checked) {
+                        // Remove every instance immediately so the UI always reflects debug state.
+                        document.querySelectorAll('.bc-debug-panel').forEach(el => el.remove());
+                    }
+                });
+            }
+
+            const copyButton = panel.querySelector('.bc-debug-copy');
+            if (copyButton) {
+                copyButton.addEventListener('click', async () => {
+                    try {
+                        await getDebugService().copyLogsToClipboard();
+                        refreshAllDebugPanelEntryCounts();
+                        copyButton.blur();
+                    } catch (error) {
+                        getDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
+                        console.log('[bc] failed to copy debug logs:', error);
+                    }
+                });
+            }
+
+            const emailButton = panel.querySelector('.bc-debug-email');
+            if (emailButton) {
+                emailButton.addEventListener('click', () => {
+                    getDebugService().openEmailDraftWithLogs();
+                    refreshAllDebugPanelEntryCounts();
+                    emailButton.blur();
+                });
+            }
+
+            const downloadButton = panel.querySelector('.bc-debug-download');
+            if (downloadButton) {
+                downloadButton.addEventListener('click', () => {
+                    getDebugService().downloadLogsFile();
+                    refreshAllDebugPanelEntryCounts();
+                    downloadButton.blur();
+                });
+            }
+
+            const clearButton = panel.querySelector('.bc-debug-clear');
+            if (clearButton) {
+                clearButton.addEventListener('click', () => {
+                    getDebugService().clearEntries();
+                    refreshAllDebugPanelEntryCounts();
+                    clearButton.blur();
+                });
+            }
+        });
+    }
+
+    function injectDurationFlowDebugPanel(durationFilterContainer) {
+        // The duration screen can be re-rendered by Angular, so replace any previous panel first.
+        document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(panel => panel.remove());
+        if (!getDebugService().isEnabled()) return;
+
+        // Prefer rendering after the club-order widget when present so helper controls stay grouped.
+        const anchor = durationFilterContainer.nextSibling?.classList?.contains('bc-club-order-widget')
+            ? durationFilterContainer.nextSibling
+            : durationFilterContainer;
+        anchor.insertAdjacentHTML('afterend', buildDebugPanelHtml(DEBUG_PANEL_SURFACE_DURATION));
+        bindDebugPanelControls(document);
+        refreshAllDebugPanelEntryCounts();
     }
     // #endregion Debug mode service, panel, and activation.
 
@@ -1548,69 +1634,6 @@
                 });
             }
 
-            function bindDebugPanelControls(anchorElement) {
-                const panel = anchorElement.querySelector('.bc-debug-panel');
-                if (!panel) return;
-
-                const refreshEntryCount = () => {
-                    const count = panel.querySelector('.bc-debug-count');
-                    if (count) {
-                        count.textContent = `${getDebugService().getEntries().length} log entries`;
-                    }
-                };
-
-                const enabledCheckbox = panel.querySelector('.bc-debug-enabled');
-                if (enabledCheckbox) {
-                    enabledCheckbox.addEventListener('change', () => {
-                        getDebugService().setEnabled(enabledCheckbox.checked);
-                        if (!enabledCheckbox.checked) {
-                            panel.remove();
-                        }
-                    });
-                }
-
-                const copyButton = panel.querySelector('.bc-debug-copy');
-                if (copyButton) {
-                    copyButton.addEventListener('click', async () => {
-                        try {
-                            await getDebugService().copyLogsToClipboard();
-                            refreshEntryCount();
-                            copyButton.blur();
-                        } catch (error) {
-                            getDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
-                            console.log('[bc] failed to copy debug logs:', error);
-                        }
-                    });
-                }
-
-                const emailButton = panel.querySelector('.bc-debug-email');
-                if (emailButton) {
-                    emailButton.addEventListener('click', () => {
-                        getDebugService().openEmailDraftWithLogs();
-                        refreshEntryCount();
-                        emailButton.blur();
-                    });
-                }
-
-                const downloadButton = panel.querySelector('.bc-debug-download');
-                if (downloadButton) {
-                    downloadButton.addEventListener('click', () => {
-                        getDebugService().downloadLogsFile();
-                        refreshEntryCount();
-                        downloadButton.blur();
-                    });
-                }
-
-                const clearButton = panel.querySelector('.bc-debug-clear');
-                if (clearButton) {
-                    clearButton.addEventListener('click', () => {
-                        getDebugService().clearEntries();
-                        refreshEntryCount();
-                        clearButton.blur();
-                    });
-                }
-            }
-
             function appendWeatherTicksWhenReady(anchorElement, fetchDate) {
                 const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
                 getWeatherService().whenReady().then(() => {
@@ -1754,7 +1777,7 @@
                 html += buildShowIndoorCourtsOnlyToggleHtml();
                 html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
                 html += buildViewToggleHtml();
-                html += buildDebugPanelHtml();
+                html += buildDebugPanelHtml(DEBUG_PANEL_SURFACE_AVAILABILITY);
                 html += buildFailedClubsWarningHtml(failedClubIdsSet);
 
                 // Render the time slots in the selected layout mode.
@@ -1814,6 +1837,7 @@
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
             }
+            injectDurationFlowDebugPanel(container);
             getPreferenceAutoSelectService().autoSelectPlayersAndDuration();
         }
         tryToAutoSelectPickleball();
@@ -2093,6 +2117,7 @@
 
     function removeOurContentAndUnhideNativeContent() {
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
+        document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(el => el.remove());
         document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
             child.style.display = '';
         });
