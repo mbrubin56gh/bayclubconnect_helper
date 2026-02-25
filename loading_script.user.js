@@ -624,9 +624,9 @@
     }
 
     function filterSlotsByTimeRange(startMinutes, endMinutes) {
-        document.querySelectorAll('.bc-court-option').forEach(el => {
-            const from = parseInt(el.dataset.fromMinutes);
-            el.closest('[data-slot-wrapper]').style.display = from >= startMinutes && from < endMinutes ? '' : 'none';
+        document.querySelectorAll('[data-slot-wrapper][data-from-minutes]').forEach(wrapper => {
+            const from = parseInt(wrapper.dataset.fromMinutes);
+            wrapper.style.display = from >= startMinutes && from < endMinutes ? '' : 'none';
         });
     }
 
@@ -738,7 +738,7 @@
                 data-from-minutes="${slot.fromInMinutes}"
                 data-to-minutes="${slot.toInMinutes}"`;
             return `
-    <div data-slot-wrapper>
+    <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            ${dataAttrs} style="${disabledStyle}${isIsolated ? ' border: 2px solid rgba(255,215,0,1);' : isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
@@ -775,7 +775,7 @@
         }).join('');
 
         return `
-    <div data-slot-wrapper>
+    <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            style="${disabledStyle}${hasIsolatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
