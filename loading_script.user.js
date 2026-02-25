@@ -1323,7 +1323,10 @@
             const originalPushState = history.pushState;
             const originalReplaceState = history.replaceState;
 
-            // We still hook history because it does fire sometimes; when it doesn't, pollers cover gaps.
+            // We intentionally leave these wrappers installed for the page lifetime.
+            // Restoring and re-installing them around booking-flow transitions increases the chance of
+            // missing slippery SPA transitions that do not emit consistent navigation signals.
+            // The wrapper cost is low, and heavy work remains gated by monitor state.
             history.pushState = function (...args) {
                 originalPushState.apply(this, args);
                 evaluateBookingFlowMonitoringState();

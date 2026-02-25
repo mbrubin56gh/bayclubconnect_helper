@@ -66,6 +66,7 @@ To reduce churn from Angular mutation bursts, booking-flow DOM reconciliation is
 ### Navigation Cleanup
 The script uses a booking-flow monitor with lifecycle management:
 - It patches `history.pushState` and `history.replaceState` (and listens to `popstate`) to detect flow transitions when Angular emits them.
+- Those history wrappers are intentionally left installed for the page lifetime. They are lightweight and improve reliability because uninstalling and reinstalling wrappers around flow transitions can miss Angular navigation events.
 - While on the booking flow, it runs active monitoring (MutationObservers plus a fast URL poll) to catch transitions that Angular performs without reliable history events.
 - Outside the booking flow, it tears down active monitoring and switches to a lightweight bootstrap poll that only checks for re-entry.
 - On `visibilitychange`, it pauses monitoring while the tab is hidden and performs immediate state reconciliation when the tab becomes visible again.
