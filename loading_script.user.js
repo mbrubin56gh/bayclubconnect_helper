@@ -596,6 +596,27 @@
         let { startMinutes, endMinutes } = getTimeRangeForSlider();
         let dragging = null;
 
+        function removeDragListeners() {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('touchmove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.removeEventListener('touchend', onMouseUp);
+        }
+
+        function addDragListeners() {
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('touchmove', onMouseMove, { passive: false });
+            document.addEventListener('mouseup', onMouseUp);
+            document.addEventListener('touchend', onMouseUp);
+        }
+
+        function startDrag(type, e) {
+            dragging = type;
+            removeDragListeners();
+            addDragListeners();
+            e.preventDefault();
+        }
+
         function updateUI() {
             const startPct = minutesToSliderPercent(startMinutes);
             const endPct = minutesToSliderPercent(endMinutes);
@@ -627,17 +648,13 @@
             saveTimeRangeForSlider(startMinutes, endMinutes);
             // Re-filter visible slots.
             applyFilters(startMinutes, endMinutes);
+            removeDragListeners();
         }
 
         [startHandle, endHandle].forEach(handle => {
-            handle.addEventListener('mousedown', e => { dragging = handle.dataset.type; e.preventDefault(); });
-            handle.addEventListener('touchstart', e => { dragging = handle.dataset.type; e.preventDefault(); }, { passive: false });
+            handle.addEventListener('mousedown', e => startDrag(handle.dataset.type, e));
+            handle.addEventListener('touchstart', e => startDrag(handle.dataset.type, e), { passive: false });
         });
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('touchmove', onMouseMove, { passive: false });
-        document.addEventListener('mouseup', onMouseUp);
-        document.addEventListener('touchend', onMouseUp);
     }
 
     function filterSlotsByTimeRange(startMinutes, endMinutes) {
