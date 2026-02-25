@@ -1439,6 +1439,48 @@
     }
 
     function createBookingFlowMonitor() {
+        function createBookingFlowMonitorResourceRegistry() {
+            const observersByKey = new Map();
+            const intervalsByKey = new Map();
+
+            function ensureObserver(key, createObserver, observeObserver) {
+                if (observersByKey.has(key)) return;
+                const observer = createObserver();
+                observeObserver(observer);
+                observersByKey.set(key, observer);
+            }
+
+            function clearObserver(key) {
+                const observer = observersByKey.get(key);
+                if (!observer) return;
+                observer.disconnect();
+                observersByKey.delete(key);
+            }
+
+            function ensureInterval(key, callback, delayMs) {
+                if (intervalsByKey.has(key)) return;
+                intervalsByKey.set(key, setInterval(callback, delayMs));
+            }
+
+            function clearIntervalByKey(key) {
+                const timer = intervalsByKey.get(key);
+                if (!timer) return;
+                clearInterval(timer);
+                intervalsByKey.delete(key);
+            }
+
+            return {
+                ensureObserver,
+                clearObserver,
+                ensureInterval,
+                clearIntervalByKey,
+            };
+        }
+
+        const BOOKING_FLOW_CONTAINER_OBSERVER_KEY = 'booking-flow-container-observer';
+        const BOOKING_FLOW_NAVIGATION_POLLER_KEY = 'booking-flow-navigation-poller';
+        const BOOKING_FLOW_BOOTSTRAP_POLLER_KEY = 'booking-flow-bootstrap-poller';
+
         // Keep watcher lifecycle state private so we don't leak more script-level mutable state.
         // This monitor has two modes:
         // 1) Active booking mode: observers + fast URL pollers are on.
@@ -1447,9 +1489,7 @@
         // reliable URL updates or consistently observable history events. In practice we may see
         // no pushState/replaceState/popstate for transitions that still require cleanup/re-init.
         // So we use event hooks first, plus polling as a reliability backstop.
-        let containerChangeObserver = null;
-        let navigationPollTimer = null;
-        let bootstrapPollTimer = null;
+        const bookingFlowMonitorResourceRegistry = createBookingFlowMonitorResourceRegistry();
         let lastObservedHref = location.href;
         let isMonitoringBookingFlow = false;
         let historyMonitoringInstalled = false;
@@ -1491,53 +1531,57 @@
         // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
         // or popStates, etc. We keep this observer active only while we're in the booking flow.
         function startContainerChangeObserver() {
-            if (containerChangeObserver) return;
-            containerChangeObserver = new MutationObserver(() => {
-                scheduleBookingDomTasks();
-            });
-            containerChangeObserver.observe(document.body, { childList: true, subtree: true });
+            bookingFlowMonitorResourceRegistry.ensureObserver(
+                BOOKING_FLOW_CONTAINER_OBSERVER_KEY,
+                () => new MutationObserver(() => {
+                    scheduleBookingDomTasks();
+                }),
+                observer => {
+                    observer.observe(document.body, { childList: true, subtree: true });
+                }
+            );
         }
 
         function stopContainerChangeObserver() {
-            if (!containerChangeObserver) return;
-            containerChangeObserver.disconnect();
-            containerChangeObserver = null;
+            bookingFlowMonitorResourceRegistry.clearObserver(BOOKING_FLOW_CONTAINER_OBSERVER_KEY);
         }
 
         function startNavigationPoller() {
-            if (navigationPollTimer) return;
             lastObservedHref = location.href;
             // Fast poll while inside booking flow. The UI can transition to/from booking sub-screens
             // without a dependable history signal, and sometimes without a visible URL change until
             // after Angular has already swapped DOM. This catches those transitions quickly.
-            navigationPollTimer = setInterval(() => {
-                if (location.href === lastObservedHref) return;
-                lastObservedHref = location.href;
-                evaluateBookingFlowMonitoringState();
-            }, 200);
+            bookingFlowMonitorResourceRegistry.ensureInterval(
+                BOOKING_FLOW_NAVIGATION_POLLER_KEY,
+                () => {
+                    if (location.href === lastObservedHref) return;
+                    lastObservedHref = location.href;
+                    evaluateBookingFlowMonitoringState();
+                },
+                200
+            );
         }
 
         function stopNavigationPoller() {
-            if (!navigationPollTimer) return;
-            clearInterval(navigationPollTimer);
-            navigationPollTimer = null;
+            bookingFlowMonitorResourceRegistry.clearIntervalByKey(BOOKING_FLOW_NAVIGATION_POLLER_KEY);
         }
 
         function startBootstrapPoller() {
-            if (bootstrapPollTimer) return;
             // Slow poll outside booking flow to detect eventual re-entry while avoiding always-on
             // heavy observers/polling on unrelated app pages.
-            bootstrapPollTimer = setInterval(() => {
-                if (isOnBookingFlowUrl()) {
-                    evaluateBookingFlowMonitoringState();
-                }
-            }, 1000);
+            bookingFlowMonitorResourceRegistry.ensureInterval(
+                BOOKING_FLOW_BOOTSTRAP_POLLER_KEY,
+                () => {
+                    if (isOnBookingFlowUrl()) {
+                        evaluateBookingFlowMonitoringState();
+                    }
+                },
+                1000
+            );
         }
 
         function stopBootstrapPoller() {
-            if (!bootstrapPollTimer) return;
-            clearInterval(bootstrapPollTimer);
-            bootstrapPollTimer = null;
+            bookingFlowMonitorResourceRegistry.clearIntervalByKey(BOOKING_FLOW_BOOTSTRAP_POLLER_KEY);
         }
 
         function startBookingFlowMonitoring() {

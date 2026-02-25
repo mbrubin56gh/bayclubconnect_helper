@@ -111,6 +111,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
 - **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
 - **Group render orchestration in a pipeline service** — availability rendering and related filter application flow through `createAvailabilityRenderPipeline()` so UI assembly and post-render behavior stay coordinated in one module.
+- **Use a monitor-scoped resource registry for watcher lifecycle wiring** — booking-flow observer and poller resources are managed by `createBookingFlowMonitorResourceRegistry()` so start/stop paths are centralized and teardown behavior stays consistent.
 
 ## Global State (intentional)
 
