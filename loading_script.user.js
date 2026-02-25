@@ -1689,9 +1689,7 @@
             evaluateBookingFlowMonitoringState();
         }
 
-        return {
-            initialize,
-        };
+        initialize();
     }
 
 
@@ -1875,8 +1873,7 @@
     }
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
-    const bookingFlowMonitor = createBookingFlowMonitor();
     installXhrInterceptors();
     createCardSelectionStyle();
-    bookingFlowMonitor.initialize();
+    createBookingFlowMonitor();
 })();
