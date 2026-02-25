@@ -1,0 +1,26 @@
+{
+  "name": "bayclubconnect_helper",
+  "version": "1.0.0",
+  "description": "This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has only been tested on desktop Chrome.",
+  "main": "loading_script.user.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mbrubin56gh/bayclubconnect_helper.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/mbrubin56gh/bayclubconnect_helper/issues"
+  },
+  "homepage": "https://github.com/mbrubin56gh/bayclubconnect_helper#readme",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0"
+  }
+}
