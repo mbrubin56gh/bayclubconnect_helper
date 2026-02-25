@@ -37,6 +37,8 @@ The script patches `XMLHttpRequest.prototype.open`, `send`, and `setRequestHeade
 2. Capture `Authorization` and `X-SessionId` headers for reuse in our own requests
 3. Intercept the `courtbookings` POST and replace it with our own booking body (correct club, court, time)
 
+The monkey-patch wiring is installed through an in-file `installXhrInterceptors()` function so interceptor internals (including booking dedupe state) stay closure-scoped.
+
 ## XHR Response Interception (Fake Slot Injection)
 
 Angular reads the availability response via the `response` property (not `responseText`) on the XHR object. 
