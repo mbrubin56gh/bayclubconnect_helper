@@ -65,7 +65,7 @@ The app is Angular-based. We can't easily drive its state machine directly, so w
 We hide (not remove) native content and inject our own `<div class="all-clubs-availability">` into two containers Angular uses for desktop (`.item-tile`) and mobile (`.d-md-none.px-3`). We re-inject whenever the MutationObserver detects container changes (e.g. date change).
 
 To reduce churn from Angular mutation bursts, booking-flow DOM reconciliation is batched through `requestAnimationFrame`, so repeated mutation callbacks collapse into one reconcile pass per frame.
-Booking-step selectors and related visibility checks are centralized in `createBookingDomQueryService()` so monitor, injection, and cleanup logic share one source of truth for brittle Angular DOM signatures.
+Booking-step selectors and related visibility checks are centralized in `getBookingDomQueryService()` so monitor, injection, and cleanup logic share one source of truth for brittle Angular DOM signatures.
 
 ### Navigation Cleanup
 The script uses a booking-flow monitor with lifecycle management:
@@ -84,15 +84,15 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Grouped time slots**: Multiple courts at the same time shown as a single expandable card; single-court slots are directly selectable
 - **Edge court indicators**: ★ marks courts on the edges of the court area (less ball spillage)
 - **Club preference ordering**: Drag-and-drop widget on the duration selector page, persisted to localStorage
-  Drag lifecycle wiring for this widget is encapsulated in `createClubOrderWidgetController()`, keeping transient drag state private.
+  Drag lifecycle wiring for this widget is encapsulated in `getClubOrderWidgetController()`, keeping transient drag state private.
 - **Time range filter**: Dual-handle slider to filter slots by time of day, persisted to localStorage
-  Slider drag lifecycle and transient drag state are encapsulated in `createTimeRangeSliderController()`.
+  Slider drag lifecycle and transient drag state are encapsulated in `getTimeRangeSliderController()`.
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
 - **Hourly weather**: Fetches hourly forecast from Open-Meteo API; shows the relevant emoji below each hour label on the time range slider; rain emojis are accompanied by a centred rain-probability percentage
-  Weather data and cache are encapsulated in an in-file `createWeatherService()` closure with a narrow API (`whenReady`, `emojiForHour`, `rainPctForHour`).
+  Weather data and cache are encapsulated in an in-file `getWeatherService()` closure with a narrow API (`whenReady`, `emojiForHour`, `rainPctForHour`).
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
-- **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `createPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
+- **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `getPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
 - **Debug mode panel**: When debug mode is enabled, the injected availability UI includes a compact panel with a toggle plus `Copy logs`, `Email logs`, `Download logs`, and `Clear logs` controls for support troubleshooting.
 
 ## Debug Mode Activation And Logging
@@ -113,28 +113,28 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Encode state in the DOM where possible** rather than global variables (e.g. `data-bc-auto-selected`, `data-selected`, `data-bc-intercepted`)
 - **Prefer event-driven detection first, then add polling only as a reliability backstop** — this SPA sometimes does not emit dependable history signals, so scoped pollers are acceptable when lifecycle-managed
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
-  For example, drag-and-drop item reordering state is scoped inside `createClubOrderWidgetController()` rather than script scope.
-  Time-range slider drag state is similarly scoped inside `createTimeRangeSliderController()`.
+  For example, drag-and-drop item reordering state is scoped inside `getClubOrderWidgetController()` rather than script scope.
+  Time-range slider drag state is similarly scoped inside `getTimeRangeSliderController()`.
 - **Prefer service-shaped modules for non-trivial logic** — when logic has internal state or lifecycle, place it behind an in-file service/controller creator rather than free-floating functions and variables.
 - **Service creators own singleton behavior** — if a service should be singleton for the page lifecycle, implement singleton ownership inside the service creator itself.
-- **Use creator-owned access consistently** — call singleton-backed creators directly at usage sites (for example: `createWeatherService().whenReady()`), rather than storing script-scope service alias variables.
+- **Use creator-owned access consistently** — call singleton-backed creators directly at usage sites (for example: `getWeatherService().whenReady()`), rather than storing script-scope service alias variables.
 - **Avoid two-phase initialization for services** — when feasible, let creators self-initialize and keep lifecycle guards inside the creator so startup is one-step and idempotent.
 - **Use guarded installer creators for one-time setup** — for setup work like style injection or monitor wiring, prefer creator-owned one-time guards instead of free-floating initialization flags.
 - **Lower constants to feature-local scope when practical** — keep constants near their usage to reduce script-wide surface area, while preserving shared enum constants where cross-feature reuse is intentional.
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
-- **Centralized local storage access** — preference persistence reads and writes flow through a singleton `createLocalStorageService()` creator so parsing, serialization, and parse-failure logging behavior are consistent.
+- **Centralized local storage access** — preference persistence reads and writes flow through a singleton `getLocalStorageService()` creator so parsing, serialization, and parse-failure logging behavior are consistent.
 - **Prefer explicit enum-like values over nullable/optional parameters for behavioral variation** — when a parameter controls which behavior a function performs, always pass an explicit string constant (e.g. `LABEL_MODE_TIME`, `LABEL_MODE_CLUB`) rather than a nullable or omitted argument (e.g. `labelOverride = null`). Nullable optionals hide intent at call sites and are easy to accidentally omit. Explicit constants make every call self-documenting.
 - **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
 - **Prefer semantic, domain-specific names** — choose function and variable names that describe business intent and lifecycle context (for example: `resumeBookingFlowMonitoringAfterVisible`) rather than generic verbs (for example: `resumeMonitoring`).
 - **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
-- **Group render orchestration in a pipeline service** — availability rendering and related filter application flow through `createAvailabilityRenderPipeline()` so UI assembly and post-render behavior stay coordinated in one module.
+- **Group render orchestration in a pipeline service** — availability rendering and related filter application flow through `getAvailabilityRenderPipeline()` so UI assembly and post-render behavior stay coordinated in one module.
 - **Use monitor-scoped lifecycle helpers for watcher wiring** — booking-flow observer and poller resources are managed through monitor-local keyed helper functions so start/stop paths are centralized and teardown behavior stays consistent.
 
 ## Global State (intentional)
 
-Most mutable booking/network state is encapsulated in a singleton in-file service (`createBookingStateService()`), rather than free-floating script-level variables.
-Duration/player preference auto-selection also uses an in-file closure service (`createPreferenceAutoSelectService()`) so transient selection-suppression state is not exposed at script scope.
+Most mutable booking/network state is encapsulated in a singleton in-file service (`getBookingStateService()`), rather than free-floating script-level variables.
+Duration/player preference auto-selection also uses an in-file closure service (`getPreferenceAutoSelectService()`) so transient selection-suppression state is not exposed at script scope.
 
 - `lastFetchState` — `{ transformed, params, failedClubIds }` — the last fetched and transformed availability data plus request params and per-club failure markers
 - `pendingSlotBooking` — `{ clubId, courtId, date, fromMinutes, toMinutes }` — set when user selects a slot, consumed by the XHR interceptor

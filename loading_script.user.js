@@ -58,10 +58,10 @@
     // #endregion Core constants and club metadata.
 
     // #region Booking state and XHR interception.
-    const createBookingStateService = (() => {
+    const getBookingStateService = (() => {
         let serviceInstance = null;
 
-        return function createBookingStateService() {
+        return function getBookingStateService() {
             if (serviceInstance) return serviceInstance;
             // Keep mutable booking/network state private and expose a narrow API for callers.
             let currentAbortController = null;
@@ -215,12 +215,12 @@
             if (!requestUrl ||
                 !requestUrl.match(/courtbookings$/) ||
                 requestMethod !== 'POST' ||
-                !createBookingStateService().getPendingSlotBooking()) {
+                !getBookingStateService().getPendingSlotBooking()) {
                 return { handled: false };
             }
 
-            const pendingSlotBooking = createBookingStateService().getPendingSlotBooking();
-            const lastFetchState = createBookingStateService().getLastFetchState();
+            const pendingSlotBooking = getBookingStateService().getPendingSlotBooking();
+            const lastFetchState = getBookingStateService().getLastFetchState();
             if (!pendingSlotBooking || !lastFetchState) {
                 return { handled: true, value: originalXhrSend.apply(xhr, originalArgs) };
             }
@@ -247,14 +247,14 @@
                 categoryOptionsId: lastFetchState.params.categoryOptionsId,
                 timeSlotId: timeSlotId,
             });
-            createBookingStateService().clearPendingSlotBooking();
+            getBookingStateService().clearPendingSlotBooking();
             return { handled: true, value: originalXhrSend.call(xhr, ourBody) };
         }
 
         XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             // Capture these so we can authenticate our own requests to the Bay Club's APIs.
             if (name === 'Authorization' || name === 'X-SessionId') {
-                createBookingStateService().captureHeader(name, value);
+                getBookingStateService().captureHeader(name, value);
             }
             if (name === 'Request-Id') {
                 setRequestId(this, value);
@@ -385,10 +385,10 @@
     // #endregion Core time and availability transformations.
 
     // #region DOM query and preference services.
-    const createBookingDomQueryService = (() => {
+    const getBookingDomQueryService = (() => {
         let serviceInstance = null;
 
-        return function createBookingDomQueryService() {
+        return function getBookingDomQueryService() {
             if (serviceInstance) return serviceInstance;
 
             const DURATION_AND_PLAYERS_FILTER_SELECTOR = 'app-racquet-sports-filter div.row.row-cols-auto';
@@ -463,10 +463,10 @@
         };
     })();
 
-    const createLocalStorageService = (() => {
+    const getLocalStorageService = (() => {
         let serviceInstance = null;
 
-        return function createLocalStorageService() {
+        return function getLocalStorageService() {
             if (serviceInstance) return serviceInstance;
 
             function getString(key) {
@@ -505,27 +505,27 @@
     })();
 
     // #region Debug mode service, panel, and activation.
-    const createDebugService = (() => {
+    const getDebugService = (() => {
         let serviceInstance = null;
 
-        return function createDebugService() {
+        return function getDebugService() {
             if (serviceInstance) return serviceInstance;
 
             const DEBUG_ENABLED_KEY = 'bc_debug_enabled';
             const DEBUG_ENTRIES_KEY = 'bc_debug_entries';
             const MAX_DEBUG_ENTRIES = 600;
-            let debugEnabled = createLocalStorageService().getString(DEBUG_ENABLED_KEY) === '1';
-            let logEntries = createLocalStorageService().getJson(DEBUG_ENTRIES_KEY, '[bc] failed to parse stored debug log JSON');
+            let debugEnabled = getLocalStorageService().getString(DEBUG_ENABLED_KEY) === '1';
+            let logEntries = getLocalStorageService().getJson(DEBUG_ENTRIES_KEY, '[bc] failed to parse stored debug log JSON');
             if (!Array.isArray(logEntries)) {
                 logEntries = [];
             }
 
             function persistDebugEnabled() {
-                createLocalStorageService().setString(DEBUG_ENABLED_KEY, debugEnabled ? '1' : '0');
+                getLocalStorageService().setString(DEBUG_ENABLED_KEY, debugEnabled ? '1' : '0');
             }
 
             function persistLogEntries() {
-                createLocalStorageService().setJson(DEBUG_ENTRIES_KEY, logEntries);
+                getLocalStorageService().setJson(DEBUG_ENTRIES_KEY, logEntries);
             }
 
             function sanitizePayload(payload, depth = 0) {
@@ -698,8 +698,8 @@
             }
 
             function activateDebugMode(source) {
-                createDebugService().setEnabled(true);
-                createDebugService().log('info', 'debug-mode-activated', {
+                getDebugService().setEnabled(true);
+                getDebugService().log('info', 'debug-mode-activated', {
                     source,
                     path: location.pathname,
                 });
@@ -757,7 +757,7 @@
     })();
 
     function buildDebugPanelHtml() {
-        if (!createDebugService().isEnabled()) return '';
+        if (!getDebugService().isEnabled()) return '';
 
         return `
     <div class="bc-debug-panel" style="margin: 0 8px 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: rgba(255,255,255,0.92); font-size: 12px;">
@@ -766,7 +766,7 @@
                 <input type="checkbox" class="bc-debug-enabled" checked style="width: 14px; height: 14px; cursor: pointer;">
                 Debug mode
             </label>
-            <span class="bc-debug-count" style="opacity: 0.8;">${createDebugService().getEntries().length} log entries</span>
+            <span class="bc-debug-count" style="opacity: 0.8;">${getDebugService().getEntries().length} log entries</span>
         </div>
         <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
             <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-copy">Copy logs</button>
@@ -778,10 +778,10 @@
     }
     // #endregion Debug mode service, panel, and activation.
 
-    const createPreferenceAutoSelectService = (() => {
+    const getPreferenceAutoSelectService = (() => {
         let serviceInstance = null;
 
-        return function createPreferenceAutoSelectService() {
+        return function getPreferenceAutoSelectService() {
             if (serviceInstance) return serviceInstance;
             // Use these keys to store previously selected players and duration choices.
             const PLAYERS_KEY = 'bc_players';
@@ -800,7 +800,7 @@
                     const isDuration = labels.includes('30 minutes');
                     if (!isPlayers && !isDuration) return;
                     const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
-                    const saved = createLocalStorageService().getString(key);
+                    const saved = getLocalStorageService().getString(key);
                     if (saved) {
                         const buttons = Array.from(group.querySelectorAll('.btn'));
                         const btn = buttons.find(b => b.textContent.trim() === saved);
@@ -823,7 +823,7 @@
             }
 
             function autoSelectPlayersAndDuration() {
-                const container = createBookingDomQueryService().getDurationAndPlayersFilterContainer();
+                const container = getBookingDomQueryService().getDurationAndPlayersFilterContainer();
                 if (!container) return;
 
                 if (!container.dataset.bcListening) {
@@ -835,9 +835,9 @@
                         const labels = Array.from(group.querySelectorAll('.btn'))
                             .map(b => b.textContent.trim());
                         if (labels.includes('Singles')) {
-                            createLocalStorageService().setString(PLAYERS_KEY, btn.textContent.trim());
+                            getLocalStorageService().setString(PLAYERS_KEY, btn.textContent.trim());
                         } else if (labels.includes('30 minutes')) {
-                            createLocalStorageService().setString(DURATION_KEY, btn.textContent.trim());
+                            getLocalStorageService().setString(DURATION_KEY, btn.textContent.trim());
                         }
                     });
                     container.dataset.bcListening = 'true';
@@ -876,7 +876,7 @@
     function getClubOrder() {
         // Use this key to store the club ordering selected by the user for future sessions.
         const CLUB_ORDER_KEY = 'bc_club_order';
-        const parsed = createLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
+        const parsed = getLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
         if (Array.isArray(parsed) &&
             parsed.length === Object.values(CLUBS).length &&
             parsed.every(id => Object.values(CLUBS).includes(id))) {
@@ -890,11 +890,11 @@
 
     function saveClubOrder(order) {
         const CLUB_ORDER_KEY = 'bc_club_order';
-        createLocalStorageService().setJson(CLUB_ORDER_KEY, order);
+        getLocalStorageService().setJson(CLUB_ORDER_KEY, order);
     }
 
     function injectClubOrderWidget() {
-        const container = createBookingDomQueryService().getDurationAndPlayersFilterContainer();
+        const container = getBookingDomQueryService().getDurationAndPlayersFilterContainer();
         if (!container || container.nextSibling?.classList?.contains('bc-club-order-widget')) return;
 
         const clubOrder = getClubOrder();
@@ -918,13 +918,13 @@
     `;
 
         container.insertAdjacentElement('afterend', widget);
-        createClubOrderWidgetController().initDragAndDrop(widget);
+        getClubOrderWidgetController().initDragAndDrop(widget);
     }
 
-    const createClubOrderWidgetController = (() => {
+    const getClubOrderWidgetController = (() => {
         let serviceInstance = null;
 
-        return function createClubOrderWidgetController() {
+        return function getClubOrderWidgetController() {
             if (serviceInstance) return serviceInstance;
 
             function updateListNumbering(list) {
@@ -995,12 +995,12 @@
 
     function getViewMode() {
         const VIEW_MODE_KEY = 'bc_view_mode';
-        return createLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
+        return getLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
     }
 
     function saveViewMode(mode) {
         const VIEW_MODE_KEY = 'bc_view_mode';
-        createLocalStorageService().setString(VIEW_MODE_KEY, mode);
+        getLocalStorageService().setString(VIEW_MODE_KEY, mode);
     }
 
     function initViewToggle(anchorElement) {
@@ -1011,9 +1011,9 @@
                 saveViewMode(newMode);
                 const existing = anchorElement.querySelector('.all-clubs-availability');
                 if (existing) existing.remove();
-                const lastFetchState = createBookingStateService().getLastFetchState();
+                const lastFetchState = getBookingStateService().getLastFetchState();
                 if (lastFetchState) {
-                    createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
+                    getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, anchorElement, lastFetchState.params.date);
                 }
             });
         });
@@ -1021,7 +1021,7 @@
 
     function getShowIndoorClubsOnly() {
         const INDOOR_ONLY_KEY = 'bc_indoor_only';
-        const saved = createLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
+        const saved = getLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
         if (typeof saved === 'boolean') {
             return saved;
         }
@@ -1030,7 +1030,7 @@
 
     function saveShowIndoorClubsOnly(value) {
         const INDOOR_ONLY_KEY = 'bc_indoor_only';
-        createLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
+        getLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
     }
 
     function buildShowIndoorCourtsOnlyToggleHtml() {
@@ -1062,7 +1062,7 @@
 
     function getTimeRangeForSlider() {
         const TIME_RANGE_KEY = 'bc_time_range';
-        const parsed = createLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
+        const parsed = getLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
         if (parsed &&
             typeof parsed.startMinutes === 'number' &&
             typeof parsed.endMinutes === 'number') {
@@ -1073,7 +1073,7 @@
 
     function saveTimeRangeForSlider(startMinutes, endMinutes) {
         const TIME_RANGE_KEY = 'bc_time_range';
-        createLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
+        getLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
     }
 
     function minutesToSliderPercent(minutes) {
@@ -1125,10 +1125,10 @@
     </div>`;
     }
 
-    const createTimeRangeSliderController = (() => {
+    const getTimeRangeSliderController = (() => {
         let serviceInstance = null;
 
-        return function createTimeRangeSliderController() {
+        return function getTimeRangeSliderController() {
             if (serviceInstance) return serviceInstance;
 
             function init(container) {
@@ -1190,7 +1190,7 @@
                     dragging = null;
                     saveTimeRangeForSlider(startMinutes, endMinutes);
                     // Re-filter visible slots.
-                    createAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
+                    getAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
                     removeDragListeners();
                 }
 
@@ -1450,10 +1450,10 @@
     }
 
     // Availability filtering and rendering orchestration are encapsulated in this pipeline service.
-    const createAvailabilityRenderPipeline = (() => {
+    const getAvailabilityRenderPipeline = (() => {
         let serviceInstance = null;
 
-        return function createAvailabilityRenderPipeline() {
+        return function getAvailabilityRenderPipeline() {
             if (serviceInstance) return serviceInstance;
 
             function filterSlotsByTimeRange(startMinutes, endMinutes) {
@@ -1532,7 +1532,7 @@
 
             function initializeRenderControls(anchorElement, startMinutes, endMinutes) {
                 const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
-                if (sliderWidget) createTimeRangeSliderController().init(sliderWidget);
+                if (sliderWidget) getTimeRangeSliderController().init(sliderWidget);
                 initViewToggle(anchorElement);
                 applyFilters(startMinutes, endMinutes);
             }
@@ -1555,14 +1555,14 @@
                 const refreshEntryCount = () => {
                     const count = panel.querySelector('.bc-debug-count');
                     if (count) {
-                        count.textContent = `${createDebugService().getEntries().length} log entries`;
+                        count.textContent = `${getDebugService().getEntries().length} log entries`;
                     }
                 };
 
                 const enabledCheckbox = panel.querySelector('.bc-debug-enabled');
                 if (enabledCheckbox) {
                     enabledCheckbox.addEventListener('change', () => {
-                        createDebugService().setEnabled(enabledCheckbox.checked);
+                        getDebugService().setEnabled(enabledCheckbox.checked);
                         if (!enabledCheckbox.checked) {
                             panel.remove();
                         }
@@ -1573,11 +1573,11 @@
                 if (copyButton) {
                     copyButton.addEventListener('click', async () => {
                         try {
-                            await createDebugService().copyLogsToClipboard();
+                            await getDebugService().copyLogsToClipboard();
                             refreshEntryCount();
                             copyButton.blur();
                         } catch (error) {
-                            createDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
+                            getDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
                             console.log('[bc] failed to copy debug logs:', error);
                         }
                     });
@@ -1586,7 +1586,7 @@
                 const emailButton = panel.querySelector('.bc-debug-email');
                 if (emailButton) {
                     emailButton.addEventListener('click', () => {
-                        createDebugService().openEmailDraftWithLogs();
+                        getDebugService().openEmailDraftWithLogs();
                         refreshEntryCount();
                         emailButton.blur();
                     });
@@ -1595,7 +1595,7 @@
                 const downloadButton = panel.querySelector('.bc-debug-download');
                 if (downloadButton) {
                     downloadButton.addEventListener('click', () => {
-                        createDebugService().downloadLogsFile();
+                        getDebugService().downloadLogsFile();
                         refreshEntryCount();
                         downloadButton.blur();
                     });
@@ -1604,7 +1604,7 @@
                 const clearButton = panel.querySelector('.bc-debug-clear');
                 if (clearButton) {
                     clearButton.addEventListener('click', () => {
-                        createDebugService().clearEntries();
+                        getDebugService().clearEntries();
                         refreshEntryCount();
                         clearButton.blur();
                     });
@@ -1613,20 +1613,20 @@
 
             function appendWeatherTicksWhenReady(anchorElement, fetchDate) {
                 const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
-                createWeatherService().whenReady().then(() => {
+                getWeatherService().whenReady().then(() => {
                     const widget = anchorElement.querySelector('.bc-time-range-widget');
                     if (!widget) return;
                     widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
                         if (tickDiv.querySelector('.bc-weather-tick')) return;
                         const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
-                        const emoji = createWeatherService().emojiForHour(fetchDate, fromMinutes);
+                        const emoji = getWeatherService().emojiForHour(fetchDate, fromMinutes);
                         if (!emoji) return;
                         const emojiEl = document.createElement('div');
                         emojiEl.className = 'bc-weather-tick';
                         emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
                         emojiEl.textContent = emoji;
                         if (RAIN_EMOJIS.includes(emoji)) {
-                            const pct = createWeatherService().rainPctForHour(fetchDate, fromMinutes);
+                            const pct = getWeatherService().rainPctForHour(fetchDate, fromMinutes);
                             if (pct != null) {
                                 const pctEl = document.createElement('div');
                                 pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
@@ -1680,9 +1680,9 @@
                 // Select this court option.
                 el.setAttribute('data-selected', '')
 
-                const lastFetchState = createBookingStateService().getLastFetchState();
+                const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) return;
-                createBookingStateService().setPendingSlotBooking({
+                getBookingStateService().setPendingSlotBooking({
                     clubId: el.dataset.clubId,
                     courtId: el.dataset.courtId,
                     date: lastFetchState.params.date,
@@ -1744,7 +1744,7 @@
                 const mins = limitDate.getMinutes();
                 limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
-                const lastFetchState = createBookingStateService().getLastFetchState();
+                const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) return;
                 const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
                 const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
@@ -1784,15 +1784,15 @@
 
     // #region Booking flow monitor and DOM injection.
     function clearBookingStateAndUi() {
-        createDebugService().log('info', 'booking-flow-state-cleared', null);
-        createBookingStateService().abortFetch();
-        createBookingStateService().clearLastFetchState();
-        createBookingStateService().clearPendingSlotBooking();
+        getDebugService().log('info', 'booking-flow-state-cleared', null);
+        getBookingStateService().abortFetch();
+        getBookingStateService().clearLastFetchState();
+        getBookingStateService().clearPendingSlotBooking();
         removeOurContentAndUnhideNativeContent();
     }
 
     function runBookingDomTasks() {
-        const bookingDomQueryService = createBookingDomQueryService();
+        const bookingDomQueryService = getBookingDomQueryService();
         // Clear injected slot UI only when we are inside the booking flow shell but none of the
         // supported booking-step hosts are present. This avoids brittle title-text matching and
         // preserves behavior on the duration/player screen where controls still need augmentation.
@@ -1800,10 +1800,10 @@
             !bookingDomQueryService.hasTimeSlotHostsVisible() &&
             !bookingDomQueryService.hasHourViewControlsVisible() &&
             !bookingDomQueryService.hasDurationAndPlayersFilterVisible()) {
-            createDebugService().log('info', 'stale-injected-slot-ui-cleared', {
+            getDebugService().log('info', 'stale-injected-slot-ui-cleared', {
                 reason: 'booking-shell-visible-without-supported-step-hosts',
             });
-            createBookingStateService().clearPendingSlotBooking();
+            getBookingStateService().clearPendingSlotBooking();
             removeOurContentAndUnhideNativeContent();
             return;
         }
@@ -1814,7 +1814,7 @@
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
             }
-            createPreferenceAutoSelectService().autoSelectPlayersAndDuration();
+            getPreferenceAutoSelectService().autoSelectPlayersAndDuration();
         }
         tryToAutoSelectPickleball();
     }
@@ -1897,7 +1897,7 @@
 
                 document.addEventListener('click', event => {
                     const target = event.target;
-                    if (!createBookingDomQueryService().isBackControlClickTarget(target)) return;
+                    if (!getBookingDomQueryService().isBackControlClickTarget(target)) return;
 
                     clearBookingStateAndUi();
                 }, true);
@@ -1978,7 +1978,7 @@
             function startBookingFlowMonitoring() {
                 if (isMonitoringBookingFlow) return;
                 isMonitoringBookingFlow = true;
-                createDebugService().log('info', 'booking-flow-monitor-entered', { href: location.href });
+                getDebugService().log('info', 'booking-flow-monitor-entered', { href: location.href });
                 stopBootstrapPoller();
                 if (document.visibilityState === 'hidden') return;
                 startBookingFlowActiveWatchers();
@@ -1989,7 +1989,7 @@
             function stopBookingFlowMonitoring() {
                 if (!isMonitoringBookingFlow) return;
                 isMonitoringBookingFlow = false;
-                createDebugService().log('info', 'booking-flow-monitor-exited', { href: location.href });
+                getDebugService().log('info', 'booking-flow-monitor-exited', { href: location.href });
                 stopBookingFlowActiveWatchers();
                 if (document.visibilityState !== 'hidden') {
                     startBootstrapPoller();
@@ -2004,7 +2004,7 @@
                 }
                 // Only clear and stop when transitioning from active booking mode.
                 if (!isMonitoringBookingFlow) return;
-                createDebugService().log('info', 'booking-flow-transitioned-away', { href: location.href });
+                getDebugService().log('info', 'booking-flow-transitioned-away', { href: location.href });
                 clearBookingStateAndUi();
                 stopBookingFlowMonitoring();
             }
@@ -2038,14 +2038,14 @@
             // activity on hide, then perform an immediate state reconciliation on visibility return.
             function pauseBookingFlowMonitoringWhileHidden() {
                 // Pause all monitoring work while the tab is hidden.
-                createDebugService().log('info', 'booking-flow-monitor-paused-hidden-tab', null);
+                getDebugService().log('info', 'booking-flow-monitor-paused-hidden-tab', null);
                 stopAllBookingFlowWatchersAndPollers();
                 bookingDomTasksScheduled = false;
             }
 
             function resumeBookingFlowMonitoringAfterVisible() {
                 // Resume immediately when visible so we do not miss latent SPA transitions.
-                createDebugService().log('info', 'booking-flow-monitor-resumed-visible-tab', null);
+                getDebugService().log('info', 'booking-flow-monitor-resumed-visible-tab', null);
                 if (isMonitoringBookingFlow) {
                     // If we were actively monitoring booking flow before hiding, restore the active
                     // observers and poller first, then immediately reconcile to catch latent changes.
@@ -2083,7 +2083,7 @@
                 installBackToHomeClickMonitoring();
                 startBootstrapPoller();
                 evaluateBookingFlowMonitoringState();
-                createDebugService().log('info', 'booking-flow-monitor-initialized', null);
+                getDebugService().log('info', 'booking-flow-monitor-initialized', null);
             }
 
             initialize();
@@ -2101,9 +2101,9 @@
     // Angular supports mobile and desktop views/containers, and renders them differently. We want
     // to make sure we can handle either.
     function injectIntoAllContainers() {
-        const lastFetchState = createBookingStateService().getLastFetchState();
+        const lastFetchState = getBookingStateService().getLastFetchState();
         if (!lastFetchState) return;
-        const bookingDomQueryService = createBookingDomQueryService();
+        const bookingDomQueryService = getBookingDomQueryService();
 
         document.querySelectorAll('app-court-select').forEach(el => {
             el.closest('.ng-star-inserted')
@@ -2119,12 +2119,12 @@
 
         const tile = bookingDomQueryService.getDesktopTimeSlotHost();
         if (tile && !tile.querySelector('.all-clubs-availability')) {
-            createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
+            getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
         }
 
         const mobileContainer = bookingDomQueryService.getMobileTimeSlotHost();
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
-            createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
+            getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
     }
     // #endregion Booking flow monitor and DOM injection.
@@ -2132,12 +2132,12 @@
     // #region Cross-club fetch and weather enrichment.
     // Fetch availability info for all the clubs in parallel, and combine their results.
     async function fetchAllClubs(params) {
-        createDebugService().log('info', 'cross-club-fetch-started', {
+        getDebugService().log('info', 'cross-club-fetch-started', {
             date: params.date,
             categoryCode: params.categoryCode,
             timeSlotId: params.timeSlotId,
         });
-        const signal = createBookingStateService().beginFetch();
+        const signal = getBookingStateService().beginFetch();
 
         try {
             const settled = await Promise.all(Object.values(CLUBS).map(clubId => {
@@ -2148,8 +2148,8 @@
                 return fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${timeSlotId}`, {
                     signal,
                     headers: {
-                        'Authorization': createBookingStateService().getCapturedHeader('Authorization'),
-                        'X-SessionId': createBookingStateService().getCapturedHeader('X-SessionId'),
+                        'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                        'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
                         'Request-Id': crypto.randomUUID(),
                         'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
                         'Accept': 'application/json',
@@ -2171,7 +2171,7 @@
                 if (result.error) {
                     failedClubIds.push(result.clubId);
                     console.log(`[bc] failed to fetch availability for ${CLUB_SHORT_NAMES[result.clubId] || result.clubId}:`, result.error);
-                    createDebugService().log('warn', 'cross-club-fetch-failed-for-club', {
+                    getDebugService().log('warn', 'cross-club-fetch-failed-for-club', {
                         clubId: result.clubId,
                         error: result.error?.message || String(result.error),
                     });
@@ -2180,28 +2180,28 @@
                 }
             });
 
-            createDebugService().log('info', 'cross-club-fetch-finished', {
+            getDebugService().log('info', 'cross-club-fetch-finished', {
                 successCount: successfulResults.length,
                 failedCount: failedClubIds.length,
             });
-            createBookingStateService().setLastFetchState({ transformed: transformAvailability(successfulResults), params, failedClubIds });
+            getBookingStateService().setLastFetchState({ transformed: transformAvailability(successfulResults), params, failedClubIds });
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
             if (e.name === 'AbortError') {
                 console.log('[fetch] aborted');
-                createDebugService().log('info', 'cross-club-fetch-aborted', null);
+                getDebugService().log('info', 'cross-club-fetch-aborted', null);
             } else {
-                createDebugService().log('error', 'cross-club-fetch-threw', { message: e?.message || String(e) });
+                getDebugService().log('error', 'cross-club-fetch-threw', { message: e?.message || String(e) });
                 throw e;
             }
         }
     }
 
-    const createWeatherService = (() => {
+    const getWeatherService = (() => {
         let serviceInstance = null;
 
-        return function createWeatherService() {
+        return function getWeatherService() {
             if (serviceInstance) return serviceInstance;
             // Cache of hourly datetime string (for example: '2024-01-15T07:00') -> { rainPct, code, cloudPct }.
             // This keeps weather mutable state private while preserving single-fetch-per-session behavior.
