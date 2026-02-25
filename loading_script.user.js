@@ -384,6 +384,86 @@
     // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
     const DURATION_KEY = 'bc_duration';
 
+    const createBookingDomQueryService = (() => {
+        let serviceInstance = null;
+
+        return function createBookingDomQueryService() {
+            if (serviceInstance) return serviceInstance;
+
+            const DURATION_AND_PLAYERS_FILTER_SELECTOR = 'app-racquet-sports-filter div.row.row-cols-auto';
+            const HOUR_VIEW_BUTTON_SELECTOR = 'app-time-slot-view-type-select .btn';
+            const BOOKING_PAGE_TITLE_SELECTOR = 'app-page-title';
+            const BACK_ICON_SELECTOR = 'img[src="assets/back.svg"]';
+            const BACK_TEXT_SELECTOR = 'span.clickable.font-weight-bold.text-uppercase';
+            const DESKTOP_TIME_SLOT_HOST_SELECTOR = '.item-tile';
+            const MOBILE_TIME_SLOT_HOST_SELECTOR = '.d-md-none.px-3';
+            const TIME_SLOT_HOSTS_SELECTOR = `${DESKTOP_TIME_SLOT_HOST_SELECTOR}, ${MOBILE_TIME_SLOT_HOST_SELECTOR}`;
+
+            function getDurationAndPlayersFilterContainer() {
+                return document.querySelector(DURATION_AND_PLAYERS_FILTER_SELECTOR);
+            }
+
+            function hasDurationAndPlayersFilterVisible() {
+                return !!getDurationAndPlayersFilterContainer();
+            }
+
+            function hasHourViewControlsVisible() {
+                return Array.from(document.querySelectorAll(HOUR_VIEW_BUTTON_SELECTOR))
+                    .some(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+            }
+
+            function findHourViewButton() {
+                return Array.from(document.querySelectorAll(HOUR_VIEW_BUTTON_SELECTOR))
+                    .find(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+            }
+
+            function hasBookingFlowShellVisible() {
+                const title = document.querySelector(BOOKING_PAGE_TITLE_SELECTOR);
+                if (!title) return false;
+
+                // Support both mobile and desktop variants by looking for the shared back icon in the page title.
+                return !!title.querySelector(BACK_ICON_SELECTOR);
+            }
+
+            function hasTimeSlotHostsVisible() {
+                return !!document.querySelector(TIME_SLOT_HOSTS_SELECTOR);
+            }
+
+            function getDesktopTimeSlotHost() {
+                return document.querySelector(DESKTOP_TIME_SLOT_HOST_SELECTOR);
+            }
+
+            function getMobileTimeSlotHost() {
+                return document.querySelector(MOBILE_TIME_SLOT_HOST_SELECTOR);
+            }
+
+            function isBackControlClickTarget(target) {
+                if (!(target instanceof Element)) return false;
+                const pageTitle = target.closest(BOOKING_PAGE_TITLE_SELECTOR);
+                if (!pageTitle) return false;
+
+                const hitBackIcon = !!target.closest(BACK_ICON_SELECTOR);
+                const hitBackText = !!target.closest(BACK_TEXT_SELECTOR);
+                return hitBackIcon || hitBackText;
+            }
+
+            serviceInstance = {
+                getDurationAndPlayersFilterContainer,
+                hasDurationAndPlayersFilterVisible,
+                hasHourViewControlsVisible,
+                findHourViewButton,
+                hasBookingFlowShellVisible,
+                hasTimeSlotHostsVisible,
+                getDesktopTimeSlotHost,
+                getMobileTimeSlotHost,
+                isBackControlClickTarget,
+            };
+            return serviceInstance;
+        };
+    })();
+
+    const bookingDomQueryService = createBookingDomQueryService();
+
     const createLocalStorageService = (() => {
         let serviceInstance = null;
 
@@ -467,7 +547,7 @@
             }
 
             function autoSelectPlayersAndDuration() {
-                const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+                const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
                 if (!container) return;
 
                 if (!container.dataset.bcListening) {
@@ -541,7 +621,7 @@
     }
 
     function injectClubOrderWidget() {
-        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
         if (!container || container.nextSibling?.classList?.contains('bc-club-order-widget')) return;
 
         const clubOrder = getClubOrder();
@@ -1318,42 +1398,21 @@
         removeOurContentAndUnhideNativeContent();
     }
 
-    function hasHourViewControlsVisible() {
-        return Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
-            .some(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
-    }
-
-    function hasBookingFlowShellVisible() {
-        const title = document.querySelector('app-page-title');
-        if (!title) return false;
-
-        // Support both mobile and desktop variants by looking for the shared back icon in the page title.
-        return !!title.querySelector('img[src="assets/back.svg"]');
-    }
-
-    function hasTimeSlotHostsVisible() {
-        return !!document.querySelector('.item-tile, .d-md-none.px-3');
-    }
-
-    function hasDurationAndPlayersFilterVisible() {
-        return !!document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
-    }
-
     function runBookingDomTasks() {
         // Clear injected slot UI only when we are inside the booking flow shell but none of the
         // supported booking-step hosts are present. This avoids brittle title-text matching and
         // preserves behavior on the duration/player screen where controls still need augmentation.
-        if (hasBookingFlowShellVisible() &&
-            !hasTimeSlotHostsVisible() &&
-            !hasHourViewControlsVisible() &&
-            !hasDurationAndPlayersFilterVisible()) {
+        if (bookingDomQueryService.hasBookingFlowShellVisible() &&
+            !bookingDomQueryService.hasTimeSlotHostsVisible() &&
+            !bookingDomQueryService.hasHourViewControlsVisible() &&
+            !bookingDomQueryService.hasDurationAndPlayersFilterVisible()) {
             createBookingStateService().clearPendingSlotBooking();
             removeOurContentAndUnhideNativeContent();
             return;
         }
 
         injectIntoAllContainers();
-        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        const container = bookingDomQueryService.getDurationAndPlayersFilterContainer();
         if (container) {
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
@@ -1406,15 +1465,7 @@
 
             document.addEventListener('click', event => {
                 const target = event.target;
-                if (!(target instanceof Element)) return;
-                const pageTitle = target.closest('app-page-title');
-                if (!pageTitle) return;
-
-                // Mobile back icon.
-                const hitBackIcon = !!target.closest('img[src="assets/back.svg"]');
-                // Desktop "BACK TO HOME" clickable text path.
-                const hitBackText = !!target.closest('span.clickable.font-weight-bold.text-uppercase');
-                if (!hitBackIcon && !hitBackText) return;
+                if (!bookingDomQueryService.isBackControlClickTarget(target)) return;
 
                 clearBookingStateAndUi();
             }, true);
@@ -1601,19 +1652,18 @@
                 : el.style.display = 'none';
         });
 
-        const hourViewBtn = Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
-            .find(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+        const hourViewBtn = bookingDomQueryService.findHourViewButton();
         if (hourViewBtn && !hourViewBtn.classList.contains('btn-selected') && !hourViewBtn.dataset.bcAutoSelected) {
             hourViewBtn.dataset.bcAutoSelected = 'true';
             hourViewBtn.click();
         }
 
-        const tile = document.querySelector('.item-tile');
+        const tile = bookingDomQueryService.getDesktopTimeSlotHost();
         if (tile && !tile.querySelector('.all-clubs-availability')) {
             renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
         }
 
-        const mobileContainer = document.querySelector('.d-md-none.px-3');
+        const mobileContainer = bookingDomQueryService.getMobileTimeSlotHost();
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
             renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
