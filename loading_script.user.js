@@ -1014,20 +1014,20 @@
         }
 
         // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
-        weather.promise.then(() => {
+        weatherService.whenReady().then(() => {
             const widget = anchorElement.querySelector('.bc-time-range-widget');
             if (!widget) return;
             widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
                 if (tickDiv.querySelector('.bc-weather-tick')) return;
                 const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
-                const emoji = weatherEmojiForHour(fetchDate, fromMinutes);
+                const emoji = weatherService.emojiForHour(fetchDate, fromMinutes);
                 if (!emoji) return;
                 const emojiEl = document.createElement('div');
                 emojiEl.className = 'bc-weather-tick';
                 emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
                 emojiEl.textContent = emoji;
                 if (RAIN_EMOJIS.includes(emoji)) {
-                    const pct = rainPctForHour(fetchDate, fromMinutes);
+                    const pct = weatherService.rainPctForHour(fetchDate, fromMinutes);
                     if (pct != null) {
                         const pctEl = document.createElement('div');
                         pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
@@ -1483,54 +1483,72 @@
         }
     }
 
-    // Cache of hourly datetime string (e.g. '2024-01-15T07:00') -> { rainPct, code, cloudPct } so we only fetch weather once per session.
-    const weather = {
-        cache: {},
-        promise: null,
-    };
-
-    async function fetchWeatherForecast() {
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&hourly=precipitation_probability,weathercode,cloudcover&timezone=America%2FLos_Angeles&forecast_days=16';
-        try {
-            const response = await fetch(url);
-            const data = await response.json();
-            const times = data?.hourly?.time || [];
-            const probs = data?.hourly?.precipitation_probability || [];
-            const codes = data?.hourly?.weathercode || [];
-            const clouds = data?.hourly?.cloudcover || [];
-            times.forEach((time, i) => {
-                weather.cache[time] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
-            });
-        } catch (_e) {
-            // Fail silently — weather is a hint, not critical.
-        }
-    }
-
     const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
 
-    function weatherEmojiForHour(dateString, fromInMinutes) {
-        const hour = Math.floor(fromInMinutes / 60);
-        const key = `${dateString}T${String(hour).padStart(2, '0')}:00`;
-        const w = weather.cache[key];
-        if (!w) return null;
-        const { rainPct, code, cloudPct } = w;
+    const createWeatherService = (() => {
+        let serviceInstance = null;
 
-        // WMO weather codes: 0=clear, 1-3=partly cloudy, 45/48=fog,
-        // 51-67=drizzle/rain, 71-77=snow, 80-82=showers, 95+=thunderstorm
-        if (code >= 95) return '⛈️';
-        if (code >= 71 && code <= 77) return '🌨️';
-        if (code >= 51 || rainPct > 50) return '🌧️';
-        if (rainPct > 20) return '🌦️';
-        if (cloudPct > 75) return '☁️';
-        if (cloudPct > 30) return '⛅';
-        return '☀️';
-    }
+        return function createWeatherService() {
+            if (serviceInstance) return serviceInstance;
+            // Cache of hourly datetime string (for example: '2024-01-15T07:00') -> { rainPct, code, cloudPct }.
+            // This keeps weather mutable state private while preserving single-fetch-per-session behavior.
+            const cache = {};
+            const readyPromise = fetchWeatherForecast();
 
-    function rainPctForHour(dateString, fromInMinutes) {
-        const hour = Math.floor(fromInMinutes / 60);
-        const key = `${dateString}T${String(hour).padStart(2, '0')}:00`;
-        return weather.cache[key]?.rainPct ?? null;
-    }
+            async function fetchWeatherForecast() {
+                const url = 'https://api.open-meteo.com/v1/forecast?latitude=37.5&longitude=-122.1&hourly=precipitation_probability,weathercode,cloudcover&timezone=America%2FLos_Angeles&forecast_days=16';
+                try {
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    const times = data?.hourly?.time || [];
+                    const probs = data?.hourly?.precipitation_probability || [];
+                    const codes = data?.hourly?.weathercode || [];
+                    const clouds = data?.hourly?.cloudcover || [];
+                    times.forEach((time, i) => {
+                        cache[time] = { rainPct: probs[i], code: codes[i], cloudPct: clouds[i] };
+                    });
+                } catch (_e) {
+                    // Fail silently — weather is a hint, not critical.
+                }
+            }
+
+            function buildHourKey(dateString, fromInMinutes) {
+                const hour = Math.floor(fromInMinutes / 60);
+                return `${dateString}T${String(hour).padStart(2, '0')}:00`;
+            }
+
+            function whenReady() {
+                return readyPromise;
+            }
+
+            function emojiForHour(dateString, fromInMinutes) {
+                const w = cache[buildHourKey(dateString, fromInMinutes)];
+                if (!w) return null;
+                const { rainPct, code, cloudPct } = w;
+
+                // WMO weather codes: 0=clear, 1-3=partly cloudy, 45/48=fog,
+                // 51-67=drizzle/rain, 71-77=snow, 80-82=showers, 95+=thunderstorm.
+                if (code >= 95) return '⛈️';
+                if (code >= 71 && code <= 77) return '🌨️';
+                if (code >= 51 || rainPct > 50) return '🌧️';
+                if (rainPct > 20) return '🌦️';
+                if (cloudPct > 75) return '☁️';
+                if (cloudPct > 30) return '⛅';
+                return '☀️';
+            }
+
+            function rainPctForHour(dateString, fromInMinutes) {
+                return cache[buildHourKey(dateString, fromInMinutes)]?.rainPct ?? null;
+            }
+
+            serviceInstance = {
+                whenReady,
+                emojiForHour,
+                rainPctForHour,
+            };
+            return serviceInstance;
+        };
+    })();
 
     function createCardSelectionStyle() {
         // Set up a style for selected card appearance.
@@ -1559,7 +1577,7 @@
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
     const bookingFlowMonitor = createBookingFlowMonitor();
+    const weatherService = createWeatherService();
     createCardSelectionStyle();
     bookingFlowMonitor.initialize();
-    weather.promise = fetchWeatherForecast();
 })();

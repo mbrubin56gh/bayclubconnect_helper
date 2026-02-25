@@ -83,6 +83,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Time range filter**: Dual-handle slider to filter slots by time of day, persisted to localStorage
 - **Indoor courts toggle**: Hides outdoor-only clubs; persisted to localStorage
 - **Hourly weather**: Fetches hourly forecast from Open-Meteo API; shows the relevant emoji below each hour label on the time range slider; rain emojis are accompanied by a centred rain-probability percentage
+  Weather data and cache are encapsulated in an in-file `createWeatherService()` closure with a narrow API (`whenReady`, `emojiForHour`, `rainPctForHour`).
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
 
