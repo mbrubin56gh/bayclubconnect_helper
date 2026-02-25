@@ -706,6 +706,7 @@
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
 
+        const hasIsolatedCourt = slot.courts.some(c => (ISOLATED_COURTS[clubId] || []).includes(c.courtName));
         const hasEdgeCourt = slot.courts.some(c => (EDGE_COURTS[clubId] || []).includes(c.courtName));
         const lockIcon = slotLocked
             ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
@@ -717,6 +718,7 @@
         // Single court — render as a directly selectable card with no expand step.
         if (slot.courts.length === 1) {
             const court = slot.courts[0];
+            const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
             const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
             const dataAttrs = slotLocked ? '' :
                 `data-club-name="${meta.shortName}"
@@ -730,10 +732,10 @@
             return `
     <div data-slot-wrapper>
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
-           ${dataAttrs} style="${disabledStyle}${isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+           ${dataAttrs} style="${disabledStyle}${isIsolated ? ' border: 2px solid rgba(255,215,0,1);' : isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${isEdge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${isIsolated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : isEdge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
       </div>
     </div>`;
@@ -746,6 +748,7 @@
             : 'Courts available';
 
         const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
+            const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
             const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
             return `<div class="bc-court-option"
             data-club-name="${meta.shortName}"
@@ -759,17 +762,17 @@
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
-            ${isEdge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
+            ${isIsolated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ isolated</span>' : isEdge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
         </div>`;
         }).join('');
 
         return `
     <div data-slot-wrapper>
       <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
-           style="${disabledStyle}${hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+           style="${disabledStyle}${hasIsolatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
-        ${hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${hasIsolatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
         <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
             ${expandedCourts}
