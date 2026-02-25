@@ -220,7 +220,10 @@
                             const court = courtByVersionId[versionId] || courtById[versionId] || {};
                             slotMap.get(slot.fromInMinutes).courts.push({
                                 courtId: court.courtId || versionId,
-                                courtName: court.courtName || null,
+                                // Ugh. The server adds a space at the end of "Pickleball 1" only 
+                                // for Santa Clara and only for that court. Clearly a bug on the
+                                // server end. We'll trim() here to be safe.
+                                courtName: court.courtName.trim() || null,
                                 courtOrder: court.order ?? 999,
                             });
                         }
@@ -1207,7 +1210,7 @@
             }
         }
     }
-    
+
     // Cache of hourly datetime string (e.g. '2024-01-15T07:00') -> { rainPct, code, cloudPct } so we only fetch weather once per session.
     const weather = {
         cache: {},
