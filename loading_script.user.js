@@ -503,7 +503,7 @@
     const SLIDER_MIN_MINUTES = 360;  // 6:00 am
     const SLIDER_MAX_MINUTES = 1320; // 10:00 pm
     const SLIDER_STEP_MINUTES = 30;
-    const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 28 intervals
+    const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 32 intervals (16 hours × 2)
 
     function getTimeRangeForSlider() {
         const saved = localStorage.getItem(TIME_RANGE_KEY);
