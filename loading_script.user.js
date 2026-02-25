@@ -1429,7 +1429,13 @@
         tryToAutoSelectPickleball();
     }
 
-    function createBookingFlowMonitor() {
+    const createBookingFlowMonitor = (() => {
+        let alreadyInitialized = false;
+
+        return function createBookingFlowMonitor() {
+            if (alreadyInitialized) return;
+            alreadyInitialized = true;
+
         const BOOKING_FLOW_CONTAINER_OBSERVER_KEY = 'booking-flow-container-observer';
         const BOOKING_FLOW_NAVIGATION_POLLER_KEY = 'booking-flow-navigation-poller';
         const BOOKING_FLOW_BOOTSTRAP_POLLER_KEY = 'booking-flow-bootstrap-poller';
@@ -1667,8 +1673,9 @@
             evaluateBookingFlowMonitoringState();
         }
 
-        initialize();
-    }
+            initialize();
+        };
+    })();
 
 
     function removeOurContentAndUnhideNativeContent() {
