@@ -384,6 +384,47 @@
     // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
     const DURATION_KEY = 'bc_duration';
 
+    const createLocalStorageService = (() => {
+        let serviceInstance = null;
+
+        return function createLocalStorageService() {
+            if (serviceInstance) return serviceInstance;
+
+            function getString(key) {
+                return localStorage.getItem(key);
+            }
+
+            function setString(key, value) {
+                localStorage.setItem(key, value);
+            }
+
+            function getJson(key, parseErrorLogMessage) {
+                const raw = localStorage.getItem(key);
+                if (raw === null) return null;
+                try {
+                    return JSON.parse(raw);
+                } catch (_e) {
+                    if (parseErrorLogMessage) {
+                        console.log(parseErrorLogMessage);
+                    }
+                    return null;
+                }
+            }
+
+            function setJson(key, value) {
+                localStorage.setItem(key, JSON.stringify(value));
+            }
+
+            serviceInstance = {
+                getString,
+                setString,
+                getJson,
+                setJson,
+            };
+            return serviceInstance;
+        };
+    })();
+
     const createPreferenceAutoSelectService = (() => {
         let serviceInstance = null;
 
@@ -403,7 +444,7 @@
                     const isDuration = labels.includes('30 minutes');
                     if (!isPlayers && !isDuration) return;
                     const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
-                    const saved = localStorage.getItem(key);
+                    const saved = createLocalStorageService().getString(key);
                     if (saved) {
                         const buttons = Array.from(group.querySelectorAll('.btn'));
                         const btn = buttons.find(b => b.textContent.trim() === saved);
@@ -438,9 +479,9 @@
                         const labels = Array.from(group.querySelectorAll('.btn'))
                             .map(b => b.textContent.trim());
                         if (labels.includes('Singles')) {
-                            localStorage.setItem(PLAYERS_KEY, btn.textContent.trim());
+                            createLocalStorageService().setString(PLAYERS_KEY, btn.textContent.trim());
                         } else if (labels.includes('30 minutes')) {
-                            localStorage.setItem(DURATION_KEY, btn.textContent.trim());
+                            createLocalStorageService().setString(DURATION_KEY, btn.textContent.trim());
                         }
                     });
                     container.dataset.bcListening = 'true';
@@ -483,26 +524,20 @@
     const CLUB_ORDER_KEY = 'bc_club_order';
 
     function getClubOrder() {
-        const saved = localStorage.getItem(CLUB_ORDER_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                // Validate that it contains exactly our club IDs
-                if (parsed.length === Object.values(CLUBS).length &&
-                    parsed.every(id => Object.values(CLUBS).includes(id))) {
-                    return parsed;
-                }
-            } catch (_e) {
-                console.log('[bc] failed to parse stored club order JSON');
-            }
+        const parsed = createLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
+        if (Array.isArray(parsed) &&
+            parsed.length === Object.values(CLUBS).length &&
+            parsed.every(id => Object.values(CLUBS).includes(id))) {
+            // Validate that it contains exactly our club IDs.
+            return parsed;
         }
 
-        // Default order
+        // Default order.
         return [CLUBS.redwoodShores, CLUBS.broadway, CLUBS.southSF, CLUBS.santaClara];
     }
 
     function saveClubOrder(order) {
-        localStorage.setItem(CLUB_ORDER_KEY, JSON.stringify(order));
+        createLocalStorageService().setJson(CLUB_ORDER_KEY, order);
     }
 
     function injectClubOrderWidget() {
@@ -602,11 +637,11 @@
     const VIEW_MODE_BY_TIME = 'by-time';
 
     function getViewMode() {
-        return localStorage.getItem(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
+        return createLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
     }
 
     function saveViewMode(mode) {
-        localStorage.setItem(VIEW_MODE_KEY, mode);
+        createLocalStorageService().setString(VIEW_MODE_KEY, mode);
     }
 
     function initViewToggle(anchorElement) {
@@ -629,19 +664,15 @@
     const INDOOR_ONLY_KEY = 'bc_indoor_only';
 
     function getShowIndoorClubsOnly() {
-        const saved = localStorage.getItem(INDOOR_ONLY_KEY);
-        if (saved !== null) {
-            try {
-                return JSON.parse(saved);
-            } catch (_e) {
-                console.log('[bc] failed to parse stored indoor-only JSON');
-            }
+        const saved = createLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
+        if (typeof saved === 'boolean') {
+            return saved;
         }
         return false;
     }
 
     function saveShowIndoorClubsOnly(value) {
-        localStorage.setItem(INDOOR_ONLY_KEY, JSON.stringify(value));
+        createLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
     }
 
     function buildShowIndoorCourtsOnlyToggleHtml() {
@@ -674,22 +705,17 @@
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 32 intervals (16 hours × 2)
 
     function getTimeRangeForSlider() {
-        const saved = localStorage.getItem(TIME_RANGE_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
-                    return parsed;
-                }
-            } catch (_e) {
-                console.log('[bc] failed to parse stored time range JSON');
-            }
+        const parsed = createLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
+        if (parsed &&
+            typeof parsed.startMinutes === 'number' &&
+            typeof parsed.endMinutes === 'number') {
+            return parsed;
         }
         return { startMinutes: SLIDER_MIN_MINUTES, endMinutes: SLIDER_MAX_MINUTES };
     }
 
     function saveTimeRangeForSlider(startMinutes, endMinutes) {
-        localStorage.setItem(TIME_RANGE_KEY, JSON.stringify({ startMinutes, endMinutes }));
+        createLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
     }
 
     function minutesToSliderPercent(minutes) {
