@@ -1182,7 +1182,6 @@
         // reliable URL updates or consistently observable history events. In practice we may see
         // no pushState/replaceState/popstate for transitions that still require cleanup/re-init.
         // So we use event hooks first, plus polling as a reliability backstop.
-        let backToHomeObserver = null;
         let containerChangeObserver = null;
         let navigationPollTimer = null;
         let bootstrapPollTimer = null;
@@ -1190,6 +1189,7 @@
         let isMonitoringBookingFlow = false;
         let historyMonitoringInstalled = false;
         let visibilityMonitoringInstalled = false;
+        let backToHomeClickMonitoringInstalled = false;
         let bookingDomTasksScheduled = false;
 
         function isOnBookingFlowUrl() {
@@ -1208,27 +1208,26 @@
             });
         }
 
-        // If the user selects BACK TO HOME, we need to clean ourselves up, cancel requests, etc.
-        function startBackToHomeObserver() {
-            if (backToHomeObserver) return;
-            backToHomeObserver = new MutationObserver(() => {
-                document.querySelectorAll('img[src="assets/back.svg"]').forEach(backImg => {
-                    const container = backImg.closest('[class*="col"]');
-                    if (container && !container.dataset.bcIntercepted) {
-                        container.dataset.bcIntercepted = 'true';
-                        container.addEventListener('click', () => {
-                            clearBookingStateAndUi();
-                        }, true); // capture: true, no stopPropagation — Angular handles navigation
-                    }
-                });
-            });
-            backToHomeObserver.observe(document.body, { childList: true, subtree: true });
-        }
+        // Handle both mobile and desktop back controls via one delegated capture listener.
+        // This avoids scanning the whole DOM on mutations just to attach click handlers.
+        function installBackToHomeClickMonitoring() {
+            if (backToHomeClickMonitoringInstalled) return;
+            backToHomeClickMonitoringInstalled = true;
 
-        function stopBackToHomeObserver() {
-            if (!backToHomeObserver) return;
-            backToHomeObserver.disconnect();
-            backToHomeObserver = null;
+            document.addEventListener('click', event => {
+                const target = event.target;
+                if (!(target instanceof Element)) return;
+                const pageTitle = target.closest('app-page-title');
+                if (!pageTitle) return;
+
+                // Mobile back icon.
+                const hitBackIcon = !!target.closest('img[src="assets/back.svg"]');
+                // Desktop "BACK TO HOME" clickable text path.
+                const hitBackText = !!target.closest('span.clickable.font-weight-bold.text-uppercase');
+                if (!hitBackIcon && !hitBackText) return;
+
+                clearBookingStateAndUi();
+            }, true);
         }
 
         // As a single page app, we get very few hints as to when the user has taken action that causes
@@ -1289,7 +1288,6 @@
             isMonitoringBookingFlow = true;
             stopBootstrapPoller();
             if (document.visibilityState === 'hidden') return;
-            startBackToHomeObserver();
             startContainerChangeObserver();
             startNavigationPoller();
             // Run once immediately so controls are auto-selected even before the next mutation tick.
@@ -1299,7 +1297,6 @@
         function stopBookingFlowMonitoring() {
             if (!isMonitoringBookingFlow) return;
             isMonitoringBookingFlow = false;
-            stopBackToHomeObserver();
             stopContainerChangeObserver();
             stopNavigationPoller();
             if (document.visibilityState !== 'hidden') {
@@ -1350,7 +1347,6 @@
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden') {
                     // Pause all monitoring work while the tab is hidden.
-                    stopBackToHomeObserver();
                     stopContainerChangeObserver();
                     stopNavigationPoller();
                     stopBootstrapPoller();
@@ -1362,7 +1358,6 @@
                 if (isMonitoringBookingFlow) {
                     // If we were actively monitoring booking flow before hiding, restore the active
                     // observers and poller first, then immediately reconcile to catch latent DOM changes.
-                    startBackToHomeObserver();
                     startContainerChangeObserver();
                     startNavigationPoller();
                     evaluateBookingFlowMonitoringState();
@@ -1383,6 +1378,7 @@
             // Start in lightweight mode and let state evaluation upgrade to active mode if needed.
             installHistoryMonitoring();
             installVisibilityMonitoring();
+            installBackToHomeClickMonitoring();
             startBootstrapPoller();
             evaluateBookingFlowMonitoringState();
         }
