@@ -1128,15 +1128,21 @@
         removeOurContentAndUnhideNativeContent();
     }
 
-    function isCourtBookingTitleVisible() {
-        // Check both mobile and desktop title render paths by scanning all uppercase page-title labels.
-        return Array.from(document.querySelectorAll('app-page-title .text-uppercase'))
-            .some(el => el.textContent.trim() === 'COURT BOOKING');
-    }
-
     function hasHourViewControlsVisible() {
         return Array.from(document.querySelectorAll('app-time-slot-view-type-select .btn'))
             .some(btn => btn.textContent.trim().startsWith('HOUR VIEW'));
+    }
+
+    function hasBookingFlowShellVisible() {
+        const title = document.querySelector('app-page-title');
+        if (!title) return false;
+
+        // Support both mobile and desktop variants by looking for the shared back icon in the page title.
+        return !!title.querySelector('img[src="assets/back.svg"]');
+    }
+
+    function hasTimeSlotHostsVisible() {
+        return !!document.querySelector('.item-tile, .d-md-none.px-3');
     }
 
     function hasDurationAndPlayersFilterVisible() {
@@ -1144,11 +1150,13 @@
     }
 
     function runBookingDomTasks() {
-        // When the app returns to the generic COURT BOOKING screen, clear any injected slot UI.
-        // We gate this on missing Hour View controls so we do not clear while on the actual slot screen.
-        // We also require that the duration/player filter is absent, because that filter screen still
-        // needs auto-selection and club-order widget injection even though its title is COURT BOOKING.
-        if (isCourtBookingTitleVisible() && !hasHourViewControlsVisible() && !hasDurationAndPlayersFilterVisible()) {
+        // Clear injected slot UI only when we are inside the booking flow shell but none of the
+        // supported booking-step hosts are present. This avoids brittle title-text matching and
+        // preserves behavior on the duration/player screen where controls still need augmentation.
+        if (hasBookingFlowShellVisible() &&
+            !hasTimeSlotHostsVisible() &&
+            !hasHourViewControlsVisible() &&
+            !hasDurationAndPlayersFilterVisible()) {
             pendingSlotBooking = null;
             removeOurContentAndUnhideNativeContent();
             return;
