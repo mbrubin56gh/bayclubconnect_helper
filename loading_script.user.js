@@ -843,95 +843,100 @@
     </div>`;
     }
 
-    function createTimeRangeSliderController() {
-        function init(container) {
-            const sliderContainer = container.querySelector('.bc-slider-container');
-            const fill = container.querySelector('.bc-slider-fill');
-            const label = container.querySelector('.bc-time-range-label');
-            const startHandle = container.querySelector('.bc-slider-start');
-            const endHandle = container.querySelector('.bc-slider-end');
-            if (!sliderContainer || !fill || !label || !startHandle || !endHandle) return;
+    const createTimeRangeSliderController = (() => {
+        let serviceInstance = null;
 
-            let { startMinutes, endMinutes } = getTimeRangeForSlider();
-            let dragging = null;
+        return function createTimeRangeSliderController() {
+            if (serviceInstance) return serviceInstance;
 
-            function updateUi() {
-                const startPct = minutesToSliderPercent(startMinutes);
-                const endPct = minutesToSliderPercent(endMinutes);
-                startHandle.style.left = `${startPct}%`;
-                endHandle.style.left = `${endPct}%`;
-                fill.style.left = `${startPct}%`;
-                fill.style.right = `${100 - endPct}%`;
-                label.textContent = `${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}`;
-            }
+            function init(container) {
+                const sliderContainer = container.querySelector('.bc-slider-container');
+                const fill = container.querySelector('.bc-slider-fill');
+                const label = container.querySelector('.bc-time-range-label');
+                const startHandle = container.querySelector('.bc-slider-start');
+                const endHandle = container.querySelector('.bc-slider-end');
+                if (!sliderContainer || !fill || !label || !startHandle || !endHandle) return;
 
-            function removeDragListeners() {
-                document.removeEventListener('mousemove', onPointerMove);
-                document.removeEventListener('touchmove', onPointerMove);
-                document.removeEventListener('mouseup', onPointerUp);
-                document.removeEventListener('touchend', onPointerUp);
-                document.removeEventListener('touchcancel', onDragCancel);
-                window.removeEventListener('blur', onDragCancel);
-            }
+                let { startMinutes, endMinutes } = getTimeRangeForSlider();
+                let dragging = null;
 
-            function addDragListeners() {
-                document.addEventListener('mousemove', onPointerMove);
-                document.addEventListener('touchmove', onPointerMove, { passive: false });
-                document.addEventListener('mouseup', onPointerUp);
-                document.addEventListener('touchend', onPointerUp);
-                document.addEventListener('touchcancel', onDragCancel);
-                window.addEventListener('blur', onDragCancel);
-            }
-
-            function onPointerMove(event) {
-                if (!dragging) return;
-                const rect = sliderContainer.getBoundingClientRect();
-                const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-                const pct = Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
-                const snapped = sliderPercentToMinutes(pct);
-
-                if (dragging === 'start') {
-                    startMinutes = Math.min(snapped, endMinutes - SLIDER_STEP_MINUTES);
-                } else {
-                    endMinutes = Math.max(snapped, startMinutes + SLIDER_STEP_MINUTES);
+                function updateUi() {
+                    const startPct = minutesToSliderPercent(startMinutes);
+                    const endPct = minutesToSliderPercent(endMinutes);
+                    startHandle.style.left = `${startPct}%`;
+                    endHandle.style.left = `${endPct}%`;
+                    fill.style.left = `${startPct}%`;
+                    fill.style.right = `${100 - endPct}%`;
+                    label.textContent = `${minutesToHumanTime(startMinutes)} – ${minutesToHumanTime(endMinutes)}`;
                 }
-                updateUi();
+
+                function removeDragListeners() {
+                    document.removeEventListener('mousemove', onPointerMove);
+                    document.removeEventListener('touchmove', onPointerMove);
+                    document.removeEventListener('mouseup', onPointerUp);
+                    document.removeEventListener('touchend', onPointerUp);
+                    document.removeEventListener('touchcancel', onDragCancel);
+                    window.removeEventListener('blur', onDragCancel);
+                }
+
+                function addDragListeners() {
+                    document.addEventListener('mousemove', onPointerMove);
+                    document.addEventListener('touchmove', onPointerMove, { passive: false });
+                    document.addEventListener('mouseup', onPointerUp);
+                    document.addEventListener('touchend', onPointerUp);
+                    document.addEventListener('touchcancel', onDragCancel);
+                    window.addEventListener('blur', onDragCancel);
+                }
+
+                function onPointerMove(event) {
+                    if (!dragging) return;
+                    const rect = sliderContainer.getBoundingClientRect();
+                    const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+                    const pct = Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
+                    const snapped = sliderPercentToMinutes(pct);
+
+                    if (dragging === 'start') {
+                        startMinutes = Math.min(snapped, endMinutes - SLIDER_STEP_MINUTES);
+                    } else {
+                        endMinutes = Math.max(snapped, startMinutes + SLIDER_STEP_MINUTES);
+                    }
+                    updateUi();
+                }
+
+                function onPointerUp() {
+                    if (!dragging) return;
+                    dragging = null;
+                    saveTimeRangeForSlider(startMinutes, endMinutes);
+                    // Re-filter visible slots.
+                    createAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
+                    removeDragListeners();
+                }
+
+                function onDragCancel() {
+                    if (!dragging) return;
+                    dragging = null;
+                    removeDragListeners();
+                }
+
+                function startDrag(type, event) {
+                    dragging = type;
+                    removeDragListeners();
+                    addDragListeners();
+                    event.preventDefault();
+                }
+
+                [startHandle, endHandle].forEach(handle => {
+                    handle.addEventListener('mousedown', event => startDrag(handle.dataset.type, event));
+                    handle.addEventListener('touchstart', event => startDrag(handle.dataset.type, event), { passive: false });
+                });
             }
 
-            function onPointerUp() {
-                if (!dragging) return;
-                dragging = null;
-                saveTimeRangeForSlider(startMinutes, endMinutes);
-                // Re-filter visible slots.
-                createAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
-                removeDragListeners();
-            }
-
-            function onDragCancel() {
-                if (!dragging) return;
-                dragging = null;
-                removeDragListeners();
-            }
-
-            function startDrag(type, event) {
-                dragging = type;
-                removeDragListeners();
-                addDragListeners();
-                event.preventDefault();
-            }
-
-            [startHandle, endHandle].forEach(handle => {
-                handle.addEventListener('mousedown', event => startDrag(handle.dataset.type, event));
-                handle.addEventListener('touchstart', event => startDrag(handle.dataset.type, event), { passive: false });
-            });
-        }
-
-        return {
-            init,
+            serviceInstance = {
+                init,
+            };
+            return serviceInstance;
         };
-    }
-
-    const timeRangeSliderController = createTimeRangeSliderController();
+    })();
 
 
     // Create a data structure well-tailored for rendering our slots by time of day per club.
@@ -1271,7 +1276,7 @@
 
                 // Add our time range slider widget.
                 const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
-                if (sliderWidget) timeRangeSliderController.init(sliderWidget);
+                if (sliderWidget) createTimeRangeSliderController().init(sliderWidget);
                 initViewToggle(anchorElement);
                 applyFilters(startMinutes, endMinutes);
 
