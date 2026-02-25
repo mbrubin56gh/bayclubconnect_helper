@@ -1129,6 +1129,14 @@
     }
 
     function createBookingFlowMonitor() {
+        // Keep watcher lifecycle state private so we don't leak more script-level mutable state.
+        // This monitor has two modes:
+        // 1) Active booking mode: observers + fast URL pollers are on.
+        // 2) Bootstrap mode: only a slow re-entry poller is on.
+        // Why we need both: this Angular SPA often swaps what look like full screens without
+        // reliable URL updates or consistently observable history events. In practice we may see
+        // no pushState/replaceState/popstate for transitions that still require cleanup/re-init.
+        // So we use event hooks first, plus polling as a reliability backstop.
         let backToHomeObserver = null;
         let containerChangeObserver = null;
         let navigationPollTimer = null;
@@ -1184,6 +1192,9 @@
         function startNavigationPoller() {
             if (navigationPollTimer) return;
             lastObservedHref = location.href;
+            // Fast poll while inside booking flow. The UI can transition to/from booking sub-screens
+            // without a dependable history signal, and sometimes without a visible URL change until
+            // after Angular has already swapped DOM. This catches those transitions quickly.
             navigationPollTimer = setInterval(() => {
                 if (location.href === lastObservedHref) return;
                 lastObservedHref = location.href;
@@ -1199,6 +1210,8 @@
 
         function startBootstrapPoller() {
             if (bootstrapPollTimer) return;
+            // Slow poll outside booking flow to detect eventual re-entry while avoiding always-on
+            // heavy observers/polling on unrelated app pages.
             bootstrapPollTimer = setInterval(() => {
                 if (isOnBookingFlowUrl()) {
                     evaluateBookingFlowMonitoringState();
@@ -1219,6 +1232,7 @@
             startBackToHomeObserver();
             startContainerChangeObserver();
             startNavigationPoller();
+            // Run once immediately so controls are auto-selected even before the next mutation tick.
             runBookingDomTasks();
         }
 
@@ -1236,6 +1250,7 @@
                 startBookingFlowMonitoring();
                 return;
             }
+            // Only clear/stop when transitioning from active booking mode.
             if (!isMonitoringBookingFlow) return;
             clearBookingStateAndUi();
             stopBookingFlowMonitoring();
@@ -1248,6 +1263,7 @@
             const originalPushState = history.pushState;
             const originalReplaceState = history.replaceState;
 
+            // We still hook history because it does fire sometimes; when it doesn't, pollers cover gaps.
             history.pushState = function (...args) {
                 originalPushState.apply(this, args);
                 evaluateBookingFlowMonitoringState();
@@ -1262,6 +1278,7 @@
         }
 
         function initialize() {
+            // Start in lightweight mode and let state evaluation upgrade to active mode if needed.
             installHistoryMonitoring();
             startBootstrapPoller();
             evaluateBookingFlowMonitoringState();
