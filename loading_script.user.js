@@ -340,66 +340,80 @@
     // Use this key to store the previously selected duration for a booking (30, 60, or 90 minutes).
     const DURATION_KEY = 'bc_duration';
 
-    // Set to true while programmatically clicking a fallback duration so the save listener skips it.
-    let suppressDurationSave = false;
+    const createPreferenceAutoSelectService = (() => {
+        let serviceInstance = null;
 
-    // The native app does not remember the previously selected player count and duration, so
-    // we augment it here to do that.
-    function tryToAutoSelectDurationAndPlayers() {
-        document.querySelectorAll('app-button-select .btn-group').forEach(group => {
-            if (group.dataset.bcAutoSelected) return;
-            const labels = Array.from(group.querySelectorAll('.btn'))
-                .map(b => b.textContent.trim());
-            const isPlayers = labels.includes('Singles');
-            const isDuration = labels.includes('30 minutes');
-            if (!isPlayers && !isDuration) return;
-            const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
-            const saved = localStorage.getItem(key);
-            if (saved) {
-                const buttons = Array.from(group.querySelectorAll('.btn'));
-                const btn = buttons.find(b => b.textContent.trim() === saved);
-                if (btn) {
-                    if (!btn.classList.contains('btn-selected')) btn.click();
-                } else if (isDuration) {
-                    // Saved duration isn't available (e.g. 90 min saved but max is 60 min).
-                    // Click the highest available option without overwriting the saved preference.
-                    const parseMinutes = b => parseInt(b.textContent.trim()) || 0;
-                    const fallbackBtn = buttons.reduce((best, b) => parseMinutes(b) > parseMinutes(best) ? b : best);
-                    if (!fallbackBtn.classList.contains('btn-selected')) {
-                        suppressDurationSave = true;
-                        fallbackBtn.click();
-                        suppressDurationSave = false;
+        return function createPreferenceAutoSelectService() {
+            if (serviceInstance) return serviceInstance;
+            // Set to true while programmatically clicking a fallback duration so the save listener skips it.
+            let suppressDurationSave = false;
+
+            // The native app does not remember the previously selected player count and duration, so
+            // we augment it here to do that.
+            function tryToAutoSelectDurationAndPlayers() {
+                document.querySelectorAll('app-button-select .btn-group').forEach(group => {
+                    if (group.dataset.bcAutoSelected) return;
+                    const labels = Array.from(group.querySelectorAll('.btn'))
+                        .map(b => b.textContent.trim());
+                    const isPlayers = labels.includes('Singles');
+                    const isDuration = labels.includes('30 minutes');
+                    if (!isPlayers && !isDuration) return;
+                    const key = isPlayers ? PLAYERS_KEY : DURATION_KEY;
+                    const saved = localStorage.getItem(key);
+                    if (saved) {
+                        const buttons = Array.from(group.querySelectorAll('.btn'));
+                        const btn = buttons.find(b => b.textContent.trim() === saved);
+                        if (btn) {
+                            if (!btn.classList.contains('btn-selected')) btn.click();
+                        } else if (isDuration) {
+                            // Saved duration is not available (for example: 90 min saved but max is 60 min).
+                            // Click the highest available option without overwriting the saved preference.
+                            const parseMinutes = b => parseInt(b.textContent.trim()) || 0;
+                            const fallbackBtn = buttons.reduce((best, b) => parseMinutes(b) > parseMinutes(best) ? b : best);
+                            if (!fallbackBtn.classList.contains('btn-selected')) {
+                                suppressDurationSave = true;
+                                fallbackBtn.click();
+                                suppressDurationSave = false;
+                            }
+                        }
                     }
-                }
+                    group.dataset.bcAutoSelected = 'true';
+                });
             }
-            group.dataset.bcAutoSelected = 'true';
-        });
-    }
 
-    function autoSelectPlayersAndDuration() {
-        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
-        if (!container) return;
+            function autoSelectPlayersAndDuration() {
+                const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+                if (!container) return;
 
-        if (!container.dataset.bcListening) {
-            // Save player selection on click via delegation.
-            container.addEventListener('click', e => {
-                const btn = e.target.closest('app-button-select .btn');
-                if (!btn || suppressDurationSave) return;
-                const group = btn.closest('.btn-group');
-                const labels = Array.from(group.querySelectorAll('.btn'))
-                    .map(b => b.textContent.trim());
-                if (labels.includes('Singles')) {
-                    localStorage.setItem(PLAYERS_KEY, btn.textContent.trim());
-                } else if (labels.includes('30 minutes')) {
-                    localStorage.setItem(DURATION_KEY, btn.textContent.trim());
+                if (!container.dataset.bcListening) {
+                    // Save player selection on click via delegation.
+                    container.addEventListener('click', e => {
+                        const btn = e.target.closest('app-button-select .btn');
+                        if (!btn || suppressDurationSave) return;
+                        const group = btn.closest('.btn-group');
+                        const labels = Array.from(group.querySelectorAll('.btn'))
+                            .map(b => b.textContent.trim());
+                        if (labels.includes('Singles')) {
+                            localStorage.setItem(PLAYERS_KEY, btn.textContent.trim());
+                        } else if (labels.includes('30 minutes')) {
+                            localStorage.setItem(DURATION_KEY, btn.textContent.trim());
+                        }
+                    });
+                    container.dataset.bcListening = 'true';
                 }
-            });
-            container.dataset.bcListening = 'true';
-        }
 
-        // Auto-select saved player preference.
-        tryToAutoSelectDurationAndPlayers();
-    }
+                // Auto-select saved player preference.
+                tryToAutoSelectDurationAndPlayers();
+            }
+
+            serviceInstance = {
+                autoSelectPlayersAndDuration,
+            };
+            return serviceInstance;
+        };
+    })();
+
+    const preferenceAutoSelectService = createPreferenceAutoSelectService();
 
     // Some clubs only let you reserve pickleball courts, but some offer the option to
     // reserve tennis and/or squash courts as well. Let's automatically select the pickleball
@@ -1240,7 +1254,7 @@
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
             }
-            autoSelectPlayersAndDuration();
+            preferenceAutoSelectService.autoSelectPlayersAndDuration();
         }
         tryToAutoSelectPickleball();
     }

@@ -88,6 +88,7 @@ The script uses a booking-flow monitor with lifecycle management:
   Weather data and cache are encapsulated in an in-file `createWeatherService()` closure with a narrow API (`whenReady`, `emojiForHour`, `rainPctForHour`).
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
+- **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `createPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
 
 ## Code Conventions
 
@@ -104,6 +105,7 @@ The script uses a booking-flow monitor with lifecycle management:
 ## Global State (intentional)
 
 Most mutable booking/network state is encapsulated in a singleton in-file service (`getBookingStateService()`), rather than free-floating script-level variables.
+Duration/player preference auto-selection also uses an in-file closure service (`createPreferenceAutoSelectService()`) so transient selection-suppression state is not exposed at script scope.
 
 - `lastFetchState` — `{ transformed, params, failedClubIds }` — the last fetched and transformed availability data plus request params and per-club failure markers
 - `pendingSlotBooking` — `{ clubId, courtId, date, fromMinutes, toMinutes }` — set when user selects a slot, consumed by the XHR interceptor
