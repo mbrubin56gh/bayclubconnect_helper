@@ -356,11 +356,15 @@
     function getClubOrder() {
         const saved = localStorage.getItem(CLUB_ORDER_KEY);
         if (saved) {
-            const parsed = JSON.parse(saved);
-            // Validate that it contains exactly our club IDs
-            if (parsed.length === Object.values(CLUBS).length &&
-                parsed.every(id => Object.values(CLUBS).includes(id))) {
-                return parsed;
+            try {
+                const parsed = JSON.parse(saved);
+                // Validate that it contains exactly our club IDs
+                if (parsed.length === Object.values(CLUBS).length &&
+                    parsed.every(id => Object.values(CLUBS).includes(id))) {
+                    return parsed;
+                }
+            } catch (e) {
+                console.log('[bc] failed to parse stored club order JSON');
             }
         }
 
@@ -471,7 +475,13 @@
 
     function getShowIndoorClubsOnly() {
         const saved = localStorage.getItem(INDOOR_ONLY_KEY);
-        if (saved !== null) return JSON.parse(saved);
+        if (saved !== null) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                console.log('[bc] failed to parse stored indoor-only JSON');
+            }
+        }
         return false;
     }
 
@@ -511,9 +521,13 @@
     function getTimeRangeForSlider() {
         const saved = localStorage.getItem(TIME_RANGE_KEY);
         if (saved) {
-            const parsed = JSON.parse(saved);
-            if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
-                return parsed;
+            try {
+                const parsed = JSON.parse(saved);
+                if (typeof parsed.startMinutes === 'number' && typeof parsed.endMinutes === 'number') {
+                    return parsed;
+                }
+            } catch (e) {
+                console.log('[bc] failed to parse stored time range JSON');
             }
         }
         return { startMinutes: SLIDER_MIN_MINUTES, endMinutes: SLIDER_MAX_MINUTES };
