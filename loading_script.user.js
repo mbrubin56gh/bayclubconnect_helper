@@ -1282,20 +1282,20 @@
 
                 // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
                 const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
-                weatherService.whenReady().then(() => {
+                createWeatherService().whenReady().then(() => {
                     const widget = anchorElement.querySelector('.bc-time-range-widget');
                     if (!widget) return;
                     widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
                         if (tickDiv.querySelector('.bc-weather-tick')) return;
                         const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
-                        const emoji = weatherService.emojiForHour(fetchDate, fromMinutes);
+                        const emoji = createWeatherService().emojiForHour(fetchDate, fromMinutes);
                         if (!emoji) return;
                         const emojiEl = document.createElement('div');
                         emojiEl.className = 'bc-weather-tick';
                         emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
                         emojiEl.textContent = emoji;
                         if (RAIN_EMOJIS.includes(emoji)) {
-                            const pct = weatherService.rainPctForHour(fetchDate, fromMinutes);
+                            const pct = createWeatherService().rainPctForHour(fetchDate, fromMinutes);
                             if (pct != null) {
                                 const pctEl = document.createElement('div');
                                 pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
@@ -1866,7 +1866,6 @@
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
     const bookingFlowMonitor = createBookingFlowMonitor();
-    const weatherService = createWeatherService();
     installXhrInterceptors();
     createCardSelectionStyle();
     bookingFlowMonitor.initialize();
