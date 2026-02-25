@@ -700,7 +700,7 @@
     }
 
     // Create a data structure well-tailored for rendering our slots by time of day per club.
-    function buildClubIndex(transformed) {
+    function buildClubIndex(transformed, failedClubIds) {
         const allClubIds = [];
         const clubMeta = {};
         const byClubAndTod = {};
@@ -713,6 +713,13 @@
                 }
                 if (!byClubAndTod[club.clubId]) byClubAndTod[club.clubId] = {};
                 byClubAndTod[club.clubId][tod] = club.availabilities;
+            }
+        }
+
+        for (const clubId of failedClubIds) {
+            if (!clubMeta[clubId]) {
+                allClubIds.push(clubId);
+                clubMeta[clubId] = { shortName: CLUB_SHORT_NAMES[clubId] || clubId, code: '' };
             }
         }
 
@@ -806,8 +813,9 @@
     </div>`;
     }
 
-    function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate) {
+    function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet) {
         const meta = clubMeta[clubId];
+        const fetchFailed = failedClubIdsSet.has(clubId);
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
 
         let html = `
@@ -819,7 +827,12 @@
             <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">There are available slots at this location, but none match your time range filter.</div>
         </div>`;
 
-        if (!hasAnySlots) {
+        if (fetchFailed) {
+            html += `
+      <div class="row">
+        <div class="col text-center" style="color: rgba(255,180,120,0.95); font-size: 12px; padding: 8px 0;">Could not load availability for this location. Try again in a moment.</div>
+      </div>`;
+        } else if (!hasAnySlots) {
             html += `
       <div class="row">
         <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">No courts available for this location on this date.</div>
@@ -852,7 +865,7 @@
         return html;
     }
 
-    function buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate) {
+    function buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet) {
         // Collect all slots across all clubs, keyed by fromInMinutes.
         // Iterating allClubIds first preserves club preference order within each time group.
         const slotsByTime = new Map();
@@ -866,6 +879,9 @@
         }
 
         const sortedTimes = [...slotsByTime.keys()].sort((a, b) => a - b);
+        if (sortedTimes.length === 0 && failedClubIdsSet.size > 0) {
+            return `<div style="color: rgba(255,180,120,0.95); padding: 20px 0; text-align: center;">Some locations failed to load availability. Please try again.</div>`;
+        }
         if (sortedTimes.length === 0) {
             return `<div style="color: rgba(255,255,255,0.4); padding: 20px 0; text-align: center;">No courts available for this date.</div>`;
         }
@@ -900,6 +916,16 @@
         return selectedBookingInfoHolder;
     }
 
+    function buildFailedClubsWarningHtml(failedClubIdsSet) {
+        if (failedClubIdsSet.size === 0) return '';
+
+        const labels = Array.from(failedClubIdsSet).map(clubId => CLUB_SHORT_NAMES[clubId] || clubId);
+        return `
+    <div style="margin: 0 8px 16px; padding: 8px 12px; border-radius: 4px; border: 1px solid rgba(255,180,120,0.7); background: rgba(255,180,120,0.1); color: rgba(255,210,170,0.98); font-size: 12px;">
+        Could not load availability for: ${labels.join(', ')}.
+    </div>`;
+    }
+
     function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
         const limitDate = new Date();
         limitDate.setDate(limitDate.getDate() + 3);
@@ -907,20 +933,22 @@
         const mins = limitDate.getMinutes();
         limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
 
-        const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed);
+        const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
+        const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
 
         const { startMinutes, endMinutes } = getTimeRangeForSlider();
         let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
         html += buildShowIndoorCourtsOnlyToggleHtml();
         html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
         html += buildViewToggleHtml();
+        html += buildFailedClubsWarningHtml(failedClubIdsSet);
 
         // Render the time slots in the selected layout mode.
         if (getViewMode() === VIEW_MODE_BY_TIME) {
-            html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate);
+            html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
         } else {
             for (const clubId of allClubIds) {
-                html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate);
+                html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
             }
         }
 
@@ -1196,7 +1224,7 @@
         const signal = currentAbortController.signal;
 
         try {
-            const results = await Promise.all(Object.values(CLUBS).map(clubId => {
+            const settled = await Promise.all(Object.values(CLUBS).map(clubId => {
                 const timeSlotId = CLUB_MAX_TIMESLOT[clubId] &&
                     params.timeSlotId === TIMESLOTS.min90
                     ? CLUB_MAX_TIMESLOT[clubId]
@@ -1210,10 +1238,29 @@
                         'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
                         'Accept': 'application/json',
                     }
-                }).then(r => r.json());
+                }).then(async r => {
+                    if (!r.ok) {
+                        throw new Error(`HTTP ${r.status}`);
+                    }
+                    return { clubId, data: await r.json() };
+                }).catch(error => {
+                    if (error?.name === 'AbortError') throw error;
+                    return { clubId, error };
+                });
             }));
 
-            lastFetchState = { transformed: transformAvailability(results), params };
+            const successfulResults = [];
+            const failedClubIds = [];
+            settled.forEach(result => {
+                if (result.error) {
+                    failedClubIds.push(result.clubId);
+                    console.log(`[bc] failed to fetch availability for ${CLUB_SHORT_NAMES[result.clubId] || result.clubId}:`, result.error);
+                } else {
+                    successfulResults.push(result.data);
+                }
+            });
+
+            lastFetchState = { transformed: transformAvailability(successfulResults), params, failedClubIds };
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
