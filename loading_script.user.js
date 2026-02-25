@@ -125,10 +125,15 @@
         };
     })();
 
-    function createXhrMetadataStore() {
+    function installXhrInterceptors() {
+        const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+        const originalXhrOpen = XMLHttpRequest.prototype.open;
+        const originalXhrSend = XMLHttpRequest.prototype.send;
+        const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
         const metadataByRequest = new WeakMap();
+        let lastBookingRequestId = null;
 
-        function getOrCreate(xhr) {
+        function getOrCreateRequestMetadata(xhr) {
             let metadata = metadataByRequest.get(xhr);
             if (!metadata) {
                 metadata = {};
@@ -138,7 +143,7 @@
         }
 
         function setRequestId(xhr, requestId) {
-            getOrCreate(xhr).requestId = requestId;
+            getOrCreateRequestMetadata(xhr).requestId = requestId;
         }
 
         function getRequestId(xhr) {
@@ -146,7 +151,7 @@
         }
 
         function setRequestInfo(xhr, method, url) {
-            const metadata = getOrCreate(xhr);
+            const metadata = getOrCreateRequestMetadata(xhr);
             metadata.method = method;
             metadata.url = url;
         }
@@ -157,29 +162,13 @@
             return { method: metadata.method, url: metadata.url };
         }
 
-        return {
-            setRequestId,
-            getRequestId,
-            setRequestInfo,
-            getRequestInfo,
-        };
-    }
-
-    function installXhrInterceptors() {
-        const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
-        const originalXhrOpen = XMLHttpRequest.prototype.open;
-        const originalXhrSend = XMLHttpRequest.prototype.send;
-        const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
-        let lastBookingRequestId = null;
-        const xhrMetadataStore = createXhrMetadataStore();
-
         XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             // Capture these so we can authenticate our own requests to the Bay Club's APIs.
             if (name === 'Authorization' || name === 'X-SessionId') {
                 createBookingStateService().captureHeader(name, value);
             }
             if (name === 'Request-Id') {
-                xhrMetadataStore.setRequestId(this, value);
+                setRequestId(this, value);
             }
             return originalSetRequestHeader.apply(this, arguments);
         };
@@ -218,7 +207,7 @@
                     }
                 });
             }
-            xhrMetadataStore.setRequestInfo(this, method, url);
+            setRequestInfo(this, method, url);
             return originalXhrOpen.apply(this, [method, url, ...rest]);
         };
 
@@ -226,7 +215,7 @@
             // Detect the native app's native request for court availability and use it to add our own
             // for data we actually want based on what our user selected for duration across
             // all clubs.
-            const requestInfo = xhrMetadataStore.getRequestInfo(this);
+            const requestInfo = getRequestInfo(this);
             const requestUrl = requestInfo?.url;
             const requestMethod = requestInfo?.method;
 
@@ -256,7 +245,7 @@
                 }
 
                 // Dedupe any requests, just in case.
-                const requestId = xhrMetadataStore.getRequestId(this);
+                const requestId = getRequestId(this);
                 if (requestId && requestId === lastBookingRequestId) {
                     return;
                 }
