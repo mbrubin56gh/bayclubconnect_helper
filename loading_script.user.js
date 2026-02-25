@@ -64,6 +64,7 @@
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     const originalXhrOpen = XMLHttpRequest.prototype.open;
     const originalXhrSend = XMLHttpRequest.prototype.send;
+    const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
 
     XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
         // Capture these so we can authenticate our own requests to the Bay Club's APIs.
@@ -77,38 +78,39 @@
     };
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-        this.addEventListener('load', function () {
-            // We need Angular to think there is at least one available time slot for the native
-            // app's default selected club so Angular will render that slot in the hour view. 
-            // Without that Angular rendered slot, we're not able to drive the Angular state
-            // machine forward to issue a booking request after one of our slots is selected:
-            // we fake a click on that slot, which allows the click on the Next button in the
-            // hour view to issue the booking request and render the partner selector (we make
-            // sure that the only booking requests that actually go out from the hour view are
-            // our own). So we need to make sure the request for court availabilities for the home
-            // club for a date always returns at least one slot. We do that here.
+        if (typeof url === 'string' && url.includes(AVAILABILITY_API_PATH)) {
+            this.addEventListener('load', function () {
+                // We need Angular to think there is at least one available time slot for the native
+                // app's default selected club so Angular will render that slot in the hour view.
+                // Without that Angular rendered slot, we're not able to drive the Angular state
+                // machine forward to issue a booking request after one of our slots is selected:
+                // we fake a click on that slot, which allows the click on the Next button in the
+                // hour view to issue the booking request and render the partner selector (we make
+                // sure that the only booking requests that actually go out from the hour view are
+                // our own). So we need to make sure the request for court availabilities for the home
+                // club for a date always returns at least one slot. We do that here.
 
-            if (this.status < 200 || this.status >= 300) return;
-            if (!this.responseText || this.responseText.trim() === '') return;
-            try {
-                const data = JSON.parse(this.responseText);
-                if (!data.clubsAvailabilities) return;
-                const clubAvail = data.clubsAvailabilities[0];
-                const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
-                // If the club actually has availability for that date, we're good!
-                if (slotCount > 0) return;
-                // Let's make sure some court was returned to us in the API response so we can
-                // use it to synthesize an available slot for it.
-                const court = clubAvail?.courts?.[0];
-                if (!court) return;
-                // Let's make up a slot.
-                clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
-                Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
-                Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data), configurable: true });
-            } catch (e) {
-                console.log('[bc] error:', e);
-            }
-        });
+                if (this.status < 200 || this.status >= 300) return;
+                if (!this.responseText || this.responseText.trim() === '') return;
+                try {
+                    const data = JSON.parse(this.responseText);
+                    if (!data.clubsAvailabilities) return;
+                    const clubAvail = data.clubsAvailabilities[0];
+                    const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
+                    // If the club actually has availability for that date, we are good.
+                    if (slotCount > 0) return;
+                    // Make sure a real court is present so we can synthesize one fake slot.
+                    const court = clubAvail?.courts?.[0];
+                    if (!court) return;
+                    // Inject one synthetic slot so Angular can continue its booking flow.
+                    clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
+                    Object.defineProperty(this, 'response', { get: () => JSON.stringify(data), configurable: true });
+                    Object.defineProperty(this, 'responseText', { get: () => JSON.stringify(data), configurable: true });
+                } catch (e) {
+                    console.log('[bc] error:', e);
+                }
+            });
+        }
         this._url = url;
         this._method = method;
         return originalXhrOpen.apply(this, [method, url, ...rest]);
@@ -124,7 +126,7 @@
             // Detect the native app's native request for court availability and use it to add our own
             // for data we actually want based on what our user selected for duration across
             // all clubs.
-            if (this._url && this._url.includes('court-booking/api/1.0/availability')) {
+            if (this._url && this._url.includes(AVAILABILITY_API_PATH)) {
                 const parsedUrl = new URL(this._url);
                 const params = {
                     date: parsedUrl.searchParams.get('date'),
