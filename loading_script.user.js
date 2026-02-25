@@ -223,7 +223,7 @@
                                 // Ugh. The server adds a space at the end of "Pickleball 1" only 
                                 // for Santa Clara and only for that court. Clearly a bug on the
                                 // server end. We'll trim() here to be safe.
-                                courtName: court.courtName.trim() || null,
+                                courtName: (court.courtName || '').trim() || null,
                                 courtOrder: court.order ?? 999,
                             });
                         }
