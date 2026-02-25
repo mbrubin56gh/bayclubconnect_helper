@@ -145,10 +145,12 @@
 
                 // Dedupe any requests, just in case.
                 const requestId = this._requestId;
-                if (requestId === lastBookingRequestId) {
+                if (requestId && requestId === lastBookingRequestId) {
                     return;
                 }
-                lastBookingRequestId = requestId;
+                if (requestId) {
+                    lastBookingRequestId = requestId;
+                }
 
                 const timeSlotId = CLUB_MAX_TIMESLOT[pendingSlotBooking.clubId] &&
                     lastFetchState.params.timeSlotId === TIMESLOTS.min90
