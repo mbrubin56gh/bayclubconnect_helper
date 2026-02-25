@@ -125,8 +125,6 @@
         };
     })();
 
-    const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
-
     function createXhrMetadataStore() {
         const metadataByRequest = new WeakMap();
 
@@ -171,6 +169,7 @@
         const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
         const originalXhrOpen = XMLHttpRequest.prototype.open;
         const originalXhrSend = XMLHttpRequest.prototype.send;
+        const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
         let lastBookingRequestId = null;
         const xhrMetadataStore = createXhrMetadataStore();
 
@@ -1290,6 +1289,7 @@
                 }
 
                 // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
+                const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
                 weatherService.whenReady().then(() => {
                     const widget = anchorElement.querySelector('.bc-time-range-widget');
                     if (!widget) return;
@@ -1781,8 +1781,6 @@
             }
         }
     }
-
-    const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
 
     const createWeatherService = (() => {
         let serviceInstance = null;
