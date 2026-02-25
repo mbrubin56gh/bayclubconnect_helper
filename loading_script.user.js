@@ -572,8 +572,6 @@
         };
     })();
 
-    const preferenceAutoSelectService = createPreferenceAutoSelectService();
-
     // Some clubs only let you reserve pickleball courts, but some offer the option to
     // reserve tennis and/or squash courts as well. Let's automatically select the pickleball
     // option if they do.
@@ -1427,7 +1425,7 @@
             if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
                 injectClubOrderWidget();
             }
-            preferenceAutoSelectService.autoSelectPlayersAndDuration();
+            createPreferenceAutoSelectService().autoSelectPlayersAndDuration();
         }
         tryToAutoSelectPickleball();
     }
