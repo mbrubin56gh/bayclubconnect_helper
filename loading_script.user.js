@@ -1233,6 +1233,164 @@
                 }
             }
 
+            function hideNativeAvailabilityContent(anchorElement) {
+                // Hide native content but keep it in the DOM so we can secretly select a slot when users pick one of ours.
+                Array.from(anchorElement.children).forEach(child => {
+                    if (!child.classList.contains('all-clubs-availability')) {
+                        child.style.display = 'none';
+                    }
+                });
+            }
+
+            function appendRenderedAvailabilityHtml(anchorElement, html) {
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = html;
+                anchorElement.appendChild(wrapper.firstChild);
+            }
+
+            function initializeRenderControls(anchorElement, startMinutes, endMinutes) {
+                const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
+                if (sliderWidget) createTimeRangeSliderController().init(sliderWidget);
+                initViewToggle(anchorElement);
+                applyFilters(startMinutes, endMinutes);
+            }
+
+            function bindIndoorOnlyToggle(anchorElement) {
+                const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
+                if (!indoorCheckbox) return;
+
+                indoorCheckbox.addEventListener('change', () => {
+                    saveShowIndoorClubsOnly(indoorCheckbox.checked);
+                    const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
+                    applyFilters(curStart, curEnd);
+                });
+            }
+
+            function appendWeatherTicksWhenReady(anchorElement, fetchDate) {
+                const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
+                createWeatherService().whenReady().then(() => {
+                    const widget = anchorElement.querySelector('.bc-time-range-widget');
+                    if (!widget) return;
+                    widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
+                        if (tickDiv.querySelector('.bc-weather-tick')) return;
+                        const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
+                        const emoji = createWeatherService().emojiForHour(fetchDate, fromMinutes);
+                        if (!emoji) return;
+                        const emojiEl = document.createElement('div');
+                        emojiEl.className = 'bc-weather-tick';
+                        emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
+                        emojiEl.textContent = emoji;
+                        if (RAIN_EMOJIS.includes(emoji)) {
+                            const pct = createWeatherService().rainPctForHour(fetchDate, fromMinutes);
+                            if (pct != null) {
+                                const pctEl = document.createElement('div');
+                                pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
+                                pctEl.textContent = `${pct}%`;
+                                emojiEl.appendChild(pctEl);
+                            }
+                        }
+                        tickDiv.appendChild(emojiEl);
+                    });
+                });
+            }
+
+            function bindSlotCardExpandCollapse(anchorElement) {
+                // Expand/collapse slot cards on click.
+                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+                    card.addEventListener('click', e => {
+                        if (card.classList.contains('time-slot-disabled')) return;
+                        if (e.target.closest('.bc-court-option')) return;
+
+                        const expand = card.querySelector('.bc-court-expand');
+                        if (!expand) return;
+
+                        const isOpen = expand.style.display !== 'none';
+                        const hasSelection = !!card.querySelector('.bc-court-option[data-selected]');
+
+                        // Toggle open/closed, but never collapse if a selection is active within.
+                        if (isOpen && !hasSelection) {
+                            expand.style.display = 'none';
+                        } else {
+                            expand.style.display = 'block';
+                        }
+                    });
+                });
+            }
+
+            function selectCourtOption(anchorElement, el) {
+                // Deselect any previously selected option.
+                anchorElement.querySelectorAll('.bc-court-option[data-selected]').forEach(prev => {
+                    prev.removeAttribute('data-selected');
+                });
+
+                // Collapse all expanded cards except the one containing the new selection.
+                // Collapsing is a consequence of selection, not of expansion.
+                const parentCard = el.closest('.bc-slot-card');
+                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
+                    if (card === parentCard) return;
+                    const otherExpand = card.querySelector('.bc-court-expand');
+                    if (otherExpand) otherExpand.style.display = 'none';
+                });
+
+                // Select this court option.
+                el.setAttribute('data-selected', '')
+
+                const lastFetchState = createBookingStateService().getLastFetchState();
+                if (!lastFetchState) return;
+                createBookingStateService().setPendingSlotBooking({
+                    clubId: el.dataset.clubId,
+                    courtId: el.dataset.courtId,
+                    date: lastFetchState.params.date,
+                    fromMinutes: parseInt(el.dataset.fromMinutes),
+                    toMinutes: parseInt(el.dataset.toMinutes),
+                });
+
+                const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                if (!bottomBar) return;
+                const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+
+                const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
+                if (nativeSlot) {
+                    nativeSlot.click();
+                    setTimeout(() => {
+                        const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                        if (nativeInfo) nativeInfo.style.display = 'none';
+                    }, 0);
+                } else {
+                    console.log("No native slot to click");
+                }
+
+                selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
+
+                const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                    .find(btn => btn.textContent.trim().includes('NEXT'));
+                if (nextButton) {
+                    nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
+                    nextButton.style.borderColor = 'rgb(0, 188, 212)';
+                    nextButton.style.opacity = '1';
+                    nextButton.style.cursor = 'pointer';
+                    nextButton.removeAttribute('disabled');
+                }
+            }
+
+            function bindCourtOptionSelection(anchorElement) {
+                // Select a specific court when an expanded court option or single-court card is clicked.
+                anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
+                    el.addEventListener('click', () => {
+                        selectCourtOption(anchorElement, el);
+                    });
+                });
+            }
+
+            function wirePostRenderInteractions(anchorElement, startMinutes, endMinutes, fetchDate) {
+                initializeRenderControls(anchorElement, startMinutes, endMinutes);
+                bindIndoorOnlyToggle(anchorElement);
+                appendWeatherTicksWhenReady(anchorElement, fetchDate);
+                initNextButton();
+                bindSlotCardExpandCollapse(anchorElement);
+                bindCourtOptionSelection(anchorElement);
+            }
+
             function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
                 const limitDate = new Date();
                 limitDate.setDate(limitDate.getDate() + 3);
@@ -1263,143 +1421,9 @@
 
                 html += `</div>`;
 
-                // Hide native content but keep it in DOM so we can secretly select a slot when the user selects one of ours.
-                Array.from(anchorElement.children).forEach(child => {
-                    if (!child.classList.contains('all-clubs-availability')) {
-                        child.style.display = 'none';
-                    }
-                });
-
-                // Append our content instead of replacing.
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = html;
-                anchorElement.appendChild(wrapper.firstChild);
-
-                // Add our time range slider widget.
-                const sliderWidget = anchorElement.querySelector('.bc-time-range-widget');
-                if (sliderWidget) createTimeRangeSliderController().init(sliderWidget);
-                initViewToggle(anchorElement);
-                applyFilters(startMinutes, endMinutes);
-
-                // Listen to our indoor courts only toggle.
-                const indoorCheckbox = anchorElement.querySelector('.bc-indoor-checkbox');
-                if (indoorCheckbox) {
-                    indoorCheckbox.addEventListener('change', () => {
-                        saveShowIndoorClubsOnly(indoorCheckbox.checked);
-                        const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
-                        applyFilters(curStart, curEnd);
-                    });
-                }
-
-                // Once weather data is ready, inject per-hour emoji below each hour label on the slider.
-                const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
-                createWeatherService().whenReady().then(() => {
-                    const widget = anchorElement.querySelector('.bc-time-range-widget');
-                    if (!widget) return;
-                    widget.querySelectorAll('[data-tick-minutes]').forEach(tickDiv => {
-                        if (tickDiv.querySelector('.bc-weather-tick')) return;
-                        const fromMinutes = parseInt(tickDiv.dataset.tickMinutes);
-                        const emoji = createWeatherService().emojiForHour(fetchDate, fromMinutes);
-                        if (!emoji) return;
-                        const emojiEl = document.createElement('div');
-                        emojiEl.className = 'bc-weather-tick';
-                        emojiEl.style.cssText = 'font-size: 12px; line-height: 1; margin-top: 2px; text-align: center;';
-                        emojiEl.textContent = emoji;
-                        if (RAIN_EMOJIS.includes(emoji)) {
-                            const pct = createWeatherService().rainPctForHour(fetchDate, fromMinutes);
-                            if (pct != null) {
-                                const pctEl = document.createElement('div');
-                                pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
-                                pctEl.textContent = `${pct}%`;
-                                emojiEl.appendChild(pctEl);
-                            }
-                        }
-                        tickDiv.appendChild(emojiEl);
-                    });
-                });
-
-                // We'll take over handling the Next button.
-                initNextButton();
-
-                // Expand/collapse slot cards on click.
-                anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
-                    card.addEventListener('click', e => {
-                        if (card.classList.contains('time-slot-disabled')) return;
-                        if (e.target.closest('.bc-court-option')) return;
-
-                        const expand = card.querySelector('.bc-court-expand');
-                        if (!expand) return;
-
-                        const isOpen = expand.style.display !== 'none';
-                        const hasSelection = !!card.querySelector('.bc-court-option[data-selected]');
-
-                        // Toggle open/closed, but never collapse if a selection is active within.
-                        if (isOpen && !hasSelection) {
-                            expand.style.display = 'none';
-                        } else {
-                            expand.style.display = 'block';
-                        }
-                    });
-                });
-
-                // Select a specific court when an expanded court option or single-court card is clicked.
-                anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
-                    el.addEventListener('click', () => {
-                        // Deselect any previously selected option.
-                        anchorElement.querySelectorAll('.bc-court-option[data-selected]').forEach(prev => {
-                            prev.removeAttribute('data-selected');
-                        });
-
-                        // Collapse all expanded cards except the one containing the new selection.
-                        // Collapsing is a consequence of selection, not of expansion.
-                        const parentCard = el.closest('.bc-slot-card');
-                        anchorElement.querySelectorAll('.bc-slot-card').forEach(card => {
-                            if (card === parentCard) return;
-                            const otherExpand = card.querySelector('.bc-court-expand');
-                            if (otherExpand) otherExpand.style.display = 'none';
-                        });
-
-                        // Select this court option.
-                        el.setAttribute('data-selected', '')
-
-                        const lastFetchState = createBookingStateService().getLastFetchState();
-                        if (!lastFetchState) return;
-                        createBookingStateService().setPendingSlotBooking({
-                            clubId: el.dataset.clubId,
-                            courtId: el.dataset.courtId,
-                            date: lastFetchState.params.date,
-                            fromMinutes: parseInt(el.dataset.fromMinutes),
-                            toMinutes: parseInt(el.dataset.toMinutes),
-                        });
-
-                        const bottomBar = document.querySelector('.white-bg.p-2 .container');
-                        if (!bottomBar) return;
-                        const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
-
-                        const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
-                        if (nativeSlot) {
-                            nativeSlot.click();
-                            setTimeout(() => {
-                                const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
-                                if (nativeInfo) nativeInfo.style.display = 'none';
-                            }, 0);
-                        } else {
-                            console.log("No native slot to click");
-                        }
-
-                        selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
-
-                        const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                            .find(btn => btn.textContent.trim().includes('NEXT'));
-                        if (nextButton) {
-                            nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
-                            nextButton.style.borderColor = 'rgb(0, 188, 212)';
-                            nextButton.style.opacity = '1';
-                            nextButton.style.cursor = 'pointer';
-                            nextButton.removeAttribute('disabled');
-                        }
-                    });
-                });
+                hideNativeAvailabilityContent(anchorElement);
+                appendRenderedAvailabilityHtml(anchorElement, html);
+                wirePostRenderInteractions(anchorElement, startMinutes, endMinutes, fetchDate);
             }
 
             serviceInstance = {
