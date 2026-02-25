@@ -16,6 +16,7 @@
 (function () {
     'use strict';
 
+    // #region Core constants and club metadata.
     // These are the uuids the app natively uses for each site.
     const CLUBS = {
         broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
@@ -54,7 +55,9 @@
     const ISOLATED_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
     }
+    // #endregion Core constants and club metadata.
 
+    // #region Booking state and XHR interception.
     const createBookingStateService = (() => {
         let serviceInstance = null;
 
@@ -285,7 +288,9 @@
             return originalXhrSend.apply(this, arguments);
         };
     }
+    // #endregion Booking state and XHR interception.
 
+    // #region Core time and availability transformations.
     // The app and its server natively represent court booking start and end times as minutes from midnight.
     // So, for example, a court availability start time of 7:00 AM is represented as 420 (7 hours past midnight
     // is 420 minutes).
@@ -377,7 +382,9 @@
             nextButton.style.cursor = '';
         }
     }
+    // #endregion Core time and availability transformations.
 
+    // #region DOM query and preference services.
     const createBookingDomQueryService = (() => {
         let serviceInstance = null;
 
@@ -938,8 +945,10 @@
             return serviceInstance;
         };
     })();
+    // #endregion DOM query and preference services.
 
 
+    // #region Availability rendering and interaction pipeline.
     // Create a data structure well-tailored for rendering our slots by time of day per club.
     function buildClubIndex(transformed, failedClubIds) {
         const allClubIds = [];
@@ -1433,7 +1442,9 @@
             return serviceInstance;
         };
     })();
+    // #endregion Availability rendering and interaction pipeline.
 
+    // #region Booking flow monitor and DOM injection.
     function clearBookingStateAndUi() {
         createBookingStateService().abortFetch();
         createBookingStateService().clearLastFetchState();
@@ -1768,7 +1779,9 @@
             createAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
     }
+    // #endregion Booking flow monitor and DOM injection.
 
+    // #region Cross-club fetch and weather enrichment.
     // Fetch availability info for all the clubs in parallel, and combine their results.
     async function fetchAllClubs(params) {
         const signal = createBookingStateService().beginFetch();
@@ -1886,7 +1899,9 @@
             return serviceInstance;
         };
     })();
+    // #endregion Cross-club fetch and weather enrichment.
 
+    // #region Startup installers and bootstrap.
     const createCardSelectionStyleInstaller = (() => {
         let alreadyInstalled = false;
 
@@ -1922,4 +1937,5 @@
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
     createBookingFlowMonitor();
+    // #endregion Startup installers and bootstrap.
 })();
