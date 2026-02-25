@@ -636,71 +636,76 @@
     `;
 
         container.insertAdjacentElement('afterend', widget);
-        clubOrderWidgetController.initDragAndDrop(widget);
+        createClubOrderWidgetController().initDragAndDrop(widget);
     }
 
-    function createClubOrderWidgetController() {
-        function updateListNumbering(list) {
-            list.querySelectorAll('.bc-club-order-item').forEach((el, i) => {
-                el.querySelectorAll('span')[1].textContent = `${i + 1}.`;
-            });
-        }
+    const createClubOrderWidgetController = (() => {
+        let serviceInstance = null;
 
-        function saveCurrentOrder(list) {
-            const newOrder = Array.from(list.querySelectorAll('.bc-club-order-item'))
-                .map(el => el.dataset.clubId);
-            saveClubOrder(newOrder);
-        }
+        return function createClubOrderWidgetController() {
+            if (serviceInstance) return serviceInstance;
 
-        function handleDragOver({ event, item, list, getDraggedItem }) {
-            event.preventDefault();
-            const draggedItem = getDraggedItem();
-            if (!draggedItem || item === draggedItem) return;
-
-            const rect = item.getBoundingClientRect();
-            const midY = rect.top + rect.height / 2;
-            if (event.clientY < midY) {
-                list.insertBefore(draggedItem, item);
-            } else {
-                list.insertBefore(draggedItem, item.nextSibling);
+            function updateListNumbering(list) {
+                list.querySelectorAll('.bc-club-order-item').forEach((el, i) => {
+                    el.querySelectorAll('span')[1].textContent = `${i + 1}.`;
+                });
             }
-        }
 
-        function initDragAndDrop(widget) {
-            const list = widget.querySelector('.bc-club-order-list');
-            if (!list) return;
+            function saveCurrentOrder(list) {
+                const newOrder = Array.from(list.querySelectorAll('.bc-club-order-item'))
+                    .map(el => el.dataset.clubId);
+                saveClubOrder(newOrder);
+            }
 
-            let draggedItem = null;
+            function handleDragOver({ event, item, list, getDraggedItem }) {
+                event.preventDefault();
+                const draggedItem = getDraggedItem();
+                if (!draggedItem || item === draggedItem) return;
 
-            list.querySelectorAll('.bc-club-order-item').forEach(item => {
-                item.addEventListener('dragstart', () => {
-                    draggedItem = item;
-                    // This is a workaround for a browser quirk where setting opacity during
-                    // dragstart affects the drag ghost image.
-                    setTimeout(() => {
-                        item.style.opacity = '0.4';
-                    }, 0);
+                const rect = item.getBoundingClientRect();
+                const midY = rect.top + rect.height / 2;
+                if (event.clientY < midY) {
+                    list.insertBefore(draggedItem, item);
+                } else {
+                    list.insertBefore(draggedItem, item.nextSibling);
+                }
+            }
+
+            function initDragAndDrop(widget) {
+                const list = widget.querySelector('.bc-club-order-list');
+                if (!list) return;
+
+                let draggedItem = null;
+
+                list.querySelectorAll('.bc-club-order-item').forEach(item => {
+                    item.addEventListener('dragstart', () => {
+                        draggedItem = item;
+                        // This is a workaround for a browser quirk where setting opacity during
+                        // dragstart affects the drag ghost image.
+                        setTimeout(() => {
+                            item.style.opacity = '0.4';
+                        }, 0);
+                    });
+
+                    item.addEventListener('dragend', () => {
+                        item.style.opacity = '1';
+                        draggedItem = null;
+                        updateListNumbering(list);
+                        saveCurrentOrder(list);
+                    });
+
+                    item.addEventListener('dragover', event => {
+                        handleDragOver({ event, item, list, getDraggedItem: () => draggedItem });
+                    });
                 });
+            }
 
-                item.addEventListener('dragend', () => {
-                    item.style.opacity = '1';
-                    draggedItem = null;
-                    updateListNumbering(list);
-                    saveCurrentOrder(list);
-                });
-
-                item.addEventListener('dragover', event => {
-                    handleDragOver({ event, item, list, getDraggedItem: () => draggedItem });
-                });
-            });
-        }
-
-        return {
-            initDragAndDrop,
+            serviceInstance = {
+                initDragAndDrop,
+            };
+            return serviceInstance;
         };
-    }
-
-    const clubOrderWidgetController = createClubOrderWidgetController();
+    })();
 
     // We use this to store whether the user prefers the BY CLUB or BY TIME layout.
     const VIEW_MODE_BY_CLUB = 'by-club';
