@@ -127,11 +127,52 @@
 
     const AVAILABILITY_API_PATH = 'court-booking/api/1.0/availability';
 
+    function createXhrMetadataStore() {
+        const metadataByRequest = new WeakMap();
+
+        function getOrCreate(xhr) {
+            let metadata = metadataByRequest.get(xhr);
+            if (!metadata) {
+                metadata = {};
+                metadataByRequest.set(xhr, metadata);
+            }
+            return metadata;
+        }
+
+        function setRequestId(xhr, requestId) {
+            getOrCreate(xhr).requestId = requestId;
+        }
+
+        function getRequestId(xhr) {
+            return metadataByRequest.get(xhr)?.requestId;
+        }
+
+        function setRequestInfo(xhr, method, url) {
+            const metadata = getOrCreate(xhr);
+            metadata.method = method;
+            metadata.url = url;
+        }
+
+        function getRequestInfo(xhr) {
+            const metadata = metadataByRequest.get(xhr);
+            if (!metadata) return null;
+            return { method: metadata.method, url: metadata.url };
+        }
+
+        return {
+            setRequestId,
+            getRequestId,
+            setRequestInfo,
+            getRequestInfo,
+        };
+    }
+
     function installXhrInterceptors() {
         const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
         const originalXhrOpen = XMLHttpRequest.prototype.open;
         const originalXhrSend = XMLHttpRequest.prototype.send;
         let lastBookingRequestId = null;
+        const xhrMetadataStore = createXhrMetadataStore();
 
         XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             // Capture these so we can authenticate our own requests to the Bay Club's APIs.
@@ -139,7 +180,7 @@
                 createBookingStateService().captureHeader(name, value);
             }
             if (name === 'Request-Id') {
-                this._requestId = value;
+                xhrMetadataStore.setRequestId(this, value);
             }
             return originalSetRequestHeader.apply(this, arguments);
         };
@@ -178,8 +219,7 @@
                     }
                 });
             }
-            this._url = url;
-            this._method = method;
+            xhrMetadataStore.setRequestInfo(this, method, url);
             return originalXhrOpen.apply(this, [method, url, ...rest]);
         };
 
@@ -187,8 +227,12 @@
             // Detect the native app's native request for court availability and use it to add our own
             // for data we actually want based on what our user selected for duration across
             // all clubs.
-            if (this._url && this._url.includes(AVAILABILITY_API_PATH)) {
-                const parsedUrl = new URL(this._url);
+            const requestInfo = xhrMetadataStore.getRequestInfo(this);
+            const requestUrl = requestInfo?.url;
+            const requestMethod = requestInfo?.method;
+
+            if (requestUrl && requestUrl.includes(AVAILABILITY_API_PATH)) {
+                const parsedUrl = new URL(requestUrl);
                 const params = {
                     date: parsedUrl.searchParams.get('date'),
                     categoryCode: parsedUrl.searchParams.get('categoryCode'),
@@ -201,9 +245,9 @@
 
             // Intercept the native app's booking request and replace it with our own
             // for the selected club and time slot.
-            if (this._url &&
-                this._url.match(/courtbookings$/) &&
-                this._method === 'POST' &&
+            if (requestUrl &&
+                requestUrl.match(/courtbookings$/) &&
+                requestMethod === 'POST' &&
                 createBookingStateService().getPendingSlotBooking()) {
 
                 const pendingSlotBooking = createBookingStateService().getPendingSlotBooking();
@@ -213,7 +257,7 @@
                 }
 
                 // Dedupe any requests, just in case.
-                const requestId = this._requestId;
+                const requestId = xhrMetadataStore.getRequestId(this);
                 if (requestId && requestId === lastBookingRequestId) {
                     return;
                 }

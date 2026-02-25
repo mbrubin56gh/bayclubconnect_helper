@@ -38,6 +38,7 @@ The script patches `XMLHttpRequest.prototype.open`, `send`, and `setRequestHeade
 3. Intercept the `courtbookings` POST and replace it with our own booking body (correct club, court, time)
 
 The monkey-patch wiring is installed through an in-file `installXhrInterceptors()` function so interceptor internals (including booking dedupe state) stay closure-scoped.
+Per-request XHR metadata (method, URL, Request-Id) is tracked in a closure-scoped `WeakMap` rather than custom properties on XHR instances.
 
 ## XHR Response Interception (Fake Slot Injection)
 
