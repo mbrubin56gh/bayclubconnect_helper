@@ -69,4 +69,8 @@ Here's a video of the extension in action:
 
 https://github.com/user-attachments/assets/279b8096-4b44-4f77-9dd7-5d1720e49518
 
+## Thanks
+
+Weather information is pulled from [Open-Meto](https://open-meteo.com/)
+
 
