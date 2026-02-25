@@ -104,6 +104,10 @@ The script uses a booking-flow monitor with lifecycle management:
   Time-range slider drag state is similarly scoped inside `createTimeRangeSliderController()`.
 - **Prefer service-shaped modules for non-trivial logic** — when logic has internal state or lifecycle, place it behind an in-file service/controller creator rather than free-floating functions and variables.
 - **Service creators own singleton behavior** — if a service should be singleton for the page lifecycle, implement singleton ownership inside the service creator itself.
+- **Use creator-owned access consistently** — call singleton-backed creators directly at usage sites (for example: `createWeatherService().whenReady()`), rather than storing script-scope service alias variables.
+- **Avoid two-phase initialization for services** — when feasible, let creators self-initialize and keep lifecycle guards inside the creator so startup is one-step and idempotent.
+- **Use guarded installer creators for one-time setup** — for setup work like style injection or monitor wiring, prefer creator-owned one-time guards instead of free-floating initialization flags.
+- **Lower constants to feature-local scope when practical** — keep constants near their usage to reduce script-wide surface area, while preserving shared enum constants where cross-feature reuse is intentional.
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
 - **Centralized local storage access** — preference persistence reads and writes flow through a singleton `createLocalStorageService()` creator so parsing, serialization, and parse-failure logging behavior are consistent.
@@ -111,7 +115,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
 - **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
 - **Group render orchestration in a pipeline service** — availability rendering and related filter application flow through `createAvailabilityRenderPipeline()` so UI assembly and post-render behavior stay coordinated in one module.
-- **Use a monitor-scoped resource registry for watcher lifecycle wiring** — booking-flow observer and poller resources are managed by `createBookingFlowMonitorResourceRegistry()` so start/stop paths are centralized and teardown behavior stays consistent.
+- **Use monitor-scoped lifecycle helpers for watcher wiring** — booking-flow observer and poller resources are managed through monitor-local keyed helper functions so start/stop paths are centralized and teardown behavior stays consistent.
 
 ## Global State (intentional)
 
