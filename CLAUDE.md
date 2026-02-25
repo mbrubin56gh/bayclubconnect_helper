@@ -8,6 +8,10 @@ A Tampermonkey userscript (`loading_script.user.js`) that improves the court boo
 
 This is a JavaScript project. Use JavaScript for all new files and modifications unless otherwise specified.
 
+Write comments as complete sentences that end in punctuation. Avoid abbreviations when reasonable so comments are easy to scan later.
+
+Prefer closures and other encapsulation techniques over free-floating global variables, and keep mutable state in the narrowest possible scope.
+
 After completing a set of changes, offer to commit and push with a descriptive commit message summarizing what changed.
 
 When resuming work from a previous session, start by reading recent git log and checking git status to understand current state.
@@ -58,7 +62,11 @@ The app is Angular-based. We can't easily drive its state machine directly, so w
 We hide (not remove) native content and inject our own `<div class="all-clubs-availability">` into two containers Angular uses for desktop (`.item-tile`) and mobile (`.d-md-none.px-3`). We re-inject whenever the MutationObserver detects container changes (e.g. date change).
 
 ### Navigation Cleanup
-We patch `history.pushState` and `history.replaceState` (and listen to `popstate`) to detect navigation away from the booking flow and clean up injected content. We also have an setInterval timer to look for URL changes. This is set up fresh each time we render, and tears itself down after firing once.
+The script uses a booking-flow monitor with lifecycle management:
+- It patches `history.pushState` and `history.replaceState` (and listens to `popstate`) to detect flow transitions when Angular emits them.
+- While on the booking flow, it runs active monitoring (MutationObservers plus a fast URL poll) to catch transitions that Angular performs without reliable history events.
+- Outside the booking flow, it tears down active monitoring and switches to a lightweight bootstrap poll that only checks for re-entry.
+- On exit from booking flow, it cleans up injected content, clears booking state, and aborts in-flight availability fetches.
 
 ## UI Features
 
@@ -76,7 +84,7 @@ We patch `history.pushState` and `history.replaceState` (and listen to `popstate
 
 - **Prefer `data-*` attributes over structural CSS selectors** for targeting injected elements
 - **Encode state in the DOM where possible** rather than global variables (e.g. `data-bc-auto-selected`, `data-selected`, `data-bc-intercepted`)
-- **Avoid timers and pollers** — use event-driven approaches (MutationObserver, patched history methods, DOM events)
+- **Prefer event-driven detection first, then add polling only as a reliability backstop** — this SPA sometimes does not emit dependable history signals, so scoped pollers are acceptable when lifecycle-managed
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
 - **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
 - **No external dependencies** — single self-contained userscript file
@@ -105,4 +113,4 @@ Single file: `loading_script.user.js`. The whole script is wrapped in an IIFE fo
 
 ## Linting
 
-ESLint with flat config (`eslint.config.mjs`). Parameters intentionally unused (e.g. in XHR overrides) are prefixed with `_` and ignored via `argsIgnorePattern: '^_'`. When you lint, check for function calls that don't agree with the arity of the functions being called.
+ESLint with flat config (`eslint.config.mjs`). Intentionally unused args, vars, and caught errors can be prefixed with `_` and are ignored by lint. When you lint, check for function calls that don't agree with the arity of the functions being called.
