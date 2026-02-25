@@ -1109,46 +1109,167 @@
         });
     }
 
-    // If the user selects BACK TO HOME, we need to clean ourselves up, cancel requests, etc.
-    function interceptBackToHomeButton() {
-        const observer = new MutationObserver(() => {
-            document.querySelectorAll('img[src="assets/back.svg"]').forEach(backImg => {
-                const container = backImg.closest('[class*="col"]');
-                if (container && !container.dataset.bcIntercepted) {
-                    container.dataset.bcIntercepted = 'true';
-                    container.addEventListener('click', () => {
-                        // Abort in-flight fetches
-                        if (currentAbortController) currentAbortController.abort();
-
-                        // Clear state
-                        lastFetchState = null;
-                        pendingSlotBooking = null;
-
-                        removeOurContentAndUnhideNativeContent();
-                    }, true); // capture: true, no stopPropagation — Angular handles navigation
-                }
-            });
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+    function clearBookingStateAndUi() {
+        if (currentAbortController) currentAbortController.abort();
+        lastFetchState = null;
+        pendingSlotBooking = null;
+        removeOurContentAndUnhideNativeContent();
     }
 
-    // As a single page app, we get very few hints as to when the user has taken action that causes
-    // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
-    // or popStates, etc. So we'll be a bit brute force here and watch for container changes. This is how
-    // we know to update our time slots for a new date, for example.
-    function watchForContainerChanges() {
-        const observer = new MutationObserver(() => {
-            injectIntoAllContainers();
-            const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
-            if (container) {
-                if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
-                    injectClubOrderWidget();
-                }
-                autoSelectPlayersAndDuration();
+    function runBookingDomTasks() {
+        injectIntoAllContainers();
+        const container = document.querySelector('app-racquet-sports-filter div.row.row-cols-auto');
+        if (container) {
+            if (!container.nextSibling?.classList?.contains('bc-club-order-widget')) {
+                injectClubOrderWidget();
             }
-            tryToAutoSelectPickleball();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+            autoSelectPlayersAndDuration();
+        }
+        tryToAutoSelectPickleball();
+    }
+
+    function createBookingFlowMonitor() {
+        let backToHomeObserver = null;
+        let containerChangeObserver = null;
+        let navigationPollTimer = null;
+        let bootstrapPollTimer = null;
+        let lastObservedHref = location.href;
+        let isMonitoringBookingFlow = false;
+        let historyMonitoringInstalled = false;
+
+        function isOnBookingFlowUrl() {
+            return location.href.includes('create-booking');
+        }
+
+        // If the user selects BACK TO HOME, we need to clean ourselves up, cancel requests, etc.
+        function startBackToHomeObserver() {
+            if (backToHomeObserver) return;
+            backToHomeObserver = new MutationObserver(() => {
+                document.querySelectorAll('img[src="assets/back.svg"]').forEach(backImg => {
+                    const container = backImg.closest('[class*="col"]');
+                    if (container && !container.dataset.bcIntercepted) {
+                        container.dataset.bcIntercepted = 'true';
+                        container.addEventListener('click', () => {
+                            clearBookingStateAndUi();
+                        }, true); // capture: true, no stopPropagation — Angular handles navigation
+                    }
+                });
+            });
+            backToHomeObserver.observe(document.body, { childList: true, subtree: true });
+        }
+
+        function stopBackToHomeObserver() {
+            if (!backToHomeObserver) return;
+            backToHomeObserver.disconnect();
+            backToHomeObserver = null;
+        }
+
+        // As a single page app, we get very few hints as to when the user has taken action that causes
+        // what appears to the user as a screen update: the URL rarely changes, we see very few pushStates
+        // or popStates, etc. We keep this observer active only while we're in the booking flow.
+        function startContainerChangeObserver() {
+            if (containerChangeObserver) return;
+            containerChangeObserver = new MutationObserver(() => {
+                runBookingDomTasks();
+            });
+            containerChangeObserver.observe(document.body, { childList: true, subtree: true });
+        }
+
+        function stopContainerChangeObserver() {
+            if (!containerChangeObserver) return;
+            containerChangeObserver.disconnect();
+            containerChangeObserver = null;
+        }
+
+        function startNavigationPoller() {
+            if (navigationPollTimer) return;
+            lastObservedHref = location.href;
+            navigationPollTimer = setInterval(() => {
+                if (location.href === lastObservedHref) return;
+                lastObservedHref = location.href;
+                evaluateBookingFlowMonitoringState();
+            }, 200);
+        }
+
+        function stopNavigationPoller() {
+            if (!navigationPollTimer) return;
+            clearInterval(navigationPollTimer);
+            navigationPollTimer = null;
+        }
+
+        function startBootstrapPoller() {
+            if (bootstrapPollTimer) return;
+            bootstrapPollTimer = setInterval(() => {
+                if (isOnBookingFlowUrl()) {
+                    evaluateBookingFlowMonitoringState();
+                }
+            }, 1000);
+        }
+
+        function stopBootstrapPoller() {
+            if (!bootstrapPollTimer) return;
+            clearInterval(bootstrapPollTimer);
+            bootstrapPollTimer = null;
+        }
+
+        function startBookingFlowMonitoring() {
+            if (isMonitoringBookingFlow) return;
+            isMonitoringBookingFlow = true;
+            stopBootstrapPoller();
+            startBackToHomeObserver();
+            startContainerChangeObserver();
+            startNavigationPoller();
+            runBookingDomTasks();
+        }
+
+        function stopBookingFlowMonitoring() {
+            if (!isMonitoringBookingFlow) return;
+            isMonitoringBookingFlow = false;
+            stopBackToHomeObserver();
+            stopContainerChangeObserver();
+            stopNavigationPoller();
+            startBootstrapPoller();
+        }
+
+        function evaluateBookingFlowMonitoringState() {
+            if (isOnBookingFlowUrl()) {
+                startBookingFlowMonitoring();
+                return;
+            }
+            if (!isMonitoringBookingFlow) return;
+            clearBookingStateAndUi();
+            stopBookingFlowMonitoring();
+        }
+
+        function installHistoryMonitoring() {
+            if (historyMonitoringInstalled) return;
+            historyMonitoringInstalled = true;
+
+            const originalPushState = history.pushState;
+            const originalReplaceState = history.replaceState;
+
+            history.pushState = function (...args) {
+                originalPushState.apply(this, args);
+                evaluateBookingFlowMonitoringState();
+            };
+
+            history.replaceState = function (...args) {
+                originalReplaceState.apply(this, args);
+                evaluateBookingFlowMonitoringState();
+            };
+
+            window.addEventListener('popstate', evaluateBookingFlowMonitoringState);
+        }
+
+        function initialize() {
+            installHistoryMonitoring();
+            startBootstrapPoller();
+            evaluateBookingFlowMonitoringState();
+        }
+
+        return {
+            initialize,
+        };
     }
 
 
@@ -1186,54 +1307,6 @@
         if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
             renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
         }
-    }
-
-    // When we navigate away from the booking screen, we want to clean up any of our injected content
-    // and restore whatever was there natively we might have hidden.
-    function watchForNavigationAwayFromBooking() {
-        let lastHref = location.href;
-
-        // Belt and suspenders. The push, pop, and replace state listeners might work, but this is
-        // a SPA and an Angular one at that, so it's not always easy to detect URL navigations.
-        // We set up an interval timer, too, just in case. This is what is handling clearing
-        // when we navigate to the bookings page (https://bayclubconnect.com/bookings).
-        setInterval(() => {
-            if (location.href === lastHref) return;
-            lastHref = location.href;
-
-            // If we've navigated away from the court booking flow, clean up.
-            if (!location.href.includes('create-booking')) {
-                removeOurContentAndUnhideNativeContent();
-                lastFetchState = null;
-                pendingSlotBooking = null;
-            }
-        }, 200);
-
-        const originalPushState = history.pushState;
-        const originalReplaceState = history.replaceState;
-
-        function onNavigate() {
-            if (!location.href.includes('create-booking')) {
-                history.pushState = originalPushState;
-                history.replaceState = originalReplaceState;
-                window.removeEventListener('popstate', onNavigate);
-                removeOurContentAndUnhideNativeContent();
-                lastFetchState = null;
-                pendingSlotBooking = null;
-            }
-        }
-
-        history.pushState = function (...args) {
-            originalPushState.apply(this, args);
-            onNavigate();
-        };
-
-        history.replaceState = function (...args) {
-            originalReplaceState.apply(this, args);
-            onNavigate();
-        };
-
-        window.addEventListener('popstate', onNavigate);
     }
 
     // Fetch availability info for all the clubs in parallel, and combine their results.
@@ -1366,9 +1439,8 @@
     }
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
+    const bookingFlowMonitor = createBookingFlowMonitor();
     createCardSelectionStyle();
-    interceptBackToHomeButton();
-    watchForContainerChanges();
-    watchForNavigationAwayFromBooking();
+    bookingFlowMonitor.initialize();
     weather.promise = fetchWeatherForecast();
 })();
