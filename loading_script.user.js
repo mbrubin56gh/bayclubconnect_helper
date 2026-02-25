@@ -1832,10 +1832,15 @@
         };
     })();
 
-    function createCardSelectionStyle() {
-        // Set up a style for selected card appearance.
-        const style = document.createElement('style');
-        style.textContent = `
+    const createCardSelectionStyleInstaller = (() => {
+        let alreadyInstalled = false;
+
+        return function createCardSelectionStyleInstaller() {
+            if (alreadyInstalled) return;
+            alreadyInstalled = true;
+            // Set up a style for selected card appearance.
+            const style = document.createElement('style');
+            style.textContent = `
     .bc-court-option[data-selected] {
         background-color: rgba(255,255,255,0.2) !important;
         outline: 1px solid rgba(255,255,255,0.5) !important;
@@ -1854,11 +1859,12 @@
         font-weight: 900;
     }
 `;
-        document.head.appendChild(style);
-    }
+            document.head.appendChild(style);
+        };
+    })();
 
     // Let's actually start our program! We'll keep watch on the DOM starting here.
     installXhrInterceptors();
-    createCardSelectionStyle();
+    createCardSelectionStyleInstaller();
     createBookingFlowMonitor();
 })();
