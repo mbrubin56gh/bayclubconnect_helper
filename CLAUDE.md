@@ -93,7 +93,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
 - **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `createPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
-- **Debug mode panel**: When debug mode is enabled, the injected availability UI includes a compact panel with a toggle plus `Copy logs`, `Download logs`, and `Clear logs` controls for support troubleshooting.
+- **Debug mode panel**: When debug mode is enabled, the injected availability UI includes a compact panel with a toggle plus `Copy logs`, `Email logs`, `Download logs`, and `Clear logs` controls for support troubleshooting.
 
 ## Debug Mode Activation And Logging
 
@@ -104,6 +104,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - Activation should set `bc_debug_enabled` to `'1'` and show a confirmation alert.
 - Debug entries are capped in a ring buffer (`MAX_DEBUG_ENTRIES`) and persisted so logs survive page refreshes.
 - Debug payloads must be sanitized before persistence or console output. Sensitive keys such as authorization, session, token, and request identifiers should be redacted.
+- The `Email logs` action should attempt to open a `mailto:` draft in a new tab first, with a same-tab fallback if pop-up policies block opening a new tab.
 - Debug panel action buttons should follow the same visual style as the helper controls and should not appear sticky after click.
 
 ## Code Conventions

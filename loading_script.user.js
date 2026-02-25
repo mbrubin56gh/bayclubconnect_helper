@@ -602,8 +602,23 @@
                 }).join('\n');
             }
 
+            function buildSupportPacketText() {
+                const lines = [
+                    'Bay Club helper debug report',
+                    `Generated: ${new Date().toISOString()}`,
+                    `Path: ${location.pathname}`,
+                    `Href: ${location.href}`,
+                    `User agent: ${navigator.userAgent}`,
+                    `Log entry count: ${logEntries.length}`,
+                    '',
+                    'Logs:',
+                    buildLogsText(),
+                ];
+                return lines.join('\n');
+            }
+
             async function copyLogsToClipboard() {
-                const text = buildLogsText();
+                const text = buildSupportPacketText();
                 if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
                     throw new Error('Clipboard API unavailable');
                 }
@@ -612,7 +627,7 @@
             }
 
             function downloadLogsFile() {
-                const text = buildLogsText();
+                const text = buildSupportPacketText();
                 const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
                 const anchor = document.createElement('a');
@@ -626,6 +641,24 @@
                 log('info', 'debug-log-downloaded', { lineCount: logEntries.length });
             }
 
+            function openEmailDraftWithLogs() {
+                const subject = `Bay Club helper debug logs ${new Date().toISOString().slice(0, 10)}`;
+                const fullBody = buildSupportPacketText();
+                const MAX_EMAIL_BODY_CHARS = 6000;
+                const truncatedBody = fullBody.length > MAX_EMAIL_BODY_CHARS
+                    ? `${fullBody.slice(0, MAX_EMAIL_BODY_CHARS)}\n\n[Truncated due to mailto length. Use Download logs for full report.]`
+                    : fullBody;
+                const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(truncatedBody)}`;
+                const opened = window.open(mailtoUrl, '_blank', 'noopener');
+                if (!opened) {
+                    window.location.href = mailtoUrl;
+                }
+                log('info', 'debug-email-draft-opened', {
+                    lineCount: logEntries.length,
+                    truncated: fullBody.length > MAX_EMAIL_BODY_CHARS,
+                });
+            }
+
             serviceInstance = {
                 setEnabled,
                 isEnabled,
@@ -633,6 +666,7 @@
                 getEntries,
                 clearEntries,
                 copyLogsToClipboard,
+                openEmailDraftWithLogs,
                 downloadLogsFile,
             };
             return serviceInstance;
@@ -736,6 +770,7 @@
         </div>
         <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
             <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-copy">Copy logs</button>
+            <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-email">Email logs</button>
             <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-download">Download logs</button>
             <button type="button" class="btn btn-outline-dark-grey size-10 py-2 bc-debug-action bc-debug-clear">Clear logs</button>
         </div>
@@ -1545,6 +1580,15 @@
                             createDebugService().log('error', 'debug-log-copy-failed', { message: error?.message || String(error) });
                             console.log('[bc] failed to copy debug logs:', error);
                         }
+                    });
+                }
+
+                const emailButton = panel.querySelector('.bc-debug-email');
+                if (emailButton) {
+                    emailButton.addEventListener('click', () => {
+                        createDebugService().openEmailDraftWithLogs();
+                        refreshEntryCount();
+                        emailButton.blur();
                     });
                 }
 
