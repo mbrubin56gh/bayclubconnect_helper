@@ -879,15 +879,28 @@
     }
 
     function injectDurationFlowDebugPanel(durationFilterContainer) {
-        // The duration screen can be re-rendered by Angular, so replace any previous panel first.
-        document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(panel => panel.remove());
         if (!getDebugService().isEnabled()) return;
 
         // Prefer rendering after the club-order widget when present so helper controls stay grouped.
         const anchor = durationFilterContainer.nextSibling?.classList?.contains('bc-club-order-widget')
             ? durationFilterContainer.nextSibling
             : durationFilterContainer;
-        anchor.insertAdjacentHTML('afterend', buildDebugPanelHtml(DEBUG_PANEL_SURFACE_DURATION));
+
+        const existingPanels = Array.from(document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`));
+        const anchoredPanel = anchor.nextElementSibling?.matches?.(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`)
+            ? anchor.nextElementSibling
+            : null;
+
+        // Keep exactly one duration-surface panel attached to the current anchor.
+        // Recreating this panel on every mutation can race with user interaction.
+        existingPanels.forEach(panel => {
+            if (panel !== anchoredPanel) panel.remove();
+        });
+
+        if (!anchoredPanel) {
+            anchor.insertAdjacentHTML('afterend', buildDebugPanelHtml(DEBUG_PANEL_SURFACE_DURATION));
+        }
+
         bindDebugPanelControls(document);
         refreshAllDebugPanelEntryCounts();
     }
@@ -2716,6 +2729,14 @@
         border-color: #a6aaae;
         background-color: rgba(255, 255, 255, 0.06);
         font-weight: 700;
+    }
+    .bc-debug-panel {
+        position: relative;
+        z-index: 2;
+        pointer-events: auto;
+    }
+    .bc-debug-panel * {
+        pointer-events: auto;
     }
     .bc-debug-panel .btn.btn-outline-dark-grey:hover {
         color: #fff;
