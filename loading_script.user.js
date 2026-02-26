@@ -1440,14 +1440,12 @@
                 saveClubOrder(newOrder);
             }
 
-            function handleDragOver({ event, item, list, getDraggedItem }) {
-                event.preventDefault();
-                const draggedItem = getDraggedItem();
+            function reorderDraggedItemWithinList({ list, item, draggedItem, clientY }) {
                 if (!draggedItem || item === draggedItem) return;
 
                 const rect = item.getBoundingClientRect();
                 const midY = rect.top + rect.height / 2;
-                if (event.clientY < midY) {
+                if (clientY < midY) {
                     list.insertBefore(draggedItem, item);
                 } else {
                     list.insertBefore(draggedItem, item.nextSibling);
@@ -1459,6 +1457,42 @@
                 if (!list) return;
 
                 let draggedItem = null;
+                let touchDraggedItem = null;
+
+                function finalizeReorder(item) {
+                    if (!item) return;
+                    item.style.opacity = '1';
+                    updateListNumbering(list);
+                    saveCurrentOrder(list);
+                }
+
+                function onTouchMove(event) {
+                    if (!touchDraggedItem) return;
+                    const touch = event.touches && event.touches[0];
+                    if (!touch) return;
+
+                    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                    const overItem = target?.closest('.bc-club-order-item');
+                    if (!overItem || overItem.closest('.bc-club-order-list') !== list) return;
+
+                    event.preventDefault();
+                    reorderDraggedItemWithinList({
+                        list,
+                        item: overItem,
+                        draggedItem: touchDraggedItem,
+                        clientY: touch.clientY,
+                    });
+                }
+
+                function stopTouchDrag() {
+                    if (!touchDraggedItem) return;
+                    const item = touchDraggedItem;
+                    touchDraggedItem = null;
+                    document.removeEventListener('touchmove', onTouchMove);
+                    document.removeEventListener('touchend', stopTouchDrag);
+                    document.removeEventListener('touchcancel', stopTouchDrag);
+                    finalizeReorder(item);
+                }
 
                 list.querySelectorAll('.bc-club-order-item').forEach(item => {
                     item.addEventListener('dragstart', () => {
@@ -1471,14 +1505,27 @@
                     });
 
                     item.addEventListener('dragend', () => {
-                        item.style.opacity = '1';
+                        finalizeReorder(item);
                         draggedItem = null;
-                        updateListNumbering(list);
-                        saveCurrentOrder(list);
                     });
 
                     item.addEventListener('dragover', event => {
-                        handleDragOver({ event, item, list, getDraggedItem: () => draggedItem });
+                        event.preventDefault();
+                        reorderDraggedItemWithinList({
+                            list,
+                            item,
+                            draggedItem,
+                            clientY: event.clientY,
+                        });
+                    });
+
+                    item.addEventListener('touchstart', event => {
+                        if (!event.touches || event.touches.length !== 1) return;
+                        touchDraggedItem = item;
+                        item.style.opacity = '0.4';
+                        document.addEventListener('touchmove', onTouchMove, { passive: false });
+                        document.addEventListener('touchend', stopTouchDrag);
+                        document.addEventListener('touchcancel', stopTouchDrag);
                     });
                 });
             }
