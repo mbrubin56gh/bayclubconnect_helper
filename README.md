@@ -57,6 +57,8 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 
 - Once you're on the bookings page, you'll see links to add your booking to Google calendar or to download more generically the calendar entry to add on your own to your calendar application.
 
+<img width="834" height="300" alt="Screenshot 2026-02-25 at 7 20 41 PM" src="https://github.com/user-attachments/assets/f3e2eecb-8cd6-4f08-a4ff-e1622dfdc3af" />
+
 ## Debugging
 
 If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
