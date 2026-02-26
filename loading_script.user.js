@@ -1566,6 +1566,8 @@
 
     // Availability filtering and rendering orchestration are encapsulated in this pipeline service.
     const getAvailabilityRenderPipeline = (() => {
+        // Bay Club allows booking at most this many days in advance.
+        const BOOKING_ADVANCE_DAYS = 3;
         let serviceInstance = null;
 
         return function getAvailabilityRenderPipeline() {
@@ -1791,7 +1793,7 @@
 
             function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
                 const limitDate = new Date();
-                limitDate.setDate(limitDate.getDate() + 3);
+                limitDate.setDate(limitDate.getDate() + BOOKING_ADVANCE_DAYS);
                 // Floor to current 30-minute window start.
                 const mins = limitDate.getMinutes();
                 limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
