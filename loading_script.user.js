@@ -725,6 +725,13 @@
             }
 
             function activateDebugMode(source) {
+                if (getDebugService().isEnabled()) {
+                    getDebugService().log('info', 'debug-mode-activation-ignored-already-enabled', {
+                        source,
+                        path: location.pathname,
+                    });
+                    return;
+                }
                 getDebugService().setEnabled(true);
                 getDebugService().log('info', 'debug-mode-activated', {
                     source,
