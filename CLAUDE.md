@@ -61,8 +61,8 @@ Note: `configurable: true` is required on the `Object.defineProperty` calls to a
 property is defined more than once.
 
 ### Angular State Machine Hack
-The app is Angular-based. We can't easily drive its state machine directly, so when a user selects one of our injected slots, we secretly click a native Angular time slot to advance Angular's state. We then intercept the outgoing booking request and replace it with our own. This means the native club must have at least one available slot on the selected date — if not, we show a warning.
-
+The app is Angular-based. We can't easily drive its state machine directly, so when a user selects one of our injected slots, we secretly click a native Angular time slot to advance Angular's state. We then intercept the outgoing booking request and replace it with our own. This means the native club must have at least one available slot on the selected date.  See the documentation for XHR Response Interception (Fake Slot Injection) on how we ensure that there is always an available slot on the selected date, even if we have to synthesize falsely that slot.
+ 
 ### DOM Injection
 We hide (not remove) native content and inject our own `<div class="all-clubs-availability">` into two containers Angular uses for desktop (`.item-tile`) and mobile (`.d-md-none.px-3`). We re-inject whenever the MutationObserver detects container changes (e.g. date change).
 
