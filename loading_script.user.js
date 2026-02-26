@@ -893,6 +893,275 @@
     }
     // #endregion Debug mode service, panel, and activation.
 
+    // #region Bookings page calendar export.
+    const createBookingsCalendarExportInstaller = (() => {
+        let alreadyInitialized = false;
+
+        return function createBookingsCalendarExportInstaller() {
+            if (alreadyInitialized) return;
+            alreadyInitialized = true;
+
+            let reconcileScheduled = false;
+
+            function isOnBookingsPage() {
+                return location.pathname === '/bookings';
+            }
+
+            function normalizeWhitespace(value) {
+                return (value || '').replace(/\s+/g, ' ').trim();
+            }
+
+            function simplifyClubName(clubName) {
+                return normalizeWhitespace(clubName).replace(/^Bay Club\s+/i, '');
+            }
+
+            function extractCourtDisplayName(courtText) {
+                const normalized = normalizeWhitespace(courtText);
+                const numberMatch = normalized.match(/(\d+)/);
+                if (numberMatch) return `Court ${numberMatch[1]}`;
+                return normalized || 'Court';
+            }
+
+            function parseDayLabel(dayLabel) {
+                const normalized = normalizeWhitespace(dayLabel).toLowerCase();
+                const baseDate = new Date();
+                baseDate.setHours(0, 0, 0, 0);
+                if (normalized === 'today') return new Date(baseDate);
+                if (normalized === 'tomorrow') {
+                    const tomorrow = new Date(baseDate);
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    return tomorrow;
+                }
+
+                const parsed = new Date(dayLabel);
+                if (!Number.isNaN(parsed.getTime())) {
+                    parsed.setHours(0, 0, 0, 0);
+                    return parsed;
+                }
+                return null;
+            }
+
+            function timePartsTo24Hour(hour12, minute, meridiem) {
+                const normalizedHour = hour12 % 12;
+                if (meridiem === 'PM') return normalizedHour + 12;
+                return normalizedHour;
+            }
+
+            function inferStartHour24(startHour12, endHour24) {
+                const startAm = startHour12 % 12;
+                const startPm = (startHour12 % 12) + 12;
+                const minuteCandidates = [startAm, startPm];
+                const plausible = minuteCandidates.filter(candidate => {
+                    const delta = endHour24 - candidate;
+                    return delta >= 0 && delta <= 4;
+                });
+                if (plausible.length > 0) return plausible[0];
+
+                const byDistance = minuteCandidates
+                    .map(candidate => ({ candidate, distance: Math.abs(candidate - endHour24) }))
+                    .sort((a, b) => a.distance - b.distance);
+                return byDistance[0].candidate;
+            }
+
+            function parseTimeRange(timeText) {
+                const match = normalizeWhitespace(timeText).match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+                if (!match) return null;
+                const startHour12 = parseInt(match[1], 10);
+                const startMinute = parseInt(match[2], 10);
+                const endHour12 = parseInt(match[3], 10);
+                const endMinute = parseInt(match[4], 10);
+                const endMeridiem = match[5].toUpperCase();
+
+                const endHour24 = timePartsTo24Hour(endHour12, endMinute, endMeridiem);
+                const startHour24 = inferStartHour24(startHour12, endHour24);
+                return {
+                    startHour24,
+                    startMinute,
+                    endHour24,
+                    endMinute,
+                };
+            }
+
+            function findDesktopTile(eventElement) {
+                return eventElement.querySelector('.item-tile.d-none.d-md-flex');
+            }
+
+            function extractBookingData(eventElement) {
+                const desktopTile = findDesktopTile(eventElement);
+                if (!desktopTile) return null;
+
+                const dayLabel = normalizeWhitespace(desktopTile.querySelector('.col-2 div:first-child')?.textContent);
+                const timeRangeText = normalizeWhitespace(desktopTile.querySelector('.col-2 div:nth-child(2)')?.textContent);
+                const club = normalizeWhitespace(desktopTile.querySelector('.col-3 div:first-child')?.textContent);
+                const shortClubName = simplifyClubName(club);
+                const court = normalizeWhitespace(desktopTile.querySelector('.col-3 div:nth-child(2)')?.textContent);
+                const courtDisplayName = extractCourtDisplayName(court);
+                const playersLine = normalizeWhitespace(Array.from(desktopTile.querySelectorAll('.size-12'))
+                    .map(node => node.textContent)
+                    .find(text => (text || '').includes('Players:')) || '');
+                const participantNames = Array.from(desktopTile.querySelectorAll('app-racquet-sports-booking-player'))
+                    .map(player => normalizeWhitespace(player.textContent))
+                    .filter(Boolean)
+                    .filter(name => name.toLowerCase() !== 'you');
+                if (!dayLabel || !timeRangeText) return null;
+
+                const bookingDate = parseDayLabel(dayLabel);
+                const timeRange = parseTimeRange(timeRangeText);
+                if (!bookingDate || !timeRange) return null;
+
+                const startDate = new Date(bookingDate);
+                startDate.setHours(timeRange.startHour24, timeRange.startMinute, 0, 0);
+                const endDate = new Date(bookingDate);
+                endDate.setHours(timeRange.endHour24, timeRange.endMinute, 0, 0);
+                if (endDate <= startDate) {
+                    endDate.setDate(endDate.getDate() + 1);
+                }
+
+                const participantSuffix = participantNames.length > 0
+                    ? ` with ${participantNames.join(', ')}`
+                    : '';
+                return {
+                    title: `Pickleball at ${shortClubName}${participantSuffix} on ${courtDisplayName}`,
+                    startDate,
+                    endDate,
+                    location: normalizeWhitespace(`${club}${court ? `, ${court}` : ''}`),
+                    details: playersLine || 'Booked via Bay Club Connect.',
+                };
+            }
+
+            function toGoogleDateStamp(date) {
+                return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+            }
+
+            function buildGoogleCalendarUrl(booking) {
+                const params = new URLSearchParams({
+                    action: 'TEMPLATE',
+                    text: booking.title,
+                    dates: `${toGoogleDateStamp(booking.startDate)}/${toGoogleDateStamp(booking.endDate)}`,
+                    details: booking.details,
+                    location: booking.location,
+                });
+                return `https://calendar.google.com/calendar/render?${params.toString()}`;
+            }
+
+            function toIcsDateStamp(date) {
+                return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+            }
+
+            function sanitizeIcsText(text) {
+                return (text || '')
+                    .replace(/\\/g, '\\\\')
+                    .replace(/\n/g, '\\n')
+                    .replace(/,/g, '\\,')
+                    .replace(/;/g, '\\;');
+            }
+
+            function buildIcsContent(booking) {
+                const nowStamp = toIcsDateStamp(new Date());
+                const startStamp = toIcsDateStamp(booking.startDate);
+                const endStamp = toIcsDateStamp(booking.endDate);
+                const uid = `${startStamp}-${Math.random().toString(36).slice(2)}@bayclubconnect-helper`;
+
+                return [
+                    'BEGIN:VCALENDAR',
+                    'VERSION:2.0',
+                    'PRODID:-//Bay Club Connect Helper//EN',
+                    'CALSCALE:GREGORIAN',
+                    'METHOD:PUBLISH',
+                    'BEGIN:VEVENT',
+                    `UID:${uid}`,
+                    `DTSTAMP:${nowStamp}`,
+                    `DTSTART:${startStamp}`,
+                    `DTEND:${endStamp}`,
+                    `SUMMARY:${sanitizeIcsText(booking.title)}`,
+                    `LOCATION:${sanitizeIcsText(booking.location)}`,
+                    `DESCRIPTION:${sanitizeIcsText(booking.details)}`,
+                    'END:VEVENT',
+                    'END:VCALENDAR',
+                    '',
+                ].join('\r\n');
+            }
+
+            function getIcsDownloadFileName(booking) {
+                const safeTitle = booking.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+                return `${safeTitle || 'pickleball-booking'}.ics`;
+            }
+
+            function preventBookingTileClickThrough(element) {
+                ['pointerdown', 'mousedown', 'touchstart', 'click'].forEach(eventName => {
+                    element.addEventListener(eventName, event => {
+                        event.stopPropagation();
+                    }, true);
+                });
+            }
+
+            function appendCalendarActions(tile, booking, googleCalendarUrl) {
+                if (tile.querySelector('.bc-calendar-action')) return;
+
+                const actionContainer = document.createElement('div');
+                actionContainer.className = 'bc-calendar-action';
+                const icon = document.createElement('span');
+                icon.className = 'bc-calendar-icon';
+                icon.textContent = '📅';
+
+                const googleLink = document.createElement('a');
+                googleLink.className = 'bc-calendar-add-link';
+                googleLink.href = googleCalendarUrl;
+                googleLink.target = '_blank';
+                googleLink.rel = 'noopener noreferrer';
+                googleLink.textContent = 'Google Calendar';
+                preventBookingTileClickThrough(googleLink);
+
+                const icsLink = document.createElement('a');
+                icsLink.className = 'bc-calendar-ics-link';
+                icsLink.textContent = 'Download event';
+                icsLink.href = `data:text/calendar;charset=utf-8,${encodeURIComponent(buildIcsContent(booking))}`;
+                icsLink.download = getIcsDownloadFileName(booking);
+                preventBookingTileClickThrough(icsLink);
+
+                actionContainer.appendChild(icon);
+                actionContainer.appendChild(googleLink);
+                actionContainer.appendChild(icsLink);
+                tile.appendChild(actionContainer);
+            }
+
+            function isCanceledBooking(eventElement) {
+                if (eventElement.closest('app-calendar-cancelled-by-me-list')) return true;
+                return normalizeWhitespace(eventElement.textContent).toLowerCase().includes('canceled');
+            }
+
+            function injectButtonsForBookingsPage() {
+                if (!isOnBookingsPage()) return;
+
+                document.querySelectorAll('app-calendar-events-list app-racquet-sports-booking-calendar-event').forEach(eventElement => {
+                    if (isCanceledBooking(eventElement)) return;
+                    const booking = extractBookingData(eventElement);
+                    if (!booking) return;
+                    const calendarUrl = buildGoogleCalendarUrl(booking);
+                    eventElement.querySelectorAll('.item-tile').forEach(tile => {
+                        appendCalendarActions(tile, booking, calendarUrl);
+                    });
+                });
+            }
+
+            function scheduleReconcile() {
+                if (reconcileScheduled) return;
+                reconcileScheduled = true;
+                requestAnimationFrame(() => {
+                    reconcileScheduled = false;
+                    injectButtonsForBookingsPage();
+                });
+            }
+
+            const observer = new MutationObserver(() => {
+                scheduleReconcile();
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+            scheduleReconcile();
+        };
+    })();
+    // #endregion Bookings page calendar export.
+
     const getPreferenceAutoSelectService = (() => {
         let serviceInstance = null;
 
@@ -2387,6 +2656,43 @@
         background-color: rgba(255, 255, 255, 0.06) !important;
         font-weight: 700;
     }
+    .bc-calendar-action {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .bc-calendar-icon {
+        font-size: 13px;
+        line-height: 1;
+    }
+    .bc-calendar-add-link {
+        color: rgb(0, 188, 212);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        text-decoration: none;
+        letter-spacing: 0.02em;
+    }
+    .bc-calendar-add-link:hover,
+    .bc-calendar-add-link:focus {
+        color: rgb(102, 225, 241);
+        text-decoration: underline;
+    }
+    .bc-calendar-ics-link {
+        color: rgb(0, 188, 212);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        text-decoration: none;
+    }
+    .bc-calendar-ics-link:hover,
+    .bc-calendar-ics-link:focus {
+        color: rgb(102, 225, 241);
+        text-decoration: underline;
+    }
 `;
             document.head.appendChild(style);
         };
@@ -2395,6 +2701,7 @@
     // Start script services and monitoring.
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
+    createBookingsCalendarExportInstaller();
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
     // #endregion Startup installers and bootstrap.
