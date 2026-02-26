@@ -6,6 +6,12 @@ This is a Tampermonkey script to show pickleball court availability across multi
 
 This is a practical helper for a small friend group, not a fully productized tool. Bay Club can change the SPA behavior at any time, so this script may occasionally need small maintenance updates.
 
+## Demo
+
+Seeing it in action probably gets you the idea faster than all that blah, blah, blah below, so here's a video of what the enriched booking flow is like with the extension.
+
+https://github.com/user-attachments/assets/358deb10-f6b8-4e3d-913f-6dea0083e576
+
 ## Supported Clubs
 - Redwood Shores
 - Broadway
@@ -27,16 +33,21 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
    <img width="1437" height="780" alt="Screenshot 2026-02-24 at 3 56 47 PM" src="https://github.com/user-attachments/assets/d5ea269a-329b-4532-b50c-ef351139fc9f" />
 9. If you're still seeing a warning from Tampermonkey that developer mode is not turned on, quit Chrome and restart it.
 10. Done! The script runs automatically on [bayclubconnect.com](bayclubconnect.com).
-11. It might be convenient to have the Tampermonkey extension pinned. More on that in the [Demonstration](#demonstration) section.
+11. It might be convenient to have the Tampermonkey extension pinned.
+
+Here's a video of manipulating the Tampermonkey extension:
+
+https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
 
 ## Usage
+
 - Log in to your account at [bayclubconnect.com](bayclubconnect.com).
 - Navigate to the court booking page as normal, regardless of what club you have selected.
 - Walk through Pickleball booking. When you get to the typical players count and duration selector, you can choose the order of club availabilities that will be displayed. That display order will be remembered across sessions, and you can always reorder them when you return to this screen.
   
 <img width="1170" height="306" alt="Screenshot 2026-02-24 at 4 22 01 PM" src="https://github.com/user-attachments/assets/cab7cb67-eb6a-44b6-9060-622ed156b551" />
 
-- The players count and duration selection you choose will be remembered across booking sessions!
+- The players count and duration selection you choose will be remembered across booking sessions.
 - When you click Next to get to the availability listings, Hour View is now defaulted to instead of Court View. This helper only supports the Hour View, and this helper assumes you prefer it. You can always select Court View manually.
 - Available slots across all clubs will appear automatically.
 - There is a time range slider to filter the court availabilities displayed to match your specified start and end times, a weather report for each hour on the slider, and a checkbox to show indoor courts only. There's a toggle to switch between BY CLUB and BY TIME sorting: when BY CLUB is selected, you'll see a list of clubs, and under each club, the available slots for that club; when BY TIME is selected, you'll see a list of times, and under each time, the available slots for that time, in club sorted order.
@@ -64,8 +75,8 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
 
 - You can enable debug mode from any Bay Club Connect page with either method:
-  -- Tap or click the top-left corner of the page five times within four seconds.
-  -- Type `debug` within five seconds (while your cursor is not in an input field).
+   - Tap or click the top-left corner of the page five times within four seconds.
+   - Type `debug` within five seconds (while your cursor is not in an input field).
 - When debug mode is enabled, you will see a debug panel on both helper screens:
   The Player Count and Duration screen.
   The court availability screen.
@@ -74,7 +85,7 @@ If you hit an issue and want to send diagnostics, the helper includes a hidden d
   `Email logs` to open a prefilled email draft.
   `Download logs` to save a log file.
   `Clear logs` to reset the stored debug entries.
-- You can disable debug mode from the panel by unchecking `Debug mode`.
+- You can disable debug mode from the panel by unchecking the Debug mode checkbox.
 
 ## Disabling
 - If you're not enjoying this or you want to return to the native experience for any reason, you can disable the extension through Tampermonkey's Dashboard. You can also delete the installation of the script from there. If you didn't install TamperMonkey for other reasons, you can just uninstall Tampermonkey entirely by going through Chrome's extension management UI.
@@ -82,16 +93,6 @@ If you hit an issue and want to send diagnostics, the helper includes a hidden d
 
 ## Refreshing
 - As I fix bugs or release new features, I'll update the version number for the script. But the Tampermonkey extension may take several hours to refresh the script. You can trigger a refresh yourself by clicking on the Utilities menu item for the extension and then clicking on the "Check for userscript updates" entry. Or you can select Dashboard and delete the script and reinstall it.
-
-## Demonstration
-
-Here's a video of manipulating the Tampermonkey extension:
-
-https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
-
-Here's a video of the extension in action:
-
-https://github.com/user-attachments/assets/358deb10-f6b8-4e3d-913f-6dea0083e576
 
 ## Thanks
 
