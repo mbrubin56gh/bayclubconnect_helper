@@ -55,6 +55,8 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 <img width="1116" height="639" alt="Screenshot 2026-02-24 at 4 34 34 PM" src="https://github.com/user-attachments/assets/c360b0cf-db61-457f-8c74-40a058ec4f60" />
 - Select your time slot and court and then click the button to proceed with booking.
 
+- Once you're on the bookings page, you'll see links to add your booking to Google calendar or to download more generically the calendar entry to add on your own to your calendar application.
+
 ## Debugging
 
 If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
