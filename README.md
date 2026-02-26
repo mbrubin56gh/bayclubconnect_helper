@@ -89,10 +89,9 @@ Here's a video of manipulating the Tampermonkey extension:
 
 https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
 
-
 Here's a video of the extension in action:
 
-https://github.com/user-attachments/assets/279b8096-4b44-4f77-9dd7-5d1720e49518
+https://github.com/user-attachments/assets/358deb10-f6b8-4e3d-913f-6dea0083e576
 
 ## Thanks
 
