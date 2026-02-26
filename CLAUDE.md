@@ -1,8 +1,13 @@
 # Bay Club Connect Pickleball Court Reservation Helper
 
+
 ## What This Is
 
 A Tampermonkey userscript (`loading_script.user.js`) that improves the court booking experience on bayclubconnect.com. The app natively only shows availability for a single "home" club, but Bay Club members can book at any club. This script fetches availability across all four Bay Area clubs in parallel and displays them in a unified UI.
+
+## Who I am as a developer of this application
+
+I have been a professional programmer since 1998. Read the LinkedInProfile.pdf in this same folder to learn about my programming background to get a sense of my technical level and knowledge. But also recognize that I used many of the languages and tools year ago and so am not fluent in them anymore. What I'm most fluent in is Android development and Kotlin. It's probably best to treat me as a senior, experienced developer with a lot of skills, but also one who has not programmed in Javascript or written HTML in a long time, and so is better at reading these things than writing them. Also Javascript has changed a lot since I last had mastered it.
 
 ## Working style
 
@@ -11,6 +16,8 @@ This is a JavaScript project. Use JavaScript for all new files and modifications
 Write comments as complete sentences that end in punctuation. Avoid abbreviations when reasonable so comments are easy to scan later.
 
 Prefer closures and other encapsulation techniques over free-floating global variables, and keep mutable state in the narrowest possible scope.
+
+In general, prefer Douglas Crockford "Javascript: The Good Parts" style of Javascript coding and modularization.
 
 After completing a set of changes, offer to commit and push with a descriptive commit message summarizing what changed.
 
