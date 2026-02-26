@@ -1177,7 +1177,7 @@
 
     const TIME_RANGE_KEY = 'bc_time_range';
 
-    function getTimeRangeForSlider() {
+    function getTimeRange() {
         const parsed = getLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
         if (parsed &&
             typeof parsed.startMinutes === 'number' &&
@@ -1187,7 +1187,7 @@
         return { startMinutes: SLIDER_MIN_MINUTES, endMinutes: SLIDER_MAX_MINUTES };
     }
 
-    function saveTimeRangeForSlider(startMinutes, endMinutes) {
+    function saveTimeRange(startMinutes, endMinutes) {
         getLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
     }
 
@@ -1254,7 +1254,7 @@
                 const endHandle = container.querySelector('.bc-slider-end');
                 if (!sliderContainer || !fill || !label || !startHandle || !endHandle) return;
 
-                let { startMinutes, endMinutes } = getTimeRangeForSlider();
+                let { startMinutes, endMinutes } = getTimeRange();
                 let dragging = null;
 
                 function updateUi() {
@@ -1303,7 +1303,7 @@
                 function onPointerUp() {
                     if (!dragging) return;
                     dragging = null;
-                    saveTimeRangeForSlider(startMinutes, endMinutes);
+                    saveTimeRange(startMinutes, endMinutes);
                     // Re-filter visible slots.
                     getAvailabilityRenderPipeline().applyFilters(startMinutes, endMinutes);
                     removeDragListeners();
@@ -1660,7 +1660,7 @@
 
                 indoorCheckbox.addEventListener('change', () => {
                     saveShowIndoorClubsOnly(indoorCheckbox.checked);
-                    const { startMinutes: curStart, endMinutes: curEnd } = getTimeRangeForSlider();
+                    const { startMinutes: curStart, endMinutes: curEnd } = getTimeRange();
                     applyFilters(curStart, curEnd);
                 });
             }
@@ -1803,7 +1803,7 @@
                 const failedClubIdsSet = new Set(lastFetchState.failedClubIds || []);
                 const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
 
-                const { startMinutes, endMinutes } = getTimeRangeForSlider();
+                const { startMinutes, endMinutes } = getTimeRange();
                 let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
                 html += buildShowIndoorCourtsOnlyToggleHtml();
                 html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
