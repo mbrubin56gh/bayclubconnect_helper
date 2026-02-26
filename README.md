@@ -96,4 +96,4 @@ If you hit an issue and want to send diagnostics, the helper includes a hidden d
 
 ## Thanks
 
-Weather information is pulled from [Open-Meto](https://open-meteo.com/)
+Weather information is pulled from [Open-Meteo](https://open-meteo.com/)
