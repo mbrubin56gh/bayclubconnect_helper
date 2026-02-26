@@ -1679,7 +1679,7 @@
                         emojiEl.textContent = emoji;
                         if (RAIN_EMOJIS.includes(emoji)) {
                             const pct = getWeatherService().rainPctForHour(fetchDate, fromMinutes);
-                            if (pct != null) {
+                            if (pct !== null && pct !== undefined) {
                                 const pctEl = document.createElement('div');
                                 pctEl.style.cssText = 'font-size: 9px; color: rgba(160,200,255,0.9); text-align: center;';
                                 pctEl.textContent = `${pct}%`;
