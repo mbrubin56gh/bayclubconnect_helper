@@ -907,6 +907,10 @@
                 return location.pathname === '/bookings';
             }
 
+            function isOnBookingDetailsPage() {
+                return /^\/racquet-sports\/booking\/[0-9a-f-]+$/i.test(location.pathname);
+            }
+
             function normalizeWhitespace(value) {
                 return (value || '').replace(/\s+/g, ' ').trim();
             }
@@ -931,6 +935,19 @@
                     const tomorrow = new Date(baseDate);
                     tomorrow.setDate(tomorrow.getDate() + 1);
                     return tomorrow;
+                }
+
+                const monthDayMatch = normalizeWhitespace(dayLabel).match(/^([A-Za-z]{3,9})\s+(\d{1,2})$/);
+                if (monthDayMatch) {
+                    const parsed = new Date(`${monthDayMatch[1]} ${monthDayMatch[2]}, ${baseDate.getFullYear()}`);
+                    if (!Number.isNaN(parsed.getTime())) {
+                        parsed.setHours(0, 0, 0, 0);
+                        // If the parsed date is clearly in the past, assume a year rollover.
+                        if (parsed < baseDate) {
+                            parsed.setFullYear(parsed.getFullYear() + 1);
+                        }
+                        return parsed;
+                    }
                 }
 
                 const parsed = new Date(dayLabel);
@@ -986,25 +1003,8 @@
                 return eventElement.querySelector('.item-tile.d-none.d-md-flex');
             }
 
-            function extractBookingData(eventElement) {
-                const desktopTile = findDesktopTile(eventElement);
-                if (!desktopTile) return null;
-
-                const dayLabel = normalizeWhitespace(desktopTile.querySelector('.col-2 div:first-child')?.textContent);
-                const timeRangeText = normalizeWhitespace(desktopTile.querySelector('.col-2 div:nth-child(2)')?.textContent);
-                const club = normalizeWhitespace(desktopTile.querySelector('.col-3 div:first-child')?.textContent);
-                const shortClubName = simplifyClubName(club);
-                const court = normalizeWhitespace(desktopTile.querySelector('.col-3 div:nth-child(2)')?.textContent);
-                const courtDisplayName = extractCourtDisplayName(court);
-                const playersLine = normalizeWhitespace(Array.from(desktopTile.querySelectorAll('.size-12'))
-                    .map(node => node.textContent)
-                    .find(text => (text || '').includes('Players:')) || '');
-                const participantNames = Array.from(desktopTile.querySelectorAll('app-racquet-sports-booking-player'))
-                    .map(player => normalizeWhitespace(player.textContent))
-                    .filter(Boolean)
-                    .filter(name => name.toLowerCase() !== 'you');
-                if (!dayLabel || !timeRangeText) return null;
-
+            function buildBookingDataFromFields({ dayLabel, timeRangeText, club, court, participantNames, playersLine }) {
+                if (!dayLabel || !timeRangeText || !club) return null;
                 const bookingDate = parseDayLabel(dayLabel);
                 const timeRange = parseTimeRange(timeRangeText);
                 if (!bookingDate || !timeRange) return null;
@@ -1017,7 +1017,9 @@
                     endDate.setDate(endDate.getDate() + 1);
                 }
 
-                const participantSuffix = participantNames.length > 0
+                const shortClubName = simplifyClubName(club);
+                const courtDisplayName = extractCourtDisplayName(court);
+                const participantSuffix = (participantNames || []).length > 0
                     ? ` with ${participantNames.join(', ')}`
                     : '';
                 return {
@@ -1027,6 +1029,67 @@
                     location: normalizeWhitespace(`${club}${court ? `, ${court}` : ''}`),
                     details: playersLine || 'Booked via Bay Club Connect.',
                 };
+            }
+
+            function extractBookingData(eventElement) {
+                const desktopTile = findDesktopTile(eventElement);
+                if (!desktopTile) return null;
+
+                const dayLabel = normalizeWhitespace(desktopTile.querySelector('.col-2 div:first-child')?.textContent);
+                const timeRangeText = normalizeWhitespace(desktopTile.querySelector('.col-2 div:nth-child(2)')?.textContent);
+                const club = normalizeWhitespace(desktopTile.querySelector('.col-3 div:first-child')?.textContent);
+                const court = normalizeWhitespace(desktopTile.querySelector('.col-3 div:nth-child(2)')?.textContent);
+                const playersLine = normalizeWhitespace(Array.from(desktopTile.querySelectorAll('.size-12'))
+                    .map(node => node.textContent)
+                    .find(text => (text || '').includes('Players:')) || '');
+                const participantNames = Array.from(desktopTile.querySelectorAll('app-racquet-sports-booking-player'))
+                    .map(player => normalizeWhitespace(player.textContent))
+                    .filter(Boolean)
+                    .filter(name => name.toLowerCase() !== 'you');
+
+                return buildBookingDataFromFields({
+                    dayLabel,
+                    timeRangeText,
+                    club,
+                    court,
+                    participantNames,
+                    playersLine,
+                });
+            }
+
+            function extractBookingDataFromDetailsPage() {
+                const header = document.querySelector('.image-background .px-4.pb-4');
+                if (!header) return null;
+
+                const headerText = normalizeWhitespace(header.textContent);
+                const dayLabelMatch = headerText.match(/\b([A-Za-z]{3,9}\s+\d{1,2})\b/);
+                const timeMatch = headerText.match(/(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(AM|PM))/i);
+                const dayLabel = dayLabelMatch ? dayLabelMatch[1] : '';
+                const timeRangeText = timeMatch ? timeMatch[1] : '';
+                const club = normalizeWhitespace(header.querySelector('.size-14.mt-3')?.textContent);
+                const court = normalizeWhitespace(header.querySelector('.size-14.mt-3 + span + .size-14')?.textContent);
+                const playersLine = normalizeWhitespace(Array.from(document.querySelectorAll('app-racquet-sports-player .grey.size-12'))
+                    .map(node => node.textContent)
+                    .find(text => (text || '').includes('You')) || '');
+                const participantNames = Array.from(document.querySelectorAll('app-racquet-sports-player'))
+                    .map(player => {
+                        const primary = normalizeWhitespace(player.querySelector('.flex-grow-1 > div:first-child')?.textContent || '')
+                            .replace(/\bChange\b/gi, '')
+                            .trim();
+                        const secondary = normalizeWhitespace(player.querySelector('.flex-grow-1 > div:nth-child(2)')?.textContent || '');
+                        if (!primary || secondary.toLowerCase().includes('you')) return null;
+                        return primary;
+                    })
+                    .filter(Boolean);
+
+                return buildBookingDataFromFields({
+                    dayLabel,
+                    timeRangeText,
+                    club,
+                    court,
+                    participantNames,
+                    playersLine,
+                });
             }
 
             function toGoogleDateStamp(date) {
@@ -1144,12 +1207,29 @@
                 });
             }
 
+            function injectButtonsForBookingDetailsPage() {
+                if (!isOnBookingDetailsPage()) return;
+                const booking = extractBookingDataFromDetailsPage();
+                if (!booking) return;
+
+                const calendarUrl = buildGoogleCalendarUrl(booking);
+                const reservationMadeByRow = Array.from(document.querySelectorAll('.row.mt-2.size-14'))
+                    .find(row => normalizeWhitespace(row.textContent).toLowerCase().includes('reservation made by'));
+                if (!reservationMadeByRow) return;
+
+                if (reservationMadeByRow.parentElement?.querySelector('.bc-calendar-action')) return;
+                const actionHost = document.createElement('div');
+                reservationMadeByRow.insertAdjacentElement('afterend', actionHost);
+                appendCalendarActions(actionHost, booking, calendarUrl);
+            }
+
             function scheduleReconcile() {
                 if (reconcileScheduled) return;
                 reconcileScheduled = true;
                 requestAnimationFrame(() => {
                     reconcileScheduled = false;
                     injectButtonsForBookingsPage();
+                    injectButtonsForBookingDetailsPage();
                 });
             }
 
