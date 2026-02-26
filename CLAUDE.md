@@ -16,6 +16,8 @@ After completing a set of changes, offer to commit and push with a descriptive c
 
 When resuming work from a previous session, start by reading recent git log and checking git status to understand current state.
 
+When the script is already reliable for the current friend-group scope and only minor styling or speculative edge-case ideas remain, prefer no-change unless there is a reproducible user-facing bug.
+
 ## The Four Clubs
 
 ```javascript

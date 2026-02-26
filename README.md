@@ -2,6 +2,10 @@
 
 This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has only been tested on desktop Chrome.
 
+## Scope
+
+This is a practical helper for a small friend group, not a fully productized tool. Bay Club can change the SPA behavior at any time, so this script may occasionally need small maintenance updates.
+
 ## Supported Clubs
 - Redwood Shores
 - Broadway
@@ -89,4 +93,3 @@ https://github.com/user-attachments/assets/279b8096-4b44-4f77-9dd7-5d1720e49518
 ## Thanks
 
 Weather information is pulled from [Open-Meto](https://open-meteo.com/)
-
