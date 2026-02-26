@@ -1371,13 +1371,15 @@
     const LABEL_MODE_TIME = 'time';
     const LABEL_MODE_CLUB = 'club';
 
-    function buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
-        return slot.courts.length === 1
-            ? buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode)
-            : buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode);
+    function isCourtIsolated(courtName, clubId) {
+        return (ISOLATED_COURTS[clubId] || []).includes(courtName);
     }
 
-    function buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
+    function isCourtEdge(courtName, clubId) {
+        return (EDGE_COURTS[clubId] || []).includes(courtName);
+    }
+
+    function computeSlotLockState(slot, fetchDate, limitDate) {
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
@@ -1387,10 +1389,20 @@
         const disabledStyle = slotLocked
             ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
             : '';
+        return { slotLocked, lockIcon, disabledStyle };
+    }
 
+    function buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
+        return slot.courts.length === 1
+            ? buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode)
+            : buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode);
+    }
+
+    function buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
+        const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
         const court = slot.courts[0];
-        const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
-        const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
+        const isolated = isCourtIsolated(court.courtName, clubId);
+        const edge = isCourtEdge(court.courtName, clubId);
         const dataAttrs = slotLocked ? '' :
             `data-club-name="${meta.shortName}"
                 data-from="${slot.fromHumanTime}"
@@ -1403,28 +1415,19 @@
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
-           ${dataAttrs} style="${disabledStyle}${isIsolated ? ' border: 2px solid rgba(255,215,0,1);' : isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+           ${dataAttrs} style="${disabledStyle}${isolated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${isIsolated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : isEdge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${isolated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
       </div>
     </div>`;
     }
 
     function buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
-        const slotDate = new Date(fetchDate + 'T00:00:00');
-        slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
-        const slotLocked = slotDate > limitDate;
-        const lockIcon = slotLocked
-            ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
-            : '';
-        const disabledStyle = slotLocked
-            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
-            : '';
-
-        const hasIsolatedCourt = slot.courts.some(c => (ISOLATED_COURTS[clubId] || []).includes(c.courtName));
-        const hasEdgeCourt = slot.courts.some(c => (EDGE_COURTS[clubId] || []).includes(c.courtName));
+        const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
+        const hasIsolatedCourt = slot.courts.some(c => isCourtIsolated(c.courtName, clubId));
+        const hasEdgeCourt = slot.courts.some(c => isCourtEdge(c.courtName, clubId));
 
         const courtNumbers = slot.courts.map(c => c.courtName?.replace(/\D+/g, '')).filter(Boolean);
         const courtSummary = courtNumbers.length > 0
@@ -1432,8 +1435,8 @@
             : 'Courts available';
 
         const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
-            const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
-            const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
+            const isolated = isCourtIsolated(court.courtName, clubId);
+            const edge = isCourtEdge(court.courtName, clubId);
             return `<div class="bc-court-option"
             data-club-name="${meta.shortName}"
             data-from="${slot.fromHumanTime}"
@@ -1446,7 +1449,7 @@
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
-            ${isIsolated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ isolated</span>' : isEdge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
+            ${isolated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ isolated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
         </div>`;
         }).join('');
 
