@@ -1,6 +1,6 @@
 # Bay Club Connect Pickleball Court Reservation Helper
 
-This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has only been tested on desktop Chrome.
+This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has been tested on desktop Chrome, desktop Firefox, and Firefox for Android.
 
 ## Scope
 
@@ -20,6 +20,8 @@ https://github.com/user-attachments/assets/358deb10-f6b8-4e3d-913f-6dea0083e576
 
 ## Installation
 
+# Chrome
+
 1. Install the [Tampermonkey Chrome extension](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
 Be aware that Tampermonkey allows you or someone to install scripts that inject into web pages and alter their behavior. Be careful.
 3. Click "Add to Chrome" and confirm.
@@ -38,6 +40,16 @@ toolbar, find the Tampermonkey extension listed there, click on the vertical thr
 Here's a video of manipulating the Tampermonkey extension:
 
 https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
+
+# Firefox
+
+Tampermonkey is not supported on iOS or Chrome for Android, but it is supported by Firefox for Android.
+The instructions are essentiall the same:
+1. Install the [Tampermonkey extension for Firefox](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/).
+2. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js).
+3. Follow whatever instructions you see to install the script.
+4. That should be all you need. Navigate to the [Bay Club connect homepage](bayclubconnect.com), log in, and you should be all set.
+5. It seems that the native Bay Club application is just a thin wrapper around their website. So a nice thing to do is to add a shortcut to launching Firefox at that Bay Club homepage to your home screen. In Firefox, click on the three vertical dots in the top right, expand the ... More section, and find the entry to Add to Home screen. That's it! You can use that shortcut instead of the native app with no real loss of previous functionality, and you get the extension!
 
 ## Usage
 
