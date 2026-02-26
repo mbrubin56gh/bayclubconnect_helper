@@ -972,7 +972,7 @@
     // Some clubs only let you reserve pickleball courts, but some offer the option to
     // reserve tennis and/or squash courts as well. Let's automatically select the pickleball
     // option if they do.
-    function tryToAutoSelectPickleball() {
+    function autoSelectPickleballSportIfAvailable() {
         const pickleballIcon = document.querySelector('app-court-booking-category-select .i-pickleball-white');
         if (!pickleballIcon) return;
         const tile = pickleballIcon.closest('.item-tile');
@@ -1871,7 +1871,7 @@
             injectDurationFlowDebugPanel(container);
             getPreferenceAutoSelectService().autoSelectPlayersAndDuration();
         }
-        tryToAutoSelectPickleball();
+        autoSelectPickleballSportIfAvailable();
     }
 
     const createBookingFlowMonitor = (() => {
