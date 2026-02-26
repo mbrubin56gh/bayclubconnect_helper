@@ -988,9 +988,10 @@
         [CLUBS.santaClara]: 'Santa Clara',
     };
 
+    // Stores the club ordering selected by the user for future sessions.
+    const CLUB_ORDER_KEY = 'bc_club_order';
+
     function getClubOrder() {
-        // Use this key to store the club ordering selected by the user for future sessions.
-        const CLUB_ORDER_KEY = 'bc_club_order';
         const parsed = getLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
         if (Array.isArray(parsed) &&
             parsed.length === Object.values(CLUBS).length &&
@@ -1004,7 +1005,6 @@
     }
 
     function saveClubOrder(order) {
-        const CLUB_ORDER_KEY = 'bc_club_order';
         getLocalStorageService().setJson(CLUB_ORDER_KEY, order);
     }
 
@@ -1108,13 +1108,13 @@
     const VIEW_MODE_BY_CLUB = 'by-club';
     const VIEW_MODE_BY_TIME = 'by-time';
 
+    const VIEW_MODE_KEY = 'bc_view_mode';
+
     function getViewMode() {
-        const VIEW_MODE_KEY = 'bc_view_mode';
         return getLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
     }
 
     function saveViewMode(mode) {
-        const VIEW_MODE_KEY = 'bc_view_mode';
         getLocalStorageService().setString(VIEW_MODE_KEY, mode);
     }
 
@@ -1134,8 +1134,9 @@
         });
     }
 
+    const INDOOR_ONLY_KEY = 'bc_indoor_only';
+
     function getShowIndoorClubsOnly() {
-        const INDOOR_ONLY_KEY = 'bc_indoor_only';
         const saved = getLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
         if (typeof saved === 'boolean') {
             return saved;
@@ -1144,7 +1145,6 @@
     }
 
     function saveShowIndoorClubsOnly(value) {
-        const INDOOR_ONLY_KEY = 'bc_indoor_only';
         getLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
     }
 
@@ -1175,8 +1175,9 @@
     const SLIDER_STEP_MINUTES = 30;
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 32 intervals (16 hours × 2)
 
+    const TIME_RANGE_KEY = 'bc_time_range';
+
     function getTimeRangeForSlider() {
-        const TIME_RANGE_KEY = 'bc_time_range';
         const parsed = getLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
         if (parsed &&
             typeof parsed.startMinutes === 'number' &&
@@ -1187,7 +1188,6 @@
     }
 
     function saveTimeRangeForSlider(startMinutes, endMinutes) {
-        const TIME_RANGE_KEY = 'bc_time_range';
         getLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
     }
 
