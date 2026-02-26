@@ -72,6 +72,8 @@ The app is Angular-based. We can't easily drive its state machine directly, so w
  
 ### DOM Injection
 We hide (not remove) native content and inject our own `<div class="all-clubs-availability">` into two containers Angular uses for desktop (`.item-tile`) and mobile (`.d-md-none.px-3`). We re-inject whenever the MutationObserver detects container changes (e.g. date change).
+When resolving injection hosts, prefer containers that actually contain native time-slot rows (`app-court-time-slot-item`) rather than matching broad layout selectors globally. This avoids mis-targeting unrelated `.item-tile` nodes in some mobile/browser variants (for example, Firefox Android layout behavior).
+When unhiding native UI, only unhide elements the helper explicitly hid (using a `data-*` marker), rather than globally unhiding all children under broad host selectors.
 
 To reduce churn from Angular mutation bursts, booking-flow DOM reconciliation is batched through `requestAnimationFrame`, so repeated mutation callbacks collapse into one reconcile pass per frame.
 Booking-step selectors and related visibility checks are centralized in `getBookingDomQueryService()` so monitor, injection, and cleanup logic share one source of truth for brittle Angular DOM signatures.
@@ -120,6 +122,7 @@ The script uses a booking-flow monitor with lifecycle management:
 
 - **Prefer `data-*` attributes over structural CSS selectors** for targeting injected elements
 - **Encode state in the DOM where possible** rather than global variables (e.g. `data-bc-auto-selected`, `data-selected`, `data-bc-intercepted`)
+- **For native hide/unhide lifecycles, use explicit marker attributes** (for example, `data-bc-native-hidden`) so cleanup only reverses helper-owned DOM mutations.
 - **Prefer event-driven detection first, then add polling only as a reliability backstop** — this SPA sometimes does not emit dependable history signals, so scoped pollers are acceptable when lifecycle-managed
 - **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
   For example, drag-and-drop item reordering state is scoped inside `getClubOrderWidgetController()` rather than script scope.

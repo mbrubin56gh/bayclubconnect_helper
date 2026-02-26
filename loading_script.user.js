@@ -399,6 +399,8 @@
             const DESKTOP_TIME_SLOT_HOST_SELECTOR = '.item-tile';
             const MOBILE_TIME_SLOT_HOST_SELECTOR = '.d-md-none.px-3';
             const TIME_SLOT_HOSTS_SELECTOR = `${DESKTOP_TIME_SLOT_HOST_SELECTOR}, ${MOBILE_TIME_SLOT_HOST_SELECTOR}`;
+            const NATIVE_TIME_SLOT_ITEM_SELECTOR = 'app-court-time-slot-item';
+            const NATIVE_HIDDEN_ATTR = 'data-bc-native-hidden';
 
             function getDurationAndPlayersFilterContainer() {
                 return document.querySelector(DURATION_AND_PLAYERS_FILTER_SELECTOR);
@@ -426,16 +428,36 @@
                 return !!title.querySelector(BACK_ICON_SELECTOR);
             }
 
+            function getTimeSlotHosts() {
+                // Prefer hosts that actually contain native time slot rows to avoid matching
+                // unrelated .item-tile containers (for example, date tiles in mobile layouts).
+                const hosts = [];
+                const seen = new Set();
+                document.querySelectorAll(NATIVE_TIME_SLOT_ITEM_SELECTOR).forEach(slotItem => {
+                    const host = slotItem.closest(TIME_SLOT_HOSTS_SELECTOR);
+                    if (!host || seen.has(host)) return;
+                    seen.add(host);
+                    hosts.push(host);
+                });
+
+                if (hosts.length > 0) return hosts;
+
+                // Fallback for transitional DOM states where slot rows are not yet rendered.
+                return Array.from(document.querySelectorAll(TIME_SLOT_HOSTS_SELECTOR));
+            }
+
             function hasTimeSlotHostsVisible() {
-                return !!document.querySelector(TIME_SLOT_HOSTS_SELECTOR);
+                return getTimeSlotHosts().length > 0;
             }
 
             function getDesktopTimeSlotHost() {
-                return document.querySelector(DESKTOP_TIME_SLOT_HOST_SELECTOR);
+                return getTimeSlotHosts()
+                    .find(host => !host.matches(MOBILE_TIME_SLOT_HOST_SELECTOR)) || null;
             }
 
             function getMobileTimeSlotHost() {
-                return document.querySelector(MOBILE_TIME_SLOT_HOST_SELECTOR);
+                return getTimeSlotHosts()
+                    .find(host => host.matches(MOBILE_TIME_SLOT_HOST_SELECTOR)) || null;
             }
 
             function isBackControlClickTarget(target) {
@@ -457,6 +479,8 @@
                 hasTimeSlotHostsVisible,
                 getDesktopTimeSlotHost,
                 getMobileTimeSlotHost,
+                getTimeSlotHosts,
+                NATIVE_HIDDEN_ATTR,
                 isBackControlClickTarget,
             };
             return serviceInstance;
@@ -2016,6 +2040,7 @@
                 Array.from(anchorElement.children).forEach(child => {
                     if (!child.classList.contains('all-clubs-availability')) {
                         child.style.display = 'none';
+                        child.setAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR, '1');
                     }
                 });
             }
@@ -2526,8 +2551,9 @@
     function removeOurContentAndUnhideNativeContent() {
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
         document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(el => el.remove());
-        document.querySelectorAll('.item-tile > *, .d-md-none.px-3 > *').forEach(child => {
+        document.querySelectorAll(`[${getBookingDomQueryService().NATIVE_HIDDEN_ATTR}="1"]`).forEach(child => {
             child.style.display = '';
+            child.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
         });
     }
 
@@ -2550,15 +2576,10 @@
             hourViewBtn.click();
         }
 
-        const tile = bookingDomQueryService.getDesktopTimeSlotHost();
-        if (tile && !tile.querySelector('.all-clubs-availability')) {
-            getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, tile, lastFetchState.params.date);
-        }
-
-        const mobileContainer = bookingDomQueryService.getMobileTimeSlotHost();
-        if (mobileContainer && !mobileContainer.querySelector('.all-clubs-availability')) {
-            getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, mobileContainer, lastFetchState.params.date);
-        }
+        bookingDomQueryService.getTimeSlotHosts().forEach(host => {
+            if (host.querySelector('.all-clubs-availability')) return;
+            getAvailabilityRenderPipeline().renderAllClubsAvailability(lastFetchState.transformed, host, lastFetchState.params.date);
+        });
     }
     // #endregion Booking flow monitor and DOM injection.
 
