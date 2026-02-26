@@ -1751,10 +1751,8 @@
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
                 if (nativeSlot) {
                     nativeSlot.click();
-                    setTimeout(() => {
-                        const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
-                        if (nativeInfo) nativeInfo.style.display = 'none';
-                    }, 0);
+                    const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                    if (nativeInfo) nativeInfo.style.display = 'none';
                 } else {
                     console.log("No native slot to click");
                 }
