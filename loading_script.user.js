@@ -1372,12 +1372,15 @@
     const LABEL_MODE_CLUB = 'club';
 
     function buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
+        return slot.courts.length === 1
+            ? buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode)
+            : buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode);
+    }
+
+    function buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
-
-        const hasIsolatedCourt = slot.courts.some(c => (ISOLATED_COURTS[clubId] || []).includes(c.courtName));
-        const hasEdgeCourt = slot.courts.some(c => (EDGE_COURTS[clubId] || []).includes(c.courtName));
         const lockIcon = slotLocked
             ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
             : '';
@@ -1385,13 +1388,11 @@
             ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
             : '';
 
-        // Single court — render as a directly selectable card with no expand step.
-        if (slot.courts.length === 1) {
-            const court = slot.courts[0];
-            const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
-            const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
-            const dataAttrs = slotLocked ? '' :
-                `data-club-name="${meta.shortName}"
+        const court = slot.courts[0];
+        const isIsolated = (ISOLATED_COURTS[clubId] || []).includes(court.courtName);
+        const isEdge = (EDGE_COURTS[clubId] || []).includes(court.courtName);
+        const dataAttrs = slotLocked ? '' :
+            `data-club-name="${meta.shortName}"
                 data-from="${slot.fromHumanTime}"
                 data-to="${slot.toHumanTime}"
                 data-court="${court.courtName}"
@@ -1399,7 +1400,7 @@
                 data-club-id="${clubId}"
                 data-from-minutes="${slot.fromInMinutes}"
                 data-to-minutes="${slot.toInMinutes}"`;
-            return `
+        return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
            ${dataAttrs} style="${disabledStyle}${isIsolated ? ' border: 2px solid rgba(255,215,0,1);' : isEdge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
@@ -1409,9 +1410,22 @@
         ${lockIcon}
       </div>
     </div>`;
-        }
+    }
 
-        // Multiple courts — abbreviate court list and show expandable options.
+    function buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
+        const slotDate = new Date(fetchDate + 'T00:00:00');
+        slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
+        const slotLocked = slotDate > limitDate;
+        const lockIcon = slotLocked
+            ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
+            : '';
+        const disabledStyle = slotLocked
+            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
+            : '';
+
+        const hasIsolatedCourt = slot.courts.some(c => (ISOLATED_COURTS[clubId] || []).includes(c.courtName));
+        const hasEdgeCourt = slot.courts.some(c => (EDGE_COURTS[clubId] || []).includes(c.courtName));
+
         const courtNumbers = slot.courts.map(c => c.courtName?.replace(/\D+/g, '')).filter(Boolean);
         const courtSummary = courtNumbers.length > 0
             ? `Pickleball ${courtNumbers.join(', ')}`
