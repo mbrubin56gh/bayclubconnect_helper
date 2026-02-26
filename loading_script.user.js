@@ -540,13 +540,26 @@
                     return payload.map(item => sanitizePayload(item, depth + 1));
                 }
 
+                const SENSITIVE_KEY_PATTERNS = [
+                    'authorization',
+                    'auth',
+                    'session',
+                    'token',
+                    'request-id',
+                    'requestid',
+                    'cookie',
+                    'secret',
+                    'apikey',
+                    'api-key',
+                ];
                 const output = {};
                 for (const [key, value] of Object.entries(payload)) {
-                    const normalizedKey = key.toLowerCase();
-                    if (normalizedKey.includes('authorization') ||
-                        normalizedKey.includes('session') ||
-                        normalizedKey.includes('token') ||
-                        normalizedKey.includes('request-id')) {
+                    const normalizedKey = key.toLowerCase().replace(/[_\s]/g, '').replace(/-/g, '');
+                    const isSensitive = SENSITIVE_KEY_PATTERNS.some(pattern => {
+                        const normalizedPattern = pattern.replace(/[_\s-]/g, '');
+                        return normalizedKey.includes(normalizedPattern);
+                    });
+                    if (isSensitive) {
                         output[key] = '[REDACTED]';
                     } else {
                         output[key] = sanitizePayload(value, depth + 1);
