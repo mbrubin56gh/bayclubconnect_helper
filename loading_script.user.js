@@ -470,15 +470,24 @@
             if (serviceInstance) return serviceInstance;
 
             function getString(key) {
-                return localStorage.getItem(key);
+                try {
+                    return localStorage.getItem(key);
+                } catch (error) {
+                    console.log(`[bc] localStorage read failed for key "${key}":`, error);
+                    return null;
+                }
             }
 
             function setString(key, value) {
-                localStorage.setItem(key, value);
+                try {
+                    localStorage.setItem(key, value);
+                } catch (error) {
+                    console.log(`[bc] localStorage write failed for key "${key}":`, error);
+                }
             }
 
             function getJson(key, parseErrorLogMessage) {
-                const raw = localStorage.getItem(key);
+                const raw = getString(key);
                 if (raw === null) return null;
                 try {
                     return JSON.parse(raw);
@@ -491,7 +500,7 @@
             }
 
             function setJson(key, value) {
-                localStorage.setItem(key, JSON.stringify(value));
+                setString(key, JSON.stringify(value));
             }
 
             serviceInstance = {
