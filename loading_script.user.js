@@ -949,6 +949,8 @@
         getDebugService().log('error', 'helper-fallback-activated', {
             reasonCode,
             debugJustEnabled,
+            path: location.pathname,
+            href: location.href,
             ...extraPayload,
         });
 
