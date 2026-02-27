@@ -1,6 +1,6 @@
 # Bay Club Connect Pickleball Court Reservation Helper
 
-This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has been tested on desktop Chrome, desktop Firefox, and Firefox for Android.
+This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It works on desktop Chrome, desktop Firefox, and Firefox for Android.
 
 ## Scope
 
@@ -44,12 +44,12 @@ https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
 # Firefox
 
 Tampermonkey is not supported on iOS or Chrome for Android, but it is supported by Firefox for Android.
-The instructions are essentiall the same:
+The instructions are essentially the same as for Chrome:
 1. Install the [Tampermonkey extension for Firefox](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/).
 2. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js).
 3. Follow whatever instructions you see to install the script.
-4. That should be all you need. Navigate to the [Bay Club connect homepage](bayclubconnect.com), log in, and you should be all set.
-5. It seems that the native Bay Club application is just a thin wrapper around their website. So a nice thing to do is to add a shortcut to launching Firefox at that Bay Club homepage to your home screen. In Firefox, click on the three vertical dots in the top right, expand the ... More section, and find the entry to Add to Home screen. That's it! You can use that shortcut instead of the native app with no real loss of previous functionality, and you get the extension!
+4. That should be all you need. Navigate to the [Bay Club connect homepage](bayclubconnect.com) and log in.
+5. It seems that the mobile Bay Club application is just a thin wrapper around their website. So instead of using the native app on Android, you can add a home screen shortcut to launching [bayclubconnect.com](bayclubconnect.com) via Firefox: in your Android Firefox, click on the three vertical dots in the top right, expand the "... More" section, and find the entry to "Add to Home screen". You can use that shortcut instead of the native app with no real loss of previous functionality, and you get the extension!
 
 ## Usage
 
