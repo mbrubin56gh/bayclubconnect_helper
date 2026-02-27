@@ -542,6 +542,7 @@
     // They let us target cleanup and binding behavior without fragile selectors.
     const DEBUG_PANEL_SURFACE_AVAILABILITY = 'availability';
     const DEBUG_PANEL_SURFACE_DURATION = 'duration';
+    const DEBUG_PANEL_SURFACE_ON_ERROR = 'on_error';
 
     const getDebugService = (() => {
         let serviceInstance = null;
@@ -926,6 +927,47 @@
         }
 
         bindDebugPanelControls(document);
+        refreshAllDebugPanelEntryCounts();
+    }
+
+    function showHelperFailureBannerAndRestoreNative(reasonCode, message, extraPayload) {
+        // Avoid duplicating the fallback banner if multiple error paths trigger in quick succession.
+        if (document.querySelector('.bc-helper-fallback-warning')) return;
+
+        removeOurContentAndUnhideNativeContent();
+
+        let debugJustEnabled = false;
+        if (!getDebugService().isEnabled()) {
+            debugJustEnabled = true;
+            getDebugService().setEnabled(true);
+        }
+
+        getDebugService().log('error', 'helper-fallback-activated', {
+            reasonCode,
+            debugJustEnabled,
+            ...extraPayload,
+        });
+
+        const bookingDomQueryService = getBookingDomQueryService();
+        const hosts = bookingDomQueryService.getTimeSlotHosts();
+        const host = hosts && hosts.length > 0 ? hosts[0] : null;
+        const banner = document.createElement('div');
+        banner.className = 'bc-helper-fallback-warning';
+        banner.innerHTML = `
+    <div style="margin: 8px 0 16px; padding: 10px 12px; border-radius: 4px; border: 1px solid rgba(255,180,120,0.9); background: rgba(255,140,0,0.15); color: rgba(255,240,220,0.96); font-size: 12px;">
+        <div style="font-weight: 600; margin-bottom: 6px;">Bay Club helper is temporarily using the native court picker.</div>
+        <div style="margin-bottom: 6px;">${message}</div>
+        <div style="margin-bottom: 8px;">We have enabled debug logging so that you can send diagnostics if this keeps happening. You can copy, email, or download logs using the controls below.</div>
+        ${buildDebugPanelHtml(DEBUG_PANEL_SURFACE_ON_ERROR)}
+    </div>`;
+
+        if (host && host.parentElement) {
+            host.parentElement.insertBefore(banner, host);
+        } else {
+            document.body.insertBefore(banner, document.body.firstChild);
+        }
+
+        bindDebugPanelControls(banner);
         refreshAllDebugPanelEntryCounts();
     }
     // #endregion Debug mode service, panel, and activation.
@@ -2685,7 +2727,42 @@
                 successCount: successfulResults.length,
                 failedCount: failedClubIds.length,
             });
-            getBookingStateService().setLastFetchState({ transformed: transformAvailability(successfulResults), params, failedClubIds });
+
+            if (successfulResults.length === 0) {
+                showHelperFailureBannerAndRestoreNative(
+                    'cross-club-all-failed',
+                    'The helper could not load court availability across clubs. This can happen if Bay Club changes their court APIs or there is a temporary network or server issue. Please use the native Hour View below for now.',
+                    {
+                        failedClubIds,
+                        date: params.date,
+                        categoryCode: params.categoryCode,
+                        timeSlotId: params.timeSlotId,
+                    }
+                );
+                return;
+            }
+
+            let transformed;
+            try {
+                transformed = transformAvailability(successfulResults);
+            } catch (error) {
+                getDebugService().log('error', 'availability-transform-failed', {
+                    message: error?.message || String(error),
+                });
+                showHelperFailureBannerAndRestoreNative(
+                    'availability-transform-failed',
+                    'The helper could not understand the format of the court availability response. This usually means Bay Club changed how their availability API works.',
+                    {
+                        failedClubIds,
+                        date: params.date,
+                        categoryCode: params.categoryCode,
+                        timeSlotId: params.timeSlotId,
+                    }
+                );
+                return;
+            }
+
+            getBookingStateService().setLastFetchState({ transformed, params, failedClubIds });
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
@@ -2694,7 +2771,11 @@
                 getDebugService().log('info', 'cross-club-fetch-aborted', null);
             } else {
                 getDebugService().log('error', 'cross-club-fetch-threw', { message: e?.message || String(e) });
-                throw e;
+                showHelperFailureBannerAndRestoreNative(
+                    'cross-club-fetch-threw',
+                    'The helper hit an unexpected error while loading court availability. The native Hour View is available below.',
+                    null
+                );
             }
         }
     }
