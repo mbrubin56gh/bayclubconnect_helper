@@ -180,6 +180,10 @@
             try {
                 const data = JSON.parse(xhr.responseText);
                 if (!data.clubsAvailabilities) return;
+                // We assume the first element here is the home club whose availability the native
+                // Hour View is about to render. If Bay Club changes this to include multiple clubs
+                // or to change the ordering, we will still inject at most one synthetic slot in
+                // the first entry so we preserve the invariant that Angular has something clickable.
                 const clubAvail = data.clubsAvailabilities[0];
                 const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
                 // If the club actually has availability for that date, we are good.
@@ -2108,6 +2112,9 @@
     // Availability filtering and rendering orchestration are encapsulated in this pipeline service.
     const getAvailabilityRenderPipeline = (() => {
         // Bay Club allows booking at most this many days in advance.
+        // We mirror that in the helper so our lock icons and disabled styling match what the
+        // native UI would consider bookable. If Bay Club adjusts this window, updating this
+        // constant keeps our visual treatment aligned.
         const BOOKING_ADVANCE_DAYS = 3;
         let serviceInstance = null;
 
@@ -2290,6 +2297,11 @@
                 if (!bottomBar) return;
                 const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
 
+                // The native booking flow expects a specific time slot to have been selected in
+                // the Hour View before allowing the Next button to advance. We keep that state
+                // machine happy by clicking the first visible native slot here. If Bay Club ever
+                // removes or renames these native slot elements, the helper will fall back to the
+                // native UI via our error banner rather than silently breaking the flow.
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
                 if (nativeSlot) {
                     nativeSlot.click();
