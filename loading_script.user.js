@@ -51,8 +51,8 @@
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4', 'Pickleball 5', 'Pickleball 6', 'Pickleball 7', 'Pickleball 8', 'Pickleball 9', 'Pickleball 10'],
     };
 
-    // Isolated single courts, such as those surrounded by fences are the most prized of all.
-    const ISOLATED_COURTS = {
+    // Gated single courts, such as those surrounded by fences, are the most prized of all.
+    const GATED_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
     };
     // #endregion Core constants and club metadata.
@@ -1901,8 +1901,8 @@
     const LABEL_MODE_TIME = 'time';
     const LABEL_MODE_CLUB = 'club';
 
-    function isCourtIsolated(courtName, clubId) {
-        return (ISOLATED_COURTS[clubId] || []).includes(courtName);
+    function isCourtGated(courtName, clubId) {
+        return (GATED_COURTS[clubId] || []).includes(courtName);
     }
 
     function isCourtEdge(courtName, clubId) {
@@ -1931,7 +1931,7 @@
     function buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
         const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
         const court = slot.courts[0];
-        const isolated = isCourtIsolated(court.courtName, clubId);
+        const gated = isCourtGated(court.courtName, clubId);
         const edge = isCourtEdge(court.courtName, clubId);
         const dataAttrs = slotLocked ? '' :
             `data-club-name="${meta.shortName}"
@@ -1945,10 +1945,10 @@
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
-           ${dataAttrs} style="${disabledStyle}${isolated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+           ${dataAttrs} style="${disabledStyle}${gated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${isolated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${gated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
       </div>
     </div>`;
@@ -1956,7 +1956,7 @@
 
     function buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
         const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
-        const hasIsolatedCourt = slot.courts.some(c => isCourtIsolated(c.courtName, clubId));
+        const hasGatedCourt = slot.courts.some(c => isCourtGated(c.courtName, clubId));
         const hasEdgeCourt = slot.courts.some(c => isCourtEdge(c.courtName, clubId));
 
         const courtNumbers = slot.courts.map(c => c.courtName?.replace(/\D+/g, '')).filter(Boolean);
@@ -1965,7 +1965,7 @@
             : 'Courts available';
 
         const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
-            const isolated = isCourtIsolated(court.courtName, clubId);
+            const gated = isCourtGated(court.courtName, clubId);
             const edge = isCourtEdge(court.courtName, clubId);
             return `<div class="bc-court-option"
             data-club-name="${meta.shortName}"
@@ -1979,17 +1979,17 @@
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
-            ${isolated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ isolated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
+            ${gated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ gated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
         </div>`;
         }).join('');
 
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
       <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
-           style="${disabledStyle}${hasIsolatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
+           style="${disabledStyle}${hasGatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
-        ${hasIsolatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${hasGatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
         ${lockIcon}
         <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
             ${expandedCourts}
