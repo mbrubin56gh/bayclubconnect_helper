@@ -1077,6 +1077,10 @@
                     parsed.setHours(0, 0, 0, 0);
                     return parsed;
                 }
+                getDebugService().log('warn', 'bookings-parse-day-label-failed', {
+                    rawDayLabel: dayLabel,
+                    normalizedDayLabel: normalized,
+                });
                 return null;
             }
 
@@ -1104,7 +1108,12 @@
 
             function parseTimeRange(timeText) {
                 const match = normalizeWhitespace(timeText).match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-                if (!match) return null;
+                if (!match) {
+                    getDebugService().log('warn', 'bookings-parse-time-range-failed', {
+                        rawTimeText: timeText,
+                    });
+                    return null;
+                }
                 const startHour12 = parseInt(match[1], 10);
                 const startMinute = parseInt(match[2], 10);
                 const endHour12 = parseInt(match[3], 10);
