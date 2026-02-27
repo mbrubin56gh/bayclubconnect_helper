@@ -166,6 +166,36 @@ Duration/player preference auto-selection also uses an in-file closure service (
 
 Single file: `loading_script.user.js`. The whole script is wrapped in an IIFE for scope isolation. No build step, no dependencies.
 
+## External Assumptions And Contracts
+
+These are the main Bay Club behaviors and DOM patterns the helper depends on. When something breaks after a Bay Club change, this list is a good first place to check.
+
+- **Availability API endpoint and shape**:
+  - The native Hour View uses `https://connect-api.bayclubs.io/court-booking/api/1.0/availability?...`.
+  - The JSON response has a `clubsAvailabilities` array; the first element is the home club whose availability the native Hour View is rendering.
+  - Each entry contains `courts` and `availableTimeSlots` collections shaped as of March 2026.
+- **Booking API endpoint**:
+  - The native booking flow posts to a URL whose path ends with `courtbookings`.
+  - The helper rewrites only these POSTs, based on `pendingSlotBooking` and the last availability params.
+- **Native Hour View slot DOM**:
+  - Hour View renders native slots as `app-court-time-slot-item div.time-slot`.
+  - The helper clicks one of these slots on selection so Angular’s booking state machine advances correctly.
+  - If these elements disappear or are renamed, the helper’s injected UI should fall back to the native Hour View via the on-error banner.
+- **Booking-flow URLs and shell**:
+  - The court booking flow currently uses URLs containing `create-booking`.
+  - The shared booking shell (including `app-page-title` and Hour View controls) continues to exist even if Bay Club tweaks intermediate steps.
+- **Bookings pages for calendar export**:
+  - The bookings list is at `/bookings`, with individual events rendered as `app-calendar-events-list app-racquet-sports-booking-calendar-event`.
+  - Booking detail pages live at `/racquet-sports/booking/:id` and expose a header container matching `.image-background .px-4.pb-4`.
+  - The “Reservation made by” row matches `.row.mt-2.size-14` with text containing “reservation made by”.
+- **Date and time text formats on bookings screens**:
+  - Day labels are one of:
+    - `Today` / `Tomorrow`.
+    - Month–day strings like `Feb 27`.
+    - A browser-parsable date string handled by `new Date(...)`.
+  - Time ranges are formatted as `H:MM - H:MM AM/PM` (for example: `7:00 - 8:30 PM`).
+  - When these assumptions fail, the helper logs `bookings-parse-day-label-failed` or `bookings-parse-time-range-failed` in debug mode to make format changes easier to diagnose.
+
 ## Linting
 
 ESLint with flat config (`eslint.config.mjs`). Intentionally unused args, vars, and caught errors can be prefixed with `_` and are ignored by lint. When you lint, check for function calls that don't agree with the arity of the functions being called.
