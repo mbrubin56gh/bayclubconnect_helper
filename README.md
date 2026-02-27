@@ -73,7 +73,7 @@ The instructions are essentially the same as for Chrome:
 
 <img width="1144" height="668" alt="Screenshot 2026-02-24 at 4 33 54 PM" src="https://github.com/user-attachments/assets/58412af9-e4b3-49e9-8dce-c85eaf55c0c7" />
 
-- Cards for times with edge courts are outlined in gold with gold stars: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa). Cards for times with courts that are gated (e.g. surrounded by a fence) have a heavier gold border and a sparklier star (only Santa Clara has these courts).
+- Cards for times with edge courts are outlined in gold and show a gold **E**: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa. Cards for times with courts that are gated (e.g. surrounded by a fence) have a heavier gold border and show a gold **G** instead (only Santa Clara has these courts).
 - If a time slot is available, but not within the 3 day booking period, it will display, but dimmed with a lock on it (matching the native picker).
 <img width="1116" height="639" alt="Screenshot 2026-02-24 at 4 34 34 PM" src="https://github.com/user-attachments/assets/c360b0cf-db61-457f-8c74-40a058ec4f60" />
 - Select your time slot and court and then click the button to proceed with booking.

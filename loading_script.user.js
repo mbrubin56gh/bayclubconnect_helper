@@ -1691,10 +1691,14 @@
     function buildViewToggleHtml() {
         const mode = getViewMode();
         return `
-    <div class="bc-view-toggle" style="margin-bottom: 16px; padding: 0 8px;">
+    <div class="bc-view-toggle" style="margin-bottom: 16px; padding: 0 8px; display: flex; align-items: center; gap: 12px;">
         <div class="btn-group" role="group">
             <button class="btn btn-outline-dark-grey size-10 py-2${mode === VIEW_MODE_BY_CLUB ? ' btn-selected' : ''}" data-view="${VIEW_MODE_BY_CLUB}">BY CLUB</button>
             <button class="btn btn-outline-dark-grey size-10 py-2${mode === VIEW_MODE_BY_TIME ? ' btn-selected' : ''}" data-view="${VIEW_MODE_BY_TIME}">BY TIME</button>
+        </div>
+        <div style="font-size: 11px; color: rgba(255,215,0,0.85); display: flex; flex-direction: column; gap: 2px;">
+            <span>E = edge court</span>
+            <span>G = gated court</span>
         </div>
     </div>`;
     }
@@ -1948,7 +1952,7 @@
            ${dataAttrs} style="${disabledStyle}${gated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${gated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${gated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,215,0,1);">G</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,200,50,0.9);">E</div>' : ''}
         ${lockIcon}
       </div>
     </div>`;
@@ -1979,7 +1983,7 @@
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
-            ${gated ? '<span style="color: rgba(255,215,0,1); font-size: 10px;">✦ gated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px;">★ edge</span>' : ''}
+            ${gated ? '<span style="color: rgba(255,215,0,1); font-size: 10px; font-weight: bold;">Gated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Edge</span>' : ''}
         </div>`;
         }).join('');
 
@@ -1989,7 +1993,7 @@
            style="${disabledStyle}${hasGatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
-        ${hasGatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 12px; color: rgba(255,215,0,1);">✦</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 10px; color: rgba(255,200,50,0.9);">★</div>' : ''}
+        ${hasGatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,215,0,1);">G</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,200,50,0.9);">E</div>' : ''}
         ${lockIcon}
         <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
             ${expandedCourts}
