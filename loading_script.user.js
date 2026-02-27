@@ -973,14 +973,16 @@
     // #endregion Debug mode service, panel, and activation.
 
     // #region Bookings page calendar export.
-    const createBookingsCalendarExportInstaller = (() => {
-        let alreadyInitialized = false;
+    const getBookingsDomQueryService = (() => {
+        let serviceInstance = null;
 
-        return function createBookingsCalendarExportInstaller() {
-            if (alreadyInitialized) return;
-            alreadyInitialized = true;
+        return function getBookingsDomQueryService() {
+            if (serviceInstance) return serviceInstance;
 
-            let reconcileScheduled = false;
+            const EVENTS_LIST_SELECTOR = 'app-calendar-events-list app-racquet-sports-booking-calendar-event';
+            const DESKTOP_TILE_SELECTOR = '.item-tile.d-none.d-md-flex';
+            const BOOKING_DETAILS_HEADER_SELECTOR = '.image-background .px-4.pb-4';
+            const RESERVATION_MADE_BY_ROW_SELECTOR = '.row.mt-2.size-14';
 
             function isOnBookingsPage() {
                 return location.pathname === '/bookings';
@@ -989,6 +991,47 @@
             function isOnBookingDetailsPage() {
                 return /^\/racquet-sports\/booking\/[0-9a-f-]+$/i.test(location.pathname);
             }
+
+            function getCalendarEventElements() {
+                return Array.from(document.querySelectorAll(EVENTS_LIST_SELECTOR));
+            }
+
+            function findDesktopTile(eventElement) {
+                if (!eventElement) return null;
+                return eventElement.querySelector(DESKTOP_TILE_SELECTOR);
+            }
+
+            function getBookingDetailsHeader() {
+                return document.querySelector(BOOKING_DETAILS_HEADER_SELECTOR);
+            }
+
+            function findReservationMadeByRow(matchesReservationText) {
+                const candidates = Array.from(document.querySelectorAll(RESERVATION_MADE_BY_ROW_SELECTOR));
+                if (candidates.length === 0) return null;
+                const match = candidates.find(row => matchesReservationText(row.textContent || ''));
+                return match || null;
+            }
+
+            serviceInstance = {
+                isOnBookingsPage,
+                isOnBookingDetailsPage,
+                getCalendarEventElements,
+                findDesktopTile,
+                getBookingDetailsHeader,
+                findReservationMadeByRow,
+            };
+            return serviceInstance;
+        };
+    })();
+
+    const createBookingsCalendarExportInstaller = (() => {
+        let alreadyInitialized = false;
+
+        return function createBookingsCalendarExportInstaller() {
+            if (alreadyInitialized) return;
+            alreadyInitialized = true;
+
+            let reconcileScheduled = false;
 
             function normalizeWhitespace(value) {
                 return (value || '').replace(/\s+/g, ' ').trim();
@@ -1078,10 +1121,6 @@
                 };
             }
 
-            function findDesktopTile(eventElement) {
-                return eventElement.querySelector('.item-tile.d-none.d-md-flex');
-            }
-
             function buildBookingDataFromFields({ dayLabel, timeRangeText, club, court, participantNames, playersLine }) {
                 if (!dayLabel || !timeRangeText || !club) return null;
                 const bookingDate = parseDayLabel(dayLabel);
@@ -1111,7 +1150,7 @@
             }
 
             function extractBookingData(eventElement) {
-                const desktopTile = findDesktopTile(eventElement);
+                const desktopTile = getBookingsDomQueryService().findDesktopTile(eventElement);
                 if (!desktopTile) return null;
 
                 const dayLabel = normalizeWhitespace(desktopTile.querySelector('.col-2 div:first-child')?.textContent);
@@ -1137,7 +1176,7 @@
             }
 
             function extractBookingDataFromDetailsPage() {
-                const header = document.querySelector('.image-background .px-4.pb-4');
+                const header = getBookingsDomQueryService().getBookingDetailsHeader();
                 if (!header) return null;
 
                 const headerText = normalizeWhitespace(header.textContent);
@@ -1273,9 +1312,9 @@
             }
 
             function injectButtonsForBookingsPage() {
-                if (!isOnBookingsPage()) return;
+                if (!getBookingsDomQueryService().isOnBookingsPage()) return;
 
-                document.querySelectorAll('app-calendar-events-list app-racquet-sports-booking-calendar-event').forEach(eventElement => {
+                getBookingsDomQueryService().getCalendarEventElements().forEach(eventElement => {
                     if (isCanceledBooking(eventElement)) return;
                     const booking = extractBookingData(eventElement);
                     if (!booking) return;
@@ -1287,13 +1326,14 @@
             }
 
             function injectButtonsForBookingDetailsPage() {
-                if (!isOnBookingDetailsPage()) return;
+                if (!getBookingsDomQueryService().isOnBookingDetailsPage()) return;
                 const booking = extractBookingDataFromDetailsPage();
                 if (!booking) return;
 
                 const calendarUrl = buildGoogleCalendarUrl(booking);
-                const reservationMadeByRow = Array.from(document.querySelectorAll('.row.mt-2.size-14'))
-                    .find(row => normalizeWhitespace(row.textContent).toLowerCase().includes('reservation made by'));
+                const reservationMadeByRow = getBookingsDomQueryService().findReservationMadeByRow(text =>
+                    normalizeWhitespace(text).toLowerCase().includes('reservation made by')
+                );
                 if (!reservationMadeByRow) return;
 
                 if (reservationMadeByRow.parentElement?.querySelector('.bc-calendar-action')) return;
