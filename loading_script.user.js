@@ -51,9 +51,15 @@
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4', 'Pickleball 5', 'Pickleball 6', 'Pickleball 7', 'Pickleball 8', 'Pickleball 9', 'Pickleball 10'],
     };
 
-    // Gated single courts, such as those surrounded by fences, are the most prized of all.
+    // Gated single courts are the most prized of all.
     const GATED_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 6'],
+    };
+
+    // Some courts are adjacent to a hitting wall, so you can reserve the court, and also get access to the wall
+    // to drill against.
+    const HITTING_WALL_COURTS = {
+        [CLUBS.santaClara]: ['Pickleball 9', 'Pickleball 10'],
     };
     // #endregion Core constants and club metadata.
 
@@ -1699,6 +1705,7 @@
         <div style="font-size: 11px; color: rgba(255,215,0,0.85); display: flex; flex-direction: column; gap: 2px;">
             <span>E = edge court</span>
             <span>G = gated court</span>
+            <span>H = hitting wall</span>
         </div>
     </div>`;
     }
@@ -1913,6 +1920,10 @@
         return (EDGE_COURTS[clubId] || []).includes(courtName);
     }
 
+    function courtHasHittingWall(courtName, clubId) {
+        return (HITTING_WALL_COURTS[clubId] || []).includes(courtName);
+    }
+
     function computeSlotLockState(slot, fetchDate, limitDate) {
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
@@ -1937,6 +1948,11 @@
         const court = slot.courts[0];
         const gated = isCourtGated(court.courtName, clubId);
         const edge = isCourtEdge(court.courtName, clubId);
+        const hasHittingWall = courtHasHittingWall(court.courtName, clubId);
+        const primaryLabel = gated ? 'G' : edge ? 'E' : '';
+        const badgeText = [primaryLabel, hasHittingWall ? 'H' : ''].filter(Boolean).join(' ');
+        const badgeColor = gated ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
+        const courtBadgeHtml = badgeText ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</div>` : '';
         const dataAttrs = slotLocked ? '' :
             `data-club-name="${meta.shortName}"
                 data-from="${slot.fromHumanTime}"
@@ -1952,7 +1968,7 @@
            ${dataAttrs} style="${disabledStyle}${gated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${gated ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,215,0,1);">G</div>' : edge ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,200,50,0.9);">E</div>' : ''}
+        ${courtBadgeHtml}
         ${lockIcon}
       </div>
     </div>`;
@@ -1962,6 +1978,7 @@
         const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
         const hasGatedCourt = slot.courts.some(c => isCourtGated(c.courtName, clubId));
         const hasEdgeCourt = slot.courts.some(c => isCourtEdge(c.courtName, clubId));
+        const hasHittingWallCourt = slot.courts.some(c => courtHasHittingWall(c.courtName, clubId));
 
         const courtNumbers = slot.courts.map(c => c.courtName?.replace(/\D+/g, '')).filter(Boolean);
         const courtSummary = courtNumbers.length > 0
@@ -1971,6 +1988,11 @@
         const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
             const gated = isCourtGated(court.courtName, clubId);
             const edge = isCourtEdge(court.courtName, clubId);
+            const hittingWall = courtHasHittingWall(court.courtName, clubId);
+            const courtLabelsHtml = [
+                gated ? '<span style="color: rgba(255,215,0,1); font-size: 10px; font-weight: bold;">Gated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Edge</span>' : '',
+                hittingWall ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Hitting wall</span>' : '',
+            ].filter(Boolean).join(' ');
             return `<div class="bc-court-option"
             data-club-name="${meta.shortName}"
             data-from="${slot.fromHumanTime}"
@@ -1983,9 +2005,14 @@
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
-            ${gated ? '<span style="color: rgba(255,215,0,1); font-size: 10px; font-weight: bold;">Gated</span>' : edge ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Edge</span>' : ''}
+            ${courtLabelsHtml}
         </div>`;
         }).join('');
+
+        const primaryLabel = hasGatedCourt ? 'G' : hasEdgeCourt ? 'E' : '';
+        const badgeText = [primaryLabel, hasHittingWallCourt ? 'H' : ''].filter(Boolean).join(' ');
+        const badgeColor = hasGatedCourt ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
+        const cardBadgeHtml = badgeText ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</div>` : '';
 
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
@@ -1993,7 +2020,7 @@
            style="${disabledStyle}${hasGatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
-        ${hasGatedCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,215,0,1);">G</div>' : hasEdgeCourt ? '<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: rgba(255,200,50,0.9);">E</div>' : ''}
+        ${cardBadgeHtml}
         ${lockIcon}
         <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
             ${expandedCourts}

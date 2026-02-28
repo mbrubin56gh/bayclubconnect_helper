@@ -93,7 +93,7 @@ The script uses a booking-flow monitor with lifecycle management:
 
 - **Multi-club availability**: All four clubs shown grouped by Morning / Afternoon / Evening
 - **Grouped time slots**: Multiple courts at the same time shown as a single expandable card; single-court slots are directly selectable
-- **Edge court indicators**: **E** marks courts on the edges of the court area (less ball spillage); **G** marks gated courts (e.g. surrounded by a fence), which are the most prized
+- **Edge court indicators**: **E** marks courts on the edges of the court area (less ball spillage); **G** marks gated courts (e.g. surrounded by a fence), which are the most prized; **H** marks courts adjacent to a hitting wall, displayed alongside E or G
 - **Club preference ordering**: Drag-and-drop widget on the duration selector page, persisted to localStorage
   Drag lifecycle wiring for this widget is encapsulated in `getClubOrderWidgetController()`, keeping transient drag state private.
 - **Time range filter**: Dual-handle slider to filter slots by time of day, persisted to localStorage
