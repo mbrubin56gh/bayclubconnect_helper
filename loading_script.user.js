@@ -3714,14 +3714,19 @@
                 history.pushState = function (...args) {
                     originalPushState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
+                    installLoginAutoLoginBanner();
                 };
 
                 history.replaceState = function (...args) {
                     originalReplaceState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
+                    installLoginAutoLoginBanner();
                 };
 
-                window.addEventListener('popstate', evaluateBookingFlowMonitoringState);
+                window.addEventListener('popstate', function () {
+                    evaluateBookingFlowMonitoringState();
+                    installLoginAutoLoginBanner();
+                });
             }
 
             // This SPA can navigate internally while a tab is backgrounded, and we do not need to
@@ -4093,6 +4098,83 @@
         };
     })();
 
+    // Detects when the site has redirected to the login page (typically because
+    // the session expired while the tab was left open overnight). Polls briefly
+    // for the Angular-rendered LOG IN button, then shows a countdown banner.
+    // After 5 minutes the button is clicked automatically, re-authenticating
+    // via the browser's saved credentials. The user can hit Cancel to abort.
+    //
+    // Re-entrant: returns immediately if already on a non-login URL or if the
+    // banner is already present, so it is safe to call from SPA navigation hooks.
+    function installLoginAutoLoginBanner() {
+        if (!location.pathname.includes('/account/login')) return;
+        if (document.querySelector('[data-bc-autologin-banner]')) return;
+
+        let pollCount = 0;
+        const pollId = setInterval(function () {
+            pollCount++;
+            const loginButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                .find(function (btn) { return /LOG\s*IN/i.test(btn.textContent); });
+            if (loginButton) {
+                clearInterval(pollId);
+                startLoginCountdown();
+            } else if (pollCount >= 20) {
+                // Button not found after 10 seconds; give up silently.
+                clearInterval(pollId);
+            }
+        }, 500);
+    }
+
+    function startLoginCountdown() {
+        if (document.querySelector('[data-bc-autologin-banner]')) return;
+
+        const TOTAL_SECONDS = 5 * 60;
+        let remaining = TOTAL_SECONDS;
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return `${m}:${String(s).padStart(2, '0')}`;
+        }
+
+        const banner = document.createElement('div');
+        banner.setAttribute('data-bc-autologin-banner', '');
+        banner.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: rgba(25,25,25,0.96); color: white; border-radius: 10px; padding: 14px 18px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 14px; z-index: 99999; box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 14px; border: 1px solid rgba(255,255,255,0.12);';
+
+        const label = document.createElement('span');
+        label.textContent = `Session expired \u2014 auto-login in ${formatTime(remaining)}`;
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.cssText = 'background: none; border: 1px solid rgba(255,255,255,0.35); color: rgba(255,255,255,0.75); border-radius: 4px; padding: 5px 12px; cursor: pointer; font-size: 13px; flex-shrink: 0;';
+
+        banner.appendChild(label);
+        banner.appendChild(cancelBtn);
+        document.body.appendChild(banner);
+
+        let cancelled = false;
+        cancelBtn.addEventListener('click', function () {
+            cancelled = true;
+            clearInterval(intervalId);
+            banner.remove();
+        });
+
+        const intervalId = setInterval(function () {
+            if (cancelled) return;
+            remaining--;
+            if (remaining <= 0) {
+                clearInterval(intervalId);
+                banner.remove();
+                // Re-query the button at fire time in case Angular re-rendered it.
+                const loginButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                    .find(function (btn) { return /LOG\s*IN/i.test(btn.textContent); });
+                if (loginButton) loginButton.click();
+                return;
+            }
+            label.textContent = `Session expired \u2014 auto-login in ${formatTime(remaining)}`;
+        }, 1000);
+    }
+
     // Start script services and monitoring.
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
@@ -4100,5 +4182,6 @@
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
     getScheduledBookingService().initializeOnPageLoad();
+    installLoginAutoLoginBanner();
     // #endregion Startup installers and bootstrap.
 })();
