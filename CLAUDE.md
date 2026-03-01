@@ -78,6 +78,32 @@ When unhiding native UI, only unhide elements the helper explicitly hid (using a
 To reduce churn from Angular mutation bursts, booking-flow DOM reconciliation is batched through `requestAnimationFrame`, so repeated mutation callbacks collapse into one reconcile pass per frame.
 Booking-step selectors and related visibility checks are centralized in `getBookingDomQueryService()` so monitor, injection, and cleanup logic share one source of truth for brittle Angular DOM signatures.
 
+### Scheduled Bookings
+
+Bay Club opens booking windows exactly 3 days in advance at the minute of the slot. The helper makes locked slots (beyond the window) clickable and books them automatically when the window opens.
+
+**Locked slot → partner picker flow**: Clicking a locked slot calls `handleLockedSlotClick`, which fetches the player list (see below), then renders an inline partner picker entirely within the helper UI. No Angular state machine interaction occurs. The user selects partners and clicks Schedule; `getScheduledBookingService().scheduleBooking()` persists the record and sets timers.
+
+**Player list strategy (cache-first)**:
+1. Check `bc_possible_players` and `bc_player_photos` in localStorage. If present, use immediately.
+2. If absent, XHR interception of the native `possiblePlayers` and `photos/members` endpoints populates the cache automatically during any normal booking flow.
+3. As a last resort, a temporary booking POST is made for an available slot to obtain a `courtBookingId`, `possiblePlayers` is fetched, photos are fetched, and both are cached. The temporary booking is never confirmed and expires server-side.
+- `cachePhotosFromXhr` always **merges** into the existing cache — never replaces — so a sparse on-demand result cannot evict richer XHR-intercepted data.
+
+**Two-step booking API**:
+1. `POST courtbookings` with `{ clubId, courtId, date, timeFromInMinutes, timeToInMinutes, categoryOptionsId, timeSlotId }` → response `{ courtBookingId }`.
+2. `PUT courtbookings/{courtBookingId}/confirm` with `{ invitations: [{ personId }], isVisibleToBuddies: true }`.
+Partners are mandatory. The `Ocp-Apim-Subscription-Key` header is static.
+
+**Fire sequence**: At T-minus-2 minutes, a timer warns the user (via browser Notification) to keep the tab open and have the page active so auth headers are fresh. At T-zero, the service checks for fresh auth headers, POSTs the booking, then PUTs the confirm. On success or failure, a browser Notification is shown.
+
+**Tab-close prevention**: A `beforeunload` handler fires only when a booking is within 10 minutes of its fire time. For bookings further out, the script reinitializes timers from localStorage on the next page load so navigation within the site is safe. A countdown prefix on `document.title` (e.g. `⏳ Booking in 2h 14m · …`) reminds the user to keep the tab open.
+- **Title observer loop pitfall**: Do not use a boolean flag to suppress MutationObserver re-entrancy on `document.title` assignments — the callback fires as a microtask after the synchronous code, so the flag is already `false` when it runs. Instead, skip the `document.title` assignment entirely when the computed value equals the current title (idempotency check).
+
+**`/bookings` pending section**: `injectPendingBookingsSection` injects a "Pending Bookings" section showing active (pending/firing) and failed bookings. Countdowns are updated by a dedicated 60-second `setInterval`. Never update DOM text inside `injectPendingBookingsSection` when the section already exists — doing so re-triggers the `MutationObserver → scheduleReconcile → RAF` cycle at up to 60 fps, making the page unresponsive.
+
+**`getScheduledBookingService()`** is the singleton closure service owning all of: localStorage persistence, player/photo caching, timer management, fire sequence, tab-close guards, and the public API (`scheduleBooking`, `cancelBooking`, `dismissBooking`, `getActiveBookings`, `getFailedBookings`, `fetchPossiblePlayers`, `initializeOnPageLoad`, `suppressTabCloseForNavigation`, and XHR cache helpers).
+
 ### Navigation Cleanup
 The script uses a booking-flow monitor with lifecycle management:
 - It patches `history.pushState` and `history.replaceState` (and listens to `popstate`) to detect flow transitions when Angular emits them.
@@ -104,6 +130,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
 - **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
 - **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `getPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
+- **Scheduled bookings**: Locked slots (beyond the 3-day booking window) are clickable. Clicking one opens an inline partner picker built entirely by the helper — no Angular state machine involvement. After the user selects partners and taps Schedule, the helper persists the booking to localStorage and fires the two-step booking API (`POST courtbookings` → `PUT courtbookings/{id}/confirm`) at the exact moment the window opens. A "Pending Bookings" section on `/bookings` shows countdown, scheduled time, and a Cancel button for each pending booking. Failed attempts show with a red error row and a Dismiss button.
 - **Debug mode panel**: When debug mode is enabled, the injected availability UI includes a compact panel with a toggle plus `Copy logs`, `Email logs`, `Download logs`, and `Clear logs` controls for support troubleshooting.
 
 ## Debug Mode Activation And Logging
@@ -161,6 +188,9 @@ Duration/player preference auto-selection also uses an in-file closure service (
 - `bc_view_mode` — `'by-club'` | `'by-time'` — availability panel layout mode
 - `bc_debug_enabled` — `'1'` | `'0'` — debug mode enabled state
 - `bc_debug_entries` — JSON array of debug log entries for copy/download support workflows
+- `bc_scheduled_bookings` — JSON array of scheduled booking records with shape `{ id, fireAtMs, bookingBody, confirmBody, slotLabel, partnerNames, status, failureReason, createdAtMs }`; status values: `pending` | `firing` | `succeeded` | `failed` | `cancelled`
+- `bc_possible_players` — player list cached from the `possiblePlayers` API, populated by XHR interception during normal booking flows and used by the partner picker for locked slots
+- `bc_player_photos` — photo map `{ memberId: { photoId, state } }`, always merged (never replaced) on update to preserve richer XHR-intercepted data over sparser on-demand fetch results
 
 ## File
 
@@ -184,8 +214,10 @@ These are the main Bay Club behaviors and DOM patterns the helper depends on. Wh
 - **Booking-flow URLs and shell**:
   - The court booking flow currently uses URLs containing `create-booking`.
   - The shared booking shell (including `app-page-title` and Hour View controls) continues to exist even if Bay Club tweaks intermediate steps.
-- **Bookings pages for calendar export**:
-  - The bookings list is at `/bookings`, with individual events rendered as `app-calendar-events-list app-racquet-sports-booking-calendar-event`.
+- **Bookings pages for calendar export and scheduled bookings**:
+  - The bookings list is at `/bookings`. Individual upcoming events are `app-racquet-sports-booking-calendar-event` inside `app-paged-list`. Note: `app-calendar-events-list` does **not** exist in the live DOM (as of March 2026).
+  - Cancelled bookings live inside `app-calendar-cancelled-by-me-list`, which is inside `app-calendar`.
+  - `app-calendar` and `app-paged-list` have **different parent `DIV`s** — do not assume a shared ancestor when finding insertion points.
   - Booking detail pages live at `/racquet-sports/booking/:id` and expose a header container matching `.image-background .px-4.pb-4`.
   - The “Reservation made by” row matches `.row.mt-2.size-14` with text containing “reservation made by”.
 - **Date and time text formats on bookings screens**:
