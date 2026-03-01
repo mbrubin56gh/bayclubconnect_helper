@@ -1044,6 +1044,16 @@
             const SCHEDULED_STATUS_FAILED = 'failed';
             const SCHEDULED_STATUS_CANCELLED = 'cancelled';
 
+            // Enum values for whether a locked slot was taken by a premium
+            // member during their 4-day advance window. Exposed on serviceInstance
+            // so the bookings page UI can reference them without coupling to the
+            // service's internal constants.
+            const SLOT_CHECK_STATUS = Object.freeze({
+                UNKNOWN: 'unknown',
+                AVAILABLE: 'available',
+                TAKEN: 'taken',
+            });
+
             const timersByBookingId = new Map();
             let titleIntervalId = null;
             let titleObserver = null;
@@ -1080,6 +1090,7 @@
             }
 
             function dismissBooking(id) {
+                clearTimersForBooking(id);
                 saveAll(loadAll().filter(b => b.id !== id));
                 getDebugService().log('info', 'scheduled-booking-dismissed', { id });
             }
@@ -1204,6 +1215,7 @@
                         timeToInMinutes: slotInfo.toMinutes,
                         categoryOptionsId: lastFetchState.params.categoryOptionsId,
                         timeSlotId: timeSlotId,
+                        categoryCode: lastFetchState.params.categoryCode,
                     },
                     confirmBody: {
                         invitations: selectedPartners.map(p => ({ personId: p.personId })),
@@ -1212,6 +1224,7 @@
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
                     status: SCHEDULED_STATUS_PENDING,
+                    slotCheckStatus: SLOT_CHECK_STATUS.UNKNOWN,
                     failureReason: null,
                     createdAtMs: Date.now(),
                 };
@@ -1332,6 +1345,7 @@
                 }
 
                 timersByBookingId.set(booking.id, timers);
+                startSlotMonitoringForBooking(booking);
             }
 
             function clearTimersForBooking(bookingId) {
@@ -1340,6 +1354,89 @@
                     timers.forEach(t => clearTimeout(t));
                     timersByBookingId.delete(bookingId);
                 }
+            }
+
+            // Append a timer ID to an existing booking's timer list without
+            // replacing timers that were already registered. Used by monitoring
+            // polls scheduled after the initial fire/prefire timers are set.
+            function addTimerForBooking(bookingId, timerId) {
+                const timers = timersByBookingId.get(bookingId);
+                if (timers) {
+                    timers.push(timerId);
+                } else {
+                    timersByBookingId.set(bookingId, [timerId]);
+                }
+            }
+
+            // Fetch availability for the booking's specific court and time slot.
+            // Returns SLOT_CHECK_STATUS.AVAILABLE if the slot is visible in the
+            // availability response, SLOT_CHECK_STATUS.TAKEN if it is absent
+            // (someone else has booked it), or SLOT_CHECK_STATUS.UNKNOWN if the
+            // check could not be completed (e.g., no auth headers available yet).
+            async function checkSlotTaken(booking) {
+                const headers = buildAuthHeaders();
+                if (!headers) return SLOT_CHECK_STATUS.UNKNOWN;
+
+                const body = booking.bookingBody;
+                const url = `${BOOKING_API_BASE}/availability?clubId=${body.clubId}&date=${body.date.value}&categoryCode=${body.categoryCode}&categoryOptionsId=${body.categoryOptionsId}&timeSlotId=${body.timeSlotId}`;
+                try {
+                    const response = await fetch(url, { headers });
+                    if (!response.ok) return SLOT_CHECK_STATUS.UNKNOWN;
+                    const data = await response.json();
+                    const timeSlots = (data && data.clubsAvailabilities &&
+                        data.clubsAvailabilities[0] &&
+                        data.clubsAvailabilities[0].availableTimeSlots) || [];
+                    const isAvailable = timeSlots.some(function (slot) {
+                        return slot.courtId === body.courtId &&
+                            slot.fromInMinutes === body.timeFromInMinutes &&
+                            slot.toInMinutes === body.timeToInMinutes;
+                    });
+                    return isAvailable ? SLOT_CHECK_STATUS.AVAILABLE : SLOT_CHECK_STATUS.TAKEN;
+                } catch (_e) {
+                    return SLOT_CHECK_STATUS.UNKNOWN;
+                }
+            }
+
+            // Begin polling for the locked slot starting 24 hours before the
+            // fire time — that is, when the premium-member 4-day booking window
+            // opens. Polls every 4 hours until fire time or until the booking
+            // is cancelled. Each poll timer is tracked in timersByBookingId so
+            // clearTimersForBooking stops them all.
+            function startSlotMonitoringForBooking(booking) {
+                const MONITOR_LEAD_MS = 24 * 60 * 60 * 1000;
+                const MONITOR_INTERVAL_MS = 4 * 60 * 60 * 1000;
+                const monitorStartMs = booking.fireAtMs - MONITOR_LEAD_MS;
+                const now = Date.now();
+
+                if (now >= booking.fireAtMs) return;
+
+                const delayToFirstCheck = Math.max(0, monitorStartMs - now);
+
+                function scheduleNextCheck(delayMs) {
+                    addTimerForBooking(booking.id, setTimeout(runCheck, delayMs));
+                }
+
+                async function runCheck() {
+                    const current = loadAll().find(function (b) { return b.id === booking.id; });
+                    if (!current || current.status !== SCHEDULED_STATUS_PENDING) return;
+                    if (Date.now() >= current.fireAtMs) return;
+
+                    const status = await checkSlotTaken(current);
+                    if (status !== SLOT_CHECK_STATUS.UNKNOWN && current.slotCheckStatus !== status) {
+                        updateBooking(booking.id, { slotCheckStatus: status });
+                        updateTitlePrefix();
+                        if (status === SLOT_CHECK_STATUS.TAKEN) {
+                            getDebugService().log('warn', 'scheduled-booking-slot-taken', { id: booking.id });
+                        }
+                    }
+
+                    const nextCheckAt = Date.now() + MONITOR_INTERVAL_MS;
+                    if (nextCheckAt < current.fireAtMs) {
+                        scheduleNextCheck(MONITOR_INTERVAL_MS);
+                    }
+                }
+
+                scheduleNextCheck(delayToFirstCheck);
             }
 
             function prefireAuthCheck(bookingId) {
@@ -1450,16 +1547,19 @@
                 const active = getActiveBookings();
                 if (active.length === 0) return;
 
+                const anyTaken = active.some(b => b.slotCheckStatus === SLOT_CHECK_STATUS.TAKEN);
+
                 // Find the soonest fire time.
                 const soonest = Math.min(...active.map(b => b.fireAtMs));
                 const diff = soonest - Date.now();
+                const prefix = anyTaken ? '\u26a0\ufe0f' : '\u23f3';
                 const newTitle = diff <= 0
-                    ? '\u23f3 Booking firing\u2026 \u00b7 ' + (originalTitle || 'COURT BOOKING')
+                    ? `${prefix} Booking firing\u2026 \u00b7 ` + (originalTitle || 'COURT BOOKING')
                     : (() => {
                         const hours = Math.floor(diff / (1000 * 60 * 60));
                         const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
                         const countdown = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-                        return `\u23f3 Booking in ${countdown} \u00b7 ` + (originalTitle || 'COURT BOOKING');
+                        return `${prefix} Booking in ${countdown} \u00b7 ` + (originalTitle || 'COURT BOOKING');
                     })();
 
                 // Skip the assignment when the title is already correct. If we always
@@ -1543,6 +1643,7 @@
                 cachePlayersFromXhr,
                 cachePhotosFromXhr,
                 fetchPhotos,
+                SLOT_CHECK_STATUS,
             };
             return serviceInstance;
         };
@@ -1944,10 +2045,13 @@
 
             function buildPendingBookingRowHtml(booking) {
                 const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
+                const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
+                const warningStyle = isTaken ? '' : 'display: none;';
                 return `<div data-bc-pending-booking="${booking.id}" style="background: rgba(0,188,212,0.08); border: 1px solid rgba(0,188,212,0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
                         <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 4px;">Partners: ${partnerList}</div>
+                        <div data-bc-slot-warning style="font-size: 12px; color: #ffb74d; margin-top: 4px; ${warningStyle}">\u26a0\ufe0f The court was booked by someone else</div>
                         <div data-bc-countdown style="font-size: 12px; color: rgb(0,188,212); margin-top: 4px;">${formatCountdown(booking.fireAtMs)}</div>
                     </div>
                     <button data-bc-cancel-booking="${booking.id}" style="background: none; border: 1px solid rgba(239,83,80,0.5); color: #ef5350; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Cancel</button>
@@ -2053,6 +2157,11 @@
                         if (row) {
                             const countdown = row.querySelector('[data-bc-countdown]');
                             if (countdown) countdown.textContent = formatCountdown(booking.fireAtMs);
+                            const warning = row.querySelector('[data-bc-slot-warning]');
+                            if (warning) {
+                                const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
+                                warning.style.display = isTaken ? '' : 'none';
+                            }
                         }
                     });
                 }, 60 * 1000);
