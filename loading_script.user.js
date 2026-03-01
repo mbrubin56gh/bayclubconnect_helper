@@ -272,10 +272,48 @@
             return originalSetRequestHeader.apply(this, arguments);
         };
 
+        function maybeCachePossiblePlayersResponse(xhr) {
+            if (xhr.status < 200 || xhr.status >= 300) return;
+            if (!xhr.responseText) return;
+            try {
+                const players = JSON.parse(xhr.responseText);
+                if (Array.isArray(players) && players.length > 0 && players[0].personId) {
+                    getScheduledBookingService().cachePlayersFromXhr(players);
+                    getDebugService().log('info', 'cached-possible-players-from-xhr', { count: players.length });
+                }
+            } catch (_e) {
+                // Not parseable; skip caching.
+            }
+        }
+
+        function maybeCachePlayerPhotosResponse(xhr) {
+            if (xhr.status < 200 || xhr.status >= 300) return;
+            if (!xhr.responseText) return;
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (data && data.memberPhotos && typeof data.memberPhotos === 'object') {
+                    getScheduledBookingService().cachePhotosFromXhr(data.memberPhotos);
+                    getDebugService().log('info', 'cached-player-photos-from-xhr', { count: Object.keys(data.memberPhotos).length });
+                }
+            } catch (_e) {
+                // Not parseable; skip caching.
+            }
+        }
+
         XMLHttpRequest.prototype.open = function (method, url, ...rest) {
             if (typeof url === 'string' && url.includes(AVAILABILITY_API_PATH)) {
                 this.addEventListener('load', function () {
                     maybePatchAvailabilityResponseForAngular(this);
+                });
+            }
+            if (typeof url === 'string' && url.includes('possiblePlayers')) {
+                this.addEventListener('load', function () {
+                    maybeCachePossiblePlayersResponse(this);
+                });
+            }
+            if (typeof url === 'string' && url.includes('photos/members')) {
+                this.addEventListener('load', function () {
+                    maybeCachePlayerPhotosResponse(this);
                 });
             }
             setRequestInfo(this, method, url);
@@ -984,6 +1022,533 @@
     }
     // #endregion Debug mode service, panel, and activation.
 
+    // #region Scheduled bookings service.
+    const getScheduledBookingService = (() => {
+        let serviceInstance = null;
+
+        return function getScheduledBookingService() {
+            if (serviceInstance) return serviceInstance;
+
+            const SCHEDULED_BOOKING_ADVANCE_DAYS = 3;
+            const SCHEDULED_BOOKINGS_KEY = 'bc_scheduled_bookings';
+            const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
+            const PLAYER_PHOTOS_KEY = 'bc_player_photos';
+            const BOOKING_API_BASE = 'https://connect-api.bayclubs.io/court-booking/api/1.0';
+            const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
+            const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
+            const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
+
+            const SCHEDULED_STATUS_PENDING = 'pending';
+            const SCHEDULED_STATUS_FIRING = 'firing';
+            const SCHEDULED_STATUS_SUCCEEDED = 'succeeded';
+            const SCHEDULED_STATUS_FAILED = 'failed';
+            const SCHEDULED_STATUS_CANCELLED = 'cancelled';
+
+            const timersByBookingId = new Map();
+            let titleIntervalId = null;
+            let titleObserver = null;
+            let beforeUnloadHandler = null;
+            let originalTitle = null;
+            // Persistence helpers.
+
+            function loadAll() {
+                return getLocalStorageService().getJson(SCHEDULED_BOOKINGS_KEY, '[bc] failed to parse scheduled bookings') || [];
+            }
+
+            function saveAll(bookings) {
+                getLocalStorageService().setJson(SCHEDULED_BOOKINGS_KEY, bookings);
+            }
+
+            function updateBooking(id, updates) {
+                const all = loadAll();
+                const idx = all.findIndex(b => b.id === id);
+                if (idx === -1) return;
+                Object.assign(all[idx], updates);
+                saveAll(all);
+            }
+
+            function getPendingBookings() {
+                return loadAll().filter(b => b.status === SCHEDULED_STATUS_PENDING);
+            }
+
+            function getActiveBookings() {
+                return loadAll().filter(b => b.status === SCHEDULED_STATUS_PENDING || b.status === SCHEDULED_STATUS_FIRING);
+            }
+
+            function getFailedBookings() {
+                return loadAll().filter(b => b.status === SCHEDULED_STATUS_FAILED);
+            }
+
+            function dismissBooking(id) {
+                saveAll(loadAll().filter(b => b.id !== id));
+                getDebugService().log('info', 'scheduled-booking-dismissed', { id });
+            }
+
+            // Auth headers for scheduled booking API calls.
+
+            function buildAuthHeaders() {
+                const auth = getBookingStateService().getCapturedHeader('Authorization');
+                const session = getBookingStateService().getCapturedHeader('X-SessionId');
+                if (!auth || !session) return null;
+                return {
+                    'Authorization': auth,
+                    'X-SessionId': session,
+                    'Request-Id': crypto.randomUUID(),
+                    'Ocp-Apim-Subscription-Key': SUBSCRIPTION_KEY,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                };
+            }
+
+            // Partner list: populated by XHR interception during normal booking flows.
+
+            function fetchPossiblePlayers() {
+                const players = getLocalStorageService().getJson(POSSIBLE_PLAYERS_KEY, '[bc] failed to parse cached players');
+                const photosByMemberId = getLocalStorageService().getJson(PLAYER_PHOTOS_KEY, '[bc] failed to parse cached player photos') || {};
+                if (!players || !Array.isArray(players) || players.length === 0) {
+                    getDebugService().log('warn', 'scheduled-booking-no-player-cache');
+                    throw new Error('Partner list not available. Complete a regular booking first to populate your partner list.');
+                }
+                return { players, photosByMemberId };
+            }
+
+            // Called by the XHR interceptor when the native booking flow fetches the player list.
+            function cachePlayersFromXhr(players) {
+                getLocalStorageService().setJson(POSSIBLE_PLAYERS_KEY, players);
+            }
+
+            // Called by the XHR interceptor when the native booking flow fetches player photos,
+            // and by fetchPhotos after a direct API call. Merges incoming photos into the existing
+            // cache so a sparse result never evicts richer data from a full booking flow.
+            function cachePhotosFromXhr(photosByMemberId) {
+                const existing = getLocalStorageService().getJson(PLAYER_PHOTOS_KEY, '[bc] failed to parse cached player photos') || {};
+                const merged = Object.assign({}, existing, photosByMemberId);
+                getLocalStorageService().setJson(PLAYER_PHOTOS_KEY, merged);
+            }
+
+            // Fetch photos directly for a given player list. Used when the XHR cache is stale
+            // or unpopulated. Returns the photosByMemberId map, or null on failure.
+            async function fetchPhotos(players) {
+                const headers = buildAuthHeaders();
+                if (!headers) {
+                    getDebugService().log('warn', 'fetch-photos-no-auth-headers');
+                    return null;
+                }
+
+                const memberIds = players.map(p => p.memberId).filter(Boolean);
+                if (memberIds.length === 0) {
+                    getDebugService().log('warn', 'fetch-photos-no-member-ids');
+                    return null;
+                }
+
+                // GET requests must not include Content-Type or they may be rejected.
+                const getHeaders = Object.assign({}, headers);
+                delete getHeaders['Content-Type'];
+
+                const url = `${PHOTOS_API_BASE}/photos/members?membersIds=${memberIds.join(',')}`;
+                getDebugService().log('info', 'fetch-photos-request', { url, count: memberIds.length });
+
+                try {
+                    const response = await fetch(url, { headers: getHeaders });
+                    if (!response.ok) {
+                        getDebugService().log('warn', 'fetch-photos-http-error', { status: response.status });
+                        return null;
+                    }
+                    const data = await response.json();
+                    const photosByMemberId = data.memberPhotos || {};
+                    cachePhotosFromXhr(photosByMemberId);
+                    getDebugService().log('info', 'fetch-photos-success', { count: Object.keys(photosByMemberId).length });
+                    return photosByMemberId;
+                } catch (e) {
+                    getDebugService().log('warn', 'fetch-photos-exception', { message: e.message });
+                    return null;
+                }
+            }
+
+            // Photo URL helper.
+
+            function getPlayerPhotoUrl(memberId, photosByMemberId) {
+                const photoInfo = photosByMemberId[memberId];
+                if (!photoInfo || !photoInfo.photoId) return null;
+                return `${PHOTO_CDN_BASE}/${photoInfo.photoId}?format=raw&&height=192`;
+            }
+
+            // Compute when the booking window opens for a given slot.
+
+            function computeFireAtMs(date, fromMinutes) {
+                const slotDate = new Date(date + 'T00:00:00');
+                slotDate.setMinutes(slotDate.getMinutes() + fromMinutes);
+                slotDate.setDate(slotDate.getDate() - SCHEDULED_BOOKING_ADVANCE_DAYS);
+                return slotDate.getTime();
+            }
+
+            // Schedule a booking: build bodies, persist, set timers.
+
+            function scheduleBooking(slotInfo, selectedPartners) {
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                if (!lastFetchState) throw new Error('No fetch state available to build booking body.');
+
+                const timeSlotId = CLUB_MAX_TIMESLOT[slotInfo.clubId] &&
+                    lastFetchState.params.timeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[slotInfo.clubId]
+                    : lastFetchState.params.timeSlotId;
+
+                const booking = {
+                    id: crypto.randomUUID(),
+                    fireAtMs: computeFireAtMs(slotInfo.date, slotInfo.fromMinutes),
+                    bookingBody: {
+                        clubId: slotInfo.clubId,
+                        courtId: slotInfo.courtId,
+                        date: { value: slotInfo.date, date: slotInfo.date },
+                        timeFromInMinutes: slotInfo.fromMinutes,
+                        timeToInMinutes: slotInfo.toMinutes,
+                        categoryOptionsId: lastFetchState.params.categoryOptionsId,
+                        timeSlotId: timeSlotId,
+                    },
+                    confirmBody: {
+                        invitations: selectedPartners.map(p => ({ personId: p.personId })),
+                        isVisibleToBuddies: true,
+                    },
+                    slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
+                    partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
+                    status: SCHEDULED_STATUS_PENDING,
+                    failureReason: null,
+                    createdAtMs: Date.now(),
+                };
+
+                const all = loadAll();
+                all.push(booking);
+                saveAll(all);
+
+                scheduleTimersForBooking(booking);
+                installTabClosePreventionIfNeeded();
+
+                getDebugService().log('info', 'scheduled-booking-created', {
+                    id: booking.id,
+                    slotLabel: booking.slotLabel,
+                    fireAtMs: booking.fireAtMs,
+                });
+
+                return booking;
+            }
+
+            function formatDateForSlotLabel(dateString) {
+                const d = new Date(dateString + 'T00:00:00');
+                return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            }
+
+            // Fire sequence: execute the actual booking when the window opens.
+
+            async function executeFireSequence(bookingId) {
+                const all = loadAll();
+                const booking = all.find(b => b.id === bookingId);
+                if (!booking || booking.status !== SCHEDULED_STATUS_PENDING) return;
+
+                updateBooking(bookingId, { status: SCHEDULED_STATUS_FIRING });
+
+                const headers = buildAuthHeaders();
+                if (!headers) {
+                    failBooking(bookingId, 'Session expired \u2014 please reload the page.');
+                    return;
+                }
+
+                try {
+                    // Step 1: POST courtbookings.
+                    const bookingResponse = await fetch(`${BOOKING_API_BASE}/courtbookings`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(booking.bookingBody),
+                    });
+                    if (!bookingResponse.ok) {
+                        const errorText = await bookingResponse.text().catch(() => '');
+                        throw new Error(`Booking POST failed: HTTP ${bookingResponse.status} ${errorText}`);
+                    }
+                    const bookingResult = await bookingResponse.json();
+                    const courtBookingId = bookingResult.courtBookingId;
+                    if (!courtBookingId) {
+                        throw new Error('Booking POST did not return a courtBookingId.');
+                    }
+
+                    // Step 2: PUT confirm with partners.
+                    const confirmResponse = await fetch(`${BOOKING_API_BASE}/courtbookings/${courtBookingId}/confirm`, {
+                        method: 'PUT',
+                        headers,
+                        body: JSON.stringify(booking.confirmBody),
+                    });
+                    if (!confirmResponse.ok) {
+                        const errorText = await confirmResponse.text().catch(() => '');
+                        throw new Error(`Confirm PUT failed: HTTP ${confirmResponse.status} ${errorText}`);
+                    }
+
+                    succeedBooking(bookingId);
+                } catch (error) {
+                    failBooking(bookingId, error.message || String(error));
+                }
+            }
+
+            function succeedBooking(bookingId) {
+                updateBooking(bookingId, { status: SCHEDULED_STATUS_SUCCEEDED });
+                clearTimersForBooking(bookingId);
+                removeTabClosePreventionIfDone();
+                showNotification('Booking Succeeded', loadAll().find(b => b.id === bookingId)?.slotLabel || 'Your scheduled booking was placed successfully.');
+                getDebugService().log('info', 'scheduled-booking-succeeded', { id: bookingId });
+            }
+
+            function failBooking(bookingId, reason) {
+                updateBooking(bookingId, { status: SCHEDULED_STATUS_FAILED, failureReason: reason });
+                clearTimersForBooking(bookingId);
+                removeTabClosePreventionIfDone();
+                showNotification('Booking Failed', `${reason}\n${loadAll().find(b => b.id === bookingId)?.slotLabel || ''}`);
+                getDebugService().log('warn', 'scheduled-booking-failed', { id: bookingId, reason });
+            }
+
+            function cancelBooking(id) {
+                updateBooking(id, { status: SCHEDULED_STATUS_CANCELLED });
+                clearTimersForBooking(id);
+                removeTabClosePreventionIfDone();
+                getDebugService().log('info', 'scheduled-booking-cancelled', { id });
+            }
+
+            // Timer management.
+
+            function scheduleTimersForBooking(booking) {
+                clearTimersForBooking(booking.id);
+                const now = Date.now();
+                const timeUntilFire = booking.fireAtMs - now;
+                const timers = [];
+
+                // T-minus-2-min: freshen auth headers by checking availability.
+                const tMinus2 = timeUntilFire - (2 * 60 * 1000);
+                if (tMinus2 > 0) {
+                    timers.push(setTimeout(() => prefireAuthCheck(booking.id), tMinus2));
+                }
+
+                // T-zero: attempt the booking.
+                if (timeUntilFire > 0) {
+                    timers.push(setTimeout(() => attemptFireWithPolling(booking.id), timeUntilFire));
+                } else {
+                    // Overdue: fire immediately.
+                    timers.push(setTimeout(() => attemptFireWithPolling(booking.id), 0));
+                }
+
+                timersByBookingId.set(booking.id, timers);
+            }
+
+            function clearTimersForBooking(bookingId) {
+                const timers = timersByBookingId.get(bookingId);
+                if (timers) {
+                    timers.forEach(t => clearTimeout(t));
+                    timersByBookingId.delete(bookingId);
+                }
+            }
+
+            function prefireAuthCheck(bookingId) {
+                // Fire a lightweight availability check to keep the session alive.
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                if (!lastFetchState) {
+                    showNotification('Booking Warning', 'Your scheduled booking fires soon but no session is active. Please interact with the page.');
+                    return;
+                }
+                const headers = buildAuthHeaders();
+                if (!headers) {
+                    showNotification('Booking Warning', 'Auth headers missing. Please reload the page before your booking fires.');
+                    return;
+                }
+                // Make a simple availability GET to keep the session warm.
+                const params = lastFetchState.params;
+                fetch(`${BOOKING_API_BASE}/availability?clubId=${Object.values(CLUBS)[0]}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
+                    headers,
+                }).catch(() => {
+                    // Non-critical; we just wanted to touch the session.
+                });
+                getDebugService().log('info', 'scheduled-booking-prefire-auth-check', { id: bookingId });
+            }
+
+            async function attemptFireWithPolling(bookingId, attempt) {
+                const currentAttempt = attempt || 0;
+                const maxAttempts = 4;
+
+                const booking = loadAll().find(b => b.id === bookingId);
+                if (!booking || booking.status !== SCHEDULED_STATUS_PENDING) return;
+
+                // Check if the slot is now available by checking current time against fire time.
+                if (Date.now() >= booking.fireAtMs) {
+                    // Window should be open; fire the booking.
+                    await executeFireSequence(bookingId);
+                    return;
+                }
+
+                // Still locked; poll again if under max attempts.
+                if (currentAttempt < maxAttempts) {
+                    const pollInterval = 30 * 1000;
+                    setTimeout(() => attemptFireWithPolling(bookingId, currentAttempt + 1), pollInterval);
+                } else {
+                    failBooking(bookingId, 'Slot did not open in time after polling. Please book manually.');
+                }
+            }
+
+            // Notifications.
+
+            function showNotification(title, body) {
+                if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                    try {
+                        new Notification(title, { body, requireInteraction: true });
+                    } catch (_e) {
+                        // Notification API may not be fully supported.
+                    }
+                }
+                getDebugService().log('info', 'scheduled-booking-notification', { title, body });
+            }
+
+            // Tab-close prevention.
+
+            function installTabClosePreventionIfNeeded() {
+                if (getActiveBookings().length === 0) return;
+
+                // Title prefix with countdown.
+                if (!titleIntervalId) {
+                    originalTitle = document.title;
+                    updateTitlePrefix();
+                    titleIntervalId = setInterval(updateTitlePrefix, 60 * 1000);
+
+                    // Watch for Angular overwriting the title and re-apply our prefix.
+                    // updateTitlePrefix() compares the computed title against document.title
+                    // before assigning, so when this observer fires after our own assignment
+                    // the titles match and no further mutation is made — breaking the loop.
+                    const titleEl = document.querySelector('title');
+                    if (titleEl) {
+                        titleObserver = new MutationObserver(() => {
+                            if (getActiveBookings().length > 0) {
+                                updateTitlePrefix();
+                            }
+                        });
+                        titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+                    }
+                }
+
+                // Beforeunload handler.
+                if (!beforeUnloadHandler) {
+                    beforeUnloadHandler = (e) => {
+                        // Only warn when a booking is about to fire (within 10 minutes).
+                        // For bookings further out, the script reinitializes timers from
+                        // localStorage on the next page load, so navigation is safe and
+                        // blocking it would cause unnecessary friction (e.g. when the user
+                        // navigates between pages on bayclubconnect.com).
+                        const TEN_MINUTES_MS = 10 * 60 * 1000;
+                        const hasSoonBooking = getActiveBookings().some(
+                            b => b.fireAtMs - Date.now() < TEN_MINUTES_MS
+                        );
+                        if (!hasSoonBooking) return;
+                        e.preventDefault();
+                        e.returnValue = '';
+                    };
+                    window.addEventListener('beforeunload', beforeUnloadHandler);
+                }
+            }
+
+            function updateTitlePrefix() {
+                const active = getActiveBookings();
+                if (active.length === 0) return;
+
+                // Find the soonest fire time.
+                const soonest = Math.min(...active.map(b => b.fireAtMs));
+                const diff = soonest - Date.now();
+                const newTitle = diff <= 0
+                    ? '\u23f3 Booking firing\u2026 \u00b7 ' + (originalTitle || 'COURT BOOKING')
+                    : (() => {
+                        const hours = Math.floor(diff / (1000 * 60 * 60));
+                        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                        const countdown = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+                        return `\u23f3 Booking in ${countdown} \u00b7 ` + (originalTitle || 'COURT BOOKING');
+                    })();
+
+                // Skip the assignment when the title is already correct. If we always
+                // assigned, our own assignment would fire the MutationObserver, which
+                // would call updateTitlePrefix again, looping at microtask speed.
+                if (document.title === newTitle) return;
+                document.title = newTitle;
+            }
+
+            // Remove the beforeunload guard for a programmatic navigation to the bookings
+            // page. The guard will be reinstalled by initializeOnPageLoad on the new page
+            // load if there are still active bookings.
+            function suppressTabCloseForNavigation() {
+                if (beforeUnloadHandler) {
+                    window.removeEventListener('beforeunload', beforeUnloadHandler);
+                    beforeUnloadHandler = null;
+                }
+            }
+
+            function removeTabClosePreventionIfDone() {
+                if (getActiveBookings().length > 0) return;
+
+                if (titleIntervalId) {
+                    clearInterval(titleIntervalId);
+                    titleIntervalId = null;
+                }
+                if (titleObserver) {
+                    titleObserver.disconnect();
+                    titleObserver = null;
+                }
+                if (originalTitle) {
+                    document.title = originalTitle;
+                    originalTitle = null;
+                }
+                if (beforeUnloadHandler) {
+                    window.removeEventListener('beforeunload', beforeUnloadHandler);
+                    beforeUnloadHandler = null;
+                }
+            }
+
+            // Page-load initialization.
+
+            function initializeOnPageLoad() {
+                const pending = getPendingBookings();
+                if (pending.length === 0) return;
+
+                for (const booking of pending) {
+                    scheduleTimersForBooking(booking);
+                }
+                installTabClosePreventionIfNeeded();
+
+                // Clean up old completed/cancelled bookings older than 7 days.
+                const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+                const all = loadAll();
+                const cleaned = all.filter(b => {
+                    if (b.status === SCHEDULED_STATUS_PENDING || b.status === SCHEDULED_STATUS_FIRING) return true;
+                    return b.createdAtMs > sevenDaysAgo;
+                });
+                if (cleaned.length !== all.length) {
+                    saveAll(cleaned);
+                }
+
+                getDebugService().log('info', 'scheduled-bookings-initialized-on-load', {
+                    pendingCount: pending.length,
+                });
+            }
+
+            serviceInstance = {
+                fetchPossiblePlayers,
+                getPlayerPhotoUrl,
+                computeFireAtMs,
+                scheduleBooking,
+                loadAll,
+                getPendingBookings,
+                getActiveBookings,
+                getFailedBookings,
+                cancelBooking,
+                dismissBooking,
+                initializeOnPageLoad,
+                suppressTabCloseForNavigation,
+                cachePlayersFromXhr,
+                cachePhotosFromXhr,
+                fetchPhotos,
+            };
+            return serviceInstance;
+        };
+    })();
+    // #endregion Scheduled bookings service.
+
     // #region Bookings page calendar export.
     const getBookingsDomQueryService = (() => {
         let serviceInstance = null;
@@ -1363,6 +1928,136 @@
                 appendCalendarActions(actionHost, booking, calendarUrl);
             }
 
+            function formatCountdown(fireAtMs) {
+                const diff = fireAtMs - Date.now();
+                if (diff <= 0) return 'Booking attempt in progress\u2026';
+                const hours = Math.floor(diff / (1000 * 60 * 60));
+                const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                const remaining = hours > 24
+                    ? `${Math.floor(hours / 24)}d ${hours % 24}h`
+                    : hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+                const d = new Date(fireAtMs);
+                const datePart = d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                const timePart = d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
+                return `We will attempt to book this in ${remaining} on ${datePart} at ${timePart}`;
+            }
+
+            function buildPendingBookingRowHtml(booking) {
+                const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
+                return `<div data-bc-pending-booking="${booking.id}" style="background: rgba(0,188,212,0.08); border: 1px solid rgba(0,188,212,0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
+                        <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 4px;">Partners: ${partnerList}</div>
+                        <div data-bc-countdown style="font-size: 12px; color: rgb(0,188,212); margin-top: 4px;">${formatCountdown(booking.fireAtMs)}</div>
+                    </div>
+                    <button data-bc-cancel-booking="${booking.id}" style="background: none; border: 1px solid rgba(239,83,80,0.5); color: #ef5350; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Cancel</button>
+                </div>`;
+            }
+
+            function buildFailedBookingRowHtml(booking) {
+                const reason = booking.failureReason || 'The booking attempt was unsuccessful.';
+                return `<div data-bc-failed-booking="${booking.id}" style="background: rgba(239,83,80,0.08); border: 1px solid rgba(239,83,80,0.35); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
+                        <div style="font-size: 12px; color: #ef5350; margin-top: 4px;">Booking unsuccessful</div>
+                        <div style="font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 2px;">${reason}</div>
+                    </div>
+                    <button data-bc-dismiss-booking="${booking.id}" style="background: none; border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.7); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Dismiss</button>
+                </div>`;
+            }
+
+            function injectPendingBookingsSection() {
+                if (!getBookingsDomQueryService().isOnBookingsPage()) return;
+
+                const activeBookings = getScheduledBookingService().getActiveBookings();
+                const failedBookings = getScheduledBookingService().getFailedBookings();
+                const existingSection = document.querySelector('[data-bc-pending-section]');
+
+                if (activeBookings.length === 0 && failedBookings.length === 0) {
+                    if (existingSection) existingSection.remove();
+                    return;
+                }
+
+                // Section already present — countdowns are updated by the dedicated interval
+                // in startPendingCountdownUpdates(). Updating textContent here would re-trigger
+                // the MutationObserver, causing scheduleReconcile to loop at RAF speed.
+                if (existingSection) return;
+
+                // Insert before app-calendar-cancelled-by-me-list so the pending section
+                // appears near the cancelled bookings area. Fall back through progressively
+                // broader elements when earlier selectors are absent.
+                const insertionPoint =
+                    document.querySelector('app-calendar-cancelled-by-me-list') ||
+                    document.querySelector('app-calendar-events-list') ||
+                    document.querySelector('app-paged-list') ||
+                    document.querySelector('app-calendar');
+                if (!insertionPoint || !insertionPoint.parentElement) return;
+
+                const section = document.createElement('div');
+                section.setAttribute('data-bc-pending-section', '');
+                section.style.cssText = 'margin: 16px 16px 24px; padding: 0;';
+                section.innerHTML = `
+                    <div style="font-size: 16px; font-weight: 600; color: white; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        <span>\u23f3</span> Pending Bookings
+                    </div>
+                    ${activeBookings.map(buildPendingBookingRowHtml).join('')}
+                    ${failedBookings.map(buildFailedBookingRowHtml).join('')}
+                `;
+
+                // Bind cancel buttons for pending bookings.
+                section.querySelectorAll('[data-bc-cancel-booking]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const bookingId = btn.dataset.bcCancelBooking;
+                        getScheduledBookingService().cancelBooking(bookingId);
+                        const row = section.querySelector(`[data-bc-pending-booking="${bookingId}"]`);
+                        if (row) row.remove();
+                        if (getScheduledBookingService().getActiveBookings().length === 0 &&
+                            getScheduledBookingService().getFailedBookings().length === 0) {
+                            section.remove();
+                        }
+                    });
+                });
+
+                // Bind dismiss buttons for failed bookings.
+                section.querySelectorAll('[data-bc-dismiss-booking]').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const bookingId = btn.dataset.bcDismissBooking;
+                        getScheduledBookingService().dismissBooking(bookingId);
+                        const row = section.querySelector(`[data-bc-failed-booking="${bookingId}"]`);
+                        if (row) row.remove();
+                        if (getScheduledBookingService().getActiveBookings().length === 0 &&
+                            getScheduledBookingService().getFailedBookings().length === 0) {
+                            section.remove();
+                        }
+                    });
+                });
+
+                insertionPoint.parentElement.insertBefore(section, insertionPoint);
+            }
+
+            // Update pending section countdowns every minute.
+            let pendingCountdownInterval = null;
+
+            function startPendingCountdownUpdates() {
+                if (pendingCountdownInterval) return;
+                pendingCountdownInterval = setInterval(() => {
+                    const section = document.querySelector('[data-bc-pending-section]');
+                    if (!section) {
+                        clearInterval(pendingCountdownInterval);
+                        pendingCountdownInterval = null;
+                        return;
+                    }
+                    const activeBookings = getScheduledBookingService().getActiveBookings();
+                    activeBookings.forEach(booking => {
+                        const row = section.querySelector(`[data-bc-pending-booking="${booking.id}"]`);
+                        if (row) {
+                            const countdown = row.querySelector('[data-bc-countdown]');
+                            if (countdown) countdown.textContent = formatCountdown(booking.fireAtMs);
+                        }
+                    });
+                }, 60 * 1000);
+            }
+
             function scheduleReconcile() {
                 if (reconcileScheduled) return;
                 reconcileScheduled = true;
@@ -1370,6 +2065,10 @@
                     reconcileScheduled = false;
                     injectButtonsForBookingsPage();
                     injectButtonsForBookingDetailsPage();
+                    injectPendingBookingsSection();
+                    if (getScheduledBookingService().getActiveBookings().length > 0) {
+                        startPendingCountdownUpdates();
+                    }
                 });
             }
 
@@ -1953,18 +2652,18 @@
         const badgeText = [primaryLabel, hasHittingWall ? 'H' : ''].filter(Boolean).join(' ');
         const badgeColor = gated ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
         const courtBadgeHtml = badgeText ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</div>` : '';
-        const dataAttrs = slotLocked ? '' :
-            `data-club-name="${meta.shortName}"
+        const dataAttrs = `data-club-name="${meta.shortName}"
                 data-from="${slot.fromHumanTime}"
                 data-to="${slot.toHumanTime}"
                 data-court="${court.courtName}"
                 data-court-id="${court.courtId}"
                 data-club-id="${clubId}"
                 data-from-minutes="${slot.fromInMinutes}"
-                data-to-minutes="${slot.toInMinutes}"`;
+                data-to-minutes="${slot.toInMinutes}"
+                ${slotLocked ? 'data-slot-locked="1"' : ''}`;
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
-      <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
+      <div class="bc-court-option border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible clickable"
            ${dataAttrs} style="${disabledStyle}${gated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
@@ -1985,7 +2684,7 @@
             ? `Pickleball ${courtNumbers.join(', ')}`
             : 'Courts available';
 
-        const expandedCourts = slotLocked ? '' : slot.courts.map(court => {
+        const expandedCourts = slot.courts.map(court => {
             const gated = isCourtGated(court.courtName, clubId);
             const edge = isCourtEdge(court.courtName, clubId);
             const hittingWall = courtHasHittingWall(court.courtName, clubId);
@@ -2002,6 +2701,7 @@
             data-club-id="${clubId}"
             data-from-minutes="${slot.fromInMinutes}"
             data-to-minutes="${slot.toInMinutes}"
+            ${slotLocked ? 'data-slot-locked="1"' : ''}
             style="padding: 4px 8px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 11px;
                    background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
             <span>${court.courtName}</span>
@@ -2016,7 +2716,7 @@
 
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
-      <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible${slotLocked ? ' time-slot-disabled' : ' clickable'}"
+      <div class="bc-slot-card border-radius-4 border-dark-gray w-100 text-center size-12 time-slot py-2 position-relative overflow-visible clickable"
            style="${disabledStyle}${hasGatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
@@ -2357,11 +3057,253 @@
                 }
             }
 
+            function getRequiredPartnerCount() {
+                const playersPref = getLocalStorageService().getString('bc_players');
+                if (playersPref === 'Doubles') return 3;
+                return 1;
+            }
+
+            function buildPlayerCardHtml(player, photoUrl) {
+                const initials = ((player.firstName || '')[0] || '') + ((player.lastName || '')[0] || '');
+                // Derive a background color from the player's name for the initials circle.
+                let hash = 0;
+                const nameStr = (player.firstName || '') + (player.lastName || '');
+                for (let i = 0; i < nameStr.length; i++) {
+                    hash = nameStr.charCodeAt(i) + ((hash << 5) - hash);
+                }
+                const hue = Math.abs(hash) % 360;
+
+                const avatarHtml = photoUrl
+                    ? `<img src="${photoUrl}" style="width: 56px; height: 56px; border-radius: 50%; object-fit: cover;" alt="${player.firstName}">`
+                    : `<div data-bc-initials style="width: 56px; height: 56px; border-radius: 50%; background: hsl(${hue}, 45%, 45%); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: 600;">${initials}</div>`;
+
+                return `<div class="bc-player-card" data-person-id="${player.personId}" data-member-id="${player.memberId}"
+                    data-first-name="${player.firstName || ''}" data-last-name="${player.lastName || ''}"
+                    style="display: flex; flex-direction: column; align-items: center; padding: 8px; cursor: pointer; border-radius: 8px; position: relative; min-width: 80px;">
+                    <div data-bc-avatar style="position: relative;">
+                        ${avatarHtml}
+                        <div class="bc-player-check" style="position: absolute; bottom: -2px; right: -2px; width: 20px; height: 20px; border-radius: 50%; background: rgb(0,188,212); color: white; display: none; align-items: center; justify-content: center; font-size: 12px;">&#10003;</div>
+                    </div>
+                    <div style="margin-top: 4px; font-size: 12px; color: white; text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${player.firstName || ''}</div>
+                    <div style="font-size: 11px; color: rgba(255,255,255,0.6); text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${player.lastName || ''}</div>
+                </div>`;
+            }
+
+            function buildSchedulePanelHtml(slotInfo, players, photosByMemberId) {
+                const requiredPartners = getRequiredPartnerCount();
+                const partnerLabel = requiredPartners === 1 ? 'Select 1 partner' : `Select ${requiredPartners} partners`;
+                const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
+                const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
+                const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
+                const fireAtLabel = fireAtIsToday
+                    ? `today at ${fireAtTimeLabel}`
+                    : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+                const playerCardsHtml = players.map(player => {
+                    const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(player.memberId, photosByMemberId);
+                    return buildPlayerCardHtml(player, photoUrl);
+                }).join('');
+
+                return `<div data-bc-schedule-panel style="padding: 16px;">
+                    <div style="display: flex; align-items: center; margin-bottom: 16px;">
+                        <button data-bc-schedule-back style="background: none; border: none; color: rgb(0,188,212); font-size: 14px; cursor: pointer; padding: 4px 8px; margin-right: 8px;">&#8592; Back</button>
+                        <div style="font-size: 18px; font-weight: 600; color: white;">Schedule Booking</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                        <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
+                        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
+                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
+                    </div>
+                    <div data-bc-partner-prompt style="font-size: 14px; color: #ef5350; margin-bottom: 12px; font-weight: 500;">${partnerLabel}</div>
+                    <div data-bc-player-grid style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px;">
+                        ${playerCardsHtml}
+                    </div>
+                    <div style="display: flex; gap: 12px; align-items: center;">
+                        <button data-bc-schedule-submit disabled style="background: rgba(0,188,212,0.4); color: white; border: none; border-radius: 4px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: not-allowed; opacity: 0.6;">Schedule</button>
+                        <button data-bc-schedule-cancel style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 13px; cursor: pointer; text-decoration: underline;">Cancel</button>
+                    </div>
+                </div>`;
+            }
+
+            function bindSchedulePanelInteractions(panel, anchorElement, slotInfo) {
+                const requiredPartners = getRequiredPartnerCount();
+
+                function updatePartnerPromptAndSubmitButton() {
+                    const selectedCount = panel.querySelectorAll('.bc-player-card[data-player-selected]:not([data-current-user])').length;
+                    const prompt = panel.querySelector('[data-bc-partner-prompt]');
+                    const submitBtn = panel.querySelector('[data-bc-schedule-submit]');
+                    const remaining = requiredPartners - selectedCount;
+
+                    if (remaining > 0) {
+                        prompt.textContent = remaining === 1 ? 'Select 1 more partner' : `Select ${remaining} more partners`;
+                        prompt.style.color = '#ef5350';
+                        submitBtn.disabled = true;
+                        submitBtn.style.opacity = '0.6';
+                        submitBtn.style.cursor = 'not-allowed';
+                        submitBtn.style.background = 'rgba(0,188,212,0.4)';
+                    } else {
+                        prompt.textContent = `${requiredPartners} partner${requiredPartners > 1 ? 's' : ''} selected`;
+                        prompt.style.color = 'rgb(0,188,212)';
+                        submitBtn.disabled = false;
+                        submitBtn.style.opacity = '1';
+                        submitBtn.style.cursor = 'pointer';
+                        submitBtn.style.background = 'rgb(0,188,212)';
+                    }
+                }
+
+                // Player card selection toggle.
+                panel.querySelectorAll('.bc-player-card').forEach(card => {
+                    if (card.dataset.currentUser) return;
+                    card.addEventListener('click', () => {
+                        const isSelected = card.hasAttribute('data-player-selected');
+                        const checkEl = card.querySelector('.bc-player-check');
+                        if (isSelected) {
+                            card.removeAttribute('data-player-selected');
+                            if (checkEl) checkEl.style.display = 'none';
+                            card.style.background = '';
+                        } else {
+                            // Enforce max selection count.
+                            const currentSelected = panel.querySelectorAll('.bc-player-card[data-player-selected]:not([data-current-user])').length;
+                            if (currentSelected >= requiredPartners) return;
+                            card.setAttribute('data-player-selected', '1');
+                            if (checkEl) checkEl.style.display = 'flex';
+                            card.style.background = 'rgba(0,188,212,0.15)';
+                        }
+                        updatePartnerPromptAndSubmitButton();
+                    });
+                });
+
+                // Back and cancel buttons return to the slot grid.
+                function returnToSlotGrid() {
+                    const existingPanel = anchorElement.querySelector('[data-bc-schedule-panel]');
+                    if (existingPanel) existingPanel.remove();
+                    const hiddenContent = anchorElement.querySelector('.all-clubs-availability');
+                    if (hiddenContent) hiddenContent.style.display = '';
+                    // Restore the Next button visibility and put it back in its normal disabled state.
+                    const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                        .find(btn => btn.textContent.trim().includes('NEXT'));
+                    if (nextButton) nextButton.style.display = '';
+                    initNextButton();
+                }
+
+                panel.querySelector('[data-bc-schedule-back]')?.addEventListener('click', returnToSlotGrid);
+                panel.querySelector('[data-bc-schedule-cancel]')?.addEventListener('click', returnToSlotGrid);
+
+                // Schedule button submits the booking.
+                panel.querySelector('[data-bc-schedule-submit]')?.addEventListener('click', () => {
+                    const selectedCards = panel.querySelectorAll('.bc-player-card[data-player-selected]:not([data-current-user])');
+                    const selectedPartners = Array.from(selectedCards).map(card => ({
+                        personId: card.dataset.personId,
+                        firstName: card.dataset.firstName,
+                        lastName: card.dataset.lastName,
+                    }));
+
+                    try {
+                        Notification.requestPermission();
+                        getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners);
+                        // Suppress the tab-close guard for this intentional navigation so the
+                        // browser doesn't show a "changes may not be saved" dialog. The guard
+                        // is reinstalled by initializeOnPageLoad on the next page load.
+                        getScheduledBookingService().suppressTabCloseForNavigation();
+                        window.location.href = '/bookings';
+                    } catch (error) {
+                        console.log('[bc] failed to schedule booking:', error);
+                        const prompt = panel.querySelector('[data-bc-partner-prompt]');
+                        if (prompt) {
+                            prompt.textContent = `Error: ${error.message}`;
+                            prompt.style.color = '#ef5350';
+                        }
+                    }
+                });
+            }
+
+            async function handleLockedSlotClick(anchorElement, el) {
+                // Request notification permission on user gesture.
+                if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                    Notification.requestPermission();
+                }
+
+                let players, photosByMemberId;
+                try {
+                    ({ players, photosByMemberId } = getScheduledBookingService().fetchPossiblePlayers());
+                } catch (error) {
+                    console.log('[bc] failed to load partner picker:', error);
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.cssText = 'color: #ef5350; font-size: 11px; padding: 4px; margin-top: 4px;';
+                    errorDiv.textContent = error.message || 'Failed to load partners.';
+                    el.parentElement?.appendChild(errorDiv);
+                    setTimeout(() => errorDiv.remove(), 5000);
+                    return;
+                }
+
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                const slotInfo = {
+                    clubId: el.dataset.clubId,
+                    courtId: el.dataset.courtId,
+                    courtName: el.dataset.court,
+                    clubName: el.dataset.clubName,
+                    date: lastFetchState?.params?.date,
+                    fromMinutes: parseInt(el.dataset.fromMinutes),
+                    toMinutes: parseInt(el.dataset.toMinutes),
+                    fromTime: el.dataset.from,
+                    toTime: el.dataset.to,
+                    dateLabel: lastFetchState?.params?.date
+                        ? new Date(lastFetchState.params.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                        : '',
+                };
+
+                // Hide the availability grid and show the schedule panel.
+                const availabilityContainer = anchorElement.querySelector('.all-clubs-availability');
+                if (availabilityContainer) availabilityContainer.style.display = 'none';
+
+                // Hide the Next button — it only drives the Angular state machine and has no
+                // role in the scheduled booking flow.
+                const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                    .find(btn => btn.textContent.trim().includes('NEXT'));
+                if (nextButton) nextButton.style.display = 'none';
+
+                // Render immediately with whatever photos are cached (may be initials-only).
+                const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
+                const panelDiv = document.createElement('div');
+                panelDiv.innerHTML = panelHtml;
+                anchorElement.appendChild(panelDiv.firstElementChild);
+
+                const panel = anchorElement.querySelector('[data-bc-schedule-panel]');
+                if (panel) {
+                    bindSchedulePanelInteractions(panel, anchorElement, slotInfo);
+                }
+
+                // If the cache had no photos, attempt a direct API fetch and swap initials cards
+                // to real photos as they arrive. Skip the fetch when the cache is already populated
+                // so we never overwrite the richer XHR-intercepted data with a sparser result.
+                const hasCachedPhotos = Object.keys(photosByMemberId).length > 0;
+                const freshPhotos = hasCachedPhotos ? null : await getScheduledBookingService().fetchPhotos(players);
+                if (freshPhotos && panel && panel.isConnected) {
+                    panel.querySelectorAll('.bc-player-card').forEach(card => {
+                        const memberId = card.dataset.memberId;
+                        const photoInfo = freshPhotos[memberId];
+                        if (!photoInfo || !photoInfo.photoId) return;
+                        const initialsEl = card.querySelector('[data-bc-initials]');
+                        if (!initialsEl) return;
+                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(memberId, freshPhotos);
+                        const img = document.createElement('img');
+                        img.src = photoUrl;
+                        img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                        img.alt = card.dataset.firstName || '';
+                        initialsEl.replaceWith(img);
+                    });
+                }
+            }
+
             function bindCourtOptionSelection(anchorElement) {
                 // Select a specific court when an expanded court option or single-court card is clicked.
                 anchorElement.querySelectorAll('.bc-court-option').forEach(el => {
                     el.addEventListener('click', () => {
-                        selectCourtOption(anchorElement, el);
+                        if (el.dataset.slotLocked === '1') {
+                            handleLockedSlotClick(anchorElement, el);
+                        } else {
+                            selectCourtOption(anchorElement, el);
+                        }
                     });
                 });
             }
@@ -3048,5 +3990,6 @@
     createBookingsCalendarExportInstaller();
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
+    getScheduledBookingService().initializeOnPageLoad();
     // #endregion Startup installers and bootstrap.
 })();
