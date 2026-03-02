@@ -95,14 +95,13 @@ Bay Club opens booking windows exactly 3 days in advance at the minute of the sl
 2. `PUT courtbookings/{courtBookingId}/confirm` with `{ invitations: [{ personId }], isVisibleToBuddies: true }`.
 Partners are mandatory. The `Ocp-Apim-Subscription-Key` header is static.
 
-**Fire sequence**: At T-minus-2 minutes, a timer warns the user (via browser Notification) to keep the tab open and have the page active so auth headers are fresh. At T-zero, the service checks for fresh auth headers, POSTs the booking, then PUTs the confirm. On success or failure, a browser Notification is shown.
+**Fire sequence**: Handled entirely server-side by the Cloudflare Worker cron (see below). The browser tab does not need to stay open. On success or failure, the Worker sends an email notification via Resend from `notifications@bayclubhelper.app`.
 
-**Tab-close prevention**: A `beforeunload` handler fires only when a booking is within 10 minutes of its fire time. For bookings further out, the script reinitializes timers from localStorage on the next page load so navigation within the site is safe. A countdown prefix on `document.title` (e.g. `⏳ Booking in 2h 14m · …`) reminds the user to keep the tab open.
-- **Title observer loop pitfall**: Do not use a boolean flag to suppress MutationObserver re-entrancy on `document.title` assignments — the callback fires as a microtask after the synchronous code, so the flag is already `false` when it runs. Instead, skip the `document.title` assignment entirely when the computed value equals the current title (idempotency check).
+**`/bookings` pending section**: `injectPendingBookingsSection` injects a "Pending Bookings" section showing active (pending/firing) and failed bookings. Countdowns are updated by a dedicated 60-second `setInterval` that also polls the Worker for status changes. Never update DOM text inside `injectPendingBookingsSection` when the section already exists — doing so re-triggers the `MutationObserver → scheduleReconcile → RAF` cycle at up to 60 fps, making the page unresponsive.
 
-**`/bookings` pending section**: `injectPendingBookingsSection` injects a "Pending Bookings" section showing active (pending/firing) and failed bookings. Countdowns are updated by a dedicated 60-second `setInterval`. Never update DOM text inside `injectPendingBookingsSection` when the section already exists — doing so re-triggers the `MutationObserver → scheduleReconcile → RAF` cycle at up to 60 fps, making the page unresponsive.
+**`getScheduledBookingService()`** is the singleton closure service owning all of: Worker API calls, local booking cache, player/photo caching, notification email/phone fetching, refresh token sync, and the public API (`scheduleBooking`, `cancelBooking`, `dismissBooking`, `getActiveBookings`, `getFailedBookings`, `fetchPossiblePlayers`, `fetchNotificationEmail`, `pushRefreshToken`, `syncRefreshTokenFromAppStorage`, `initializeOnPageLoad`, and XHR cache helpers).
 
-**`getScheduledBookingService()`** is the singleton closure service owning all of: localStorage persistence, player/photo caching, timer management, fire sequence, tab-close guards, and the public API (`scheduleBooking`, `cancelBooking`, `dismissBooking`, `getActiveBookings`, `getFailedBookings`, `fetchPossiblePlayers`, `initializeOnPageLoad`, `suppressTabCloseForNavigation`, and XHR cache helpers).
+**Refresh token management**: On every page load, `syncRefreshTokenFromAppStorage()` reads the Angular app's auth state from `localStorage.connect20auth` (where the app persists its token after login) and PUTs the refresh token to the Worker's `PUT /token` endpoint. The XHR and fetch interceptors also forward any token responses seen during the session. This keeps the Worker's KV refresh token perpetually current without manual bootstrapping.
 
 ### Navigation Cleanup
 The script uses a booking-flow monitor with lifecycle management:
@@ -188,13 +187,37 @@ Duration/player preference auto-selection also uses an in-file closure service (
 - `bc_view_mode` — `'by-club'` | `'by-time'` — availability panel layout mode
 - `bc_debug_enabled` — `'1'` | `'0'` — debug mode enabled state
 - `bc_debug_entries` — JSON array of debug log entries for copy/download support workflows
-- `bc_scheduled_bookings` — JSON array of scheduled booking records with shape `{ id, fireAtMs, bookingBody, confirmBody, slotLabel, partnerNames, status, failureReason, createdAtMs }`; status values: `pending` | `firing` | `succeeded` | `failed` | `cancelled`
 - `bc_possible_players` — player list cached from the `possiblePlayers` API, populated by XHR interception during normal booking flows and used by the partner picker for locked slots
 - `bc_player_photos` — photo map `{ memberId: { photoId, state } }`, always merged (never replaced) on update to preserve richer XHR-intercepted data over sparser on-demand fetch results
+- `bc_notification_email` — user's email address cached from `profile/api/1.0/profile`, embedded in booking records for Worker email notifications
 
-## File
+Note: scheduled booking records are stored in Cloudflare Worker KV (`scheduled_bookings` key), not in localStorage. The extension maintains a local `cachedBookings` array populated by `GET /bookings` from the Worker.
 
-Single file: `loading_script.user.js`. The whole script is wrapped in an IIFE for scope isolation. No build step, no dependencies.
+## Cloudflare Worker (`cloudflare-worker/`)
+
+Server-side component that executes scheduled bookings without requiring the browser tab to stay open.
+
+- **Worker URL**: `https://bayclubconnect-bookings.mark-rubin.workers.dev`
+- **Secrets** (set via `wrangler secret put`): `WORKER_SECRET`, `RESEND_API_KEY`
+- **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token`, `scheduled_bookings`, `last_token_refresh`
+- **Cron**: every minute — finds `status === 'pending'` bookings whose `fireAtMs` has passed, marks `firing`, calls Bay Club two-step booking API, saves result, sends email
+- **Auth**: Bay Club refresh token stored in KV; rotated immediately after every use (single-use tokens). `client_id=connect20`, `client_secret=connectSecret` for both password and refresh grants.
+- **Email**: Resend API, sender `notifications@bayclubhelper.app`. `RESEND_API_KEY` secret. Recipient is `notificationEmail` embedded in the booking record (fetched from `profile/api/1.0/profile` at scheduling time and cached to `bc_notification_email` in localStorage).
+- **CORS**: allows `https://bayclubconnect.com` for `GET, POST, PUT, DELETE, OPTIONS`.
+- **HTTP endpoints**:
+  - `GET /status` — public health check
+  - `GET /bookings` — list all bookings (secret required)
+  - `POST /bookings` — add a booking (secret required)
+  - `DELETE /bookings/{id}` — remove a booking (secret required)
+  - `PUT /token` — store a fresh refresh token in KV (secret required); called automatically by the extension on page load
+- **Token bootstrap**: if KV `refresh_token` is ever lost, run `wrangler kv key put --binding BC_BOOKINGS refresh_token "<token>"`. The extension's `syncRefreshTokenFromAppStorage()` repopulates it automatically on the next page load.
+- **Deploy**: `cd cloudflare-worker && wrangler deploy`
+
+## Files
+
+- `loading_script.user.js` — Tampermonkey userscript, wrapped in an IIFE. No build step, no dependencies.
+- `cloudflare-worker/worker.js` — Cloudflare Worker source.
+- `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, cron schedule).
 
 ## External Assumptions And Contracts
 
