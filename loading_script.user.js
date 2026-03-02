@@ -2374,16 +2374,27 @@
         const startPct = minutesToSliderPercent(startMinutes);
         const endPct = minutesToSliderPercent(endMinutes);
 
-        // Build tick marks and hour labels.
+        // Build tick marks and hour labels. Each label renders as "7:00 am" on
+        // desktop; the ":00 am"/":00 pm" suffix is wrapped in bc-tick-label-detail
+        // so it can be hidden on narrow screens via a media query, leaving just
+        // the bare hour number "7" where space is tight.
         let ticks = '';
         for (let i = 0; i <= SLIDER_STOPS; i++) {
             const m = SLIDER_MIN_MINUTES + i * SLIDER_STEP_MINUTES;
             const pct = minutesToSliderPercent(m);
             const isHour = m % 60 === 0;
+            let tickLabelHtml = '';
+            if (isHour) {
+                const totalHours = m / 60;
+                const ampm = totalHours < 12 ? 'am' : 'pm';
+                let h = totalHours % 12;
+                if (h === 0) h = 12;
+                tickLabelHtml = `<div style="font-size: 9px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap;">${h}<span class="bc-tick-colon-zero">:00</span><span class="bc-tick-ampm"> ${ampm}</span></div>`;
+            }
             ticks += `
             <div style="position: absolute; left: ${pct}%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center;"${isHour ? ` data-tick-minutes="${m}"` : ''}>
                 <div style="width: 1px; height: ${isHour ? '8px' : '5px'}; background: rgba(255,255,255,${isHour ? '0.4' : '0.2'}); margin-top: 2px;"></div>
-                ${isHour ? `<div style="font-size: 9px; color: rgba(255,255,255,0.4); margin-top: 2px; white-space: nowrap;">${minutesToHumanTime(m)}</div>` : ''}
+                ${tickLabelHtml}
             </div>`;
         }
 
@@ -3900,6 +3911,10 @@
     .bc-calendar-ics-link:focus {
         color: rgb(102, 225, 241);
         text-decoration: underline;
+    }
+    @media (max-width: 768px) {
+        .bc-tick-colon-zero { display: none; }
+        .bc-tick-ampm { display: none; }
     }
 `;
             document.head.appendChild(style);
