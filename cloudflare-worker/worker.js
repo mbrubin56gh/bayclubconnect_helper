@@ -188,7 +188,7 @@ async function sendEmailNotification(booking, env) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            from: 'onboarding@resend.dev',
+            from: 'notifications@bayclubhelper.app',
             to,
             subject,
             html,
