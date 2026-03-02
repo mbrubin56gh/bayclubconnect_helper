@@ -1033,14 +1033,12 @@
             const SCHEDULED_BOOKINGS_KEY = 'bc_scheduled_bookings';
             const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
             const PLAYER_PHOTOS_KEY = 'bc_player_photos';
-            const BOOKING_API_BASE = 'https://connect-api.bayclubs.io/court-booking/api/1.0';
             const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
 
             const SCHEDULED_STATUS_PENDING = 'pending';
             const SCHEDULED_STATUS_FIRING = 'firing';
-            const SCHEDULED_STATUS_SUCCEEDED = 'succeeded';
             const SCHEDULED_STATUS_FAILED = 'failed';
             const SCHEDULED_STATUS_CANCELLED = 'cancelled';
 
@@ -1054,11 +1052,6 @@
                 TAKEN: 'taken',
             });
 
-            const timersByBookingId = new Map();
-            let titleIntervalId = null;
-            let titleObserver = null;
-            let beforeUnloadHandler = null;
-            let originalTitle = null;
             // Persistence helpers.
 
             function loadAll() {
@@ -1090,7 +1083,6 @@
             }
 
             function dismissBooking(id) {
-                clearTimersForBooking(id);
                 saveAll(loadAll().filter(b => b.id !== id));
                 getDebugService().log('info', 'scheduled-booking-dismissed', { id });
             }
@@ -1233,9 +1225,6 @@
                 all.push(booking);
                 saveAll(all);
 
-                scheduleTimersForBooking(booking);
-                installTabClosePreventionIfNeeded();
-
                 getDebugService().log('info', 'scheduled-booking-created', {
                     id: booking.id,
                     slotLabel: booking.slotLabel,
@@ -1250,367 +1239,16 @@
                 return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             }
 
-            // Fire sequence: execute the actual booking when the window opens.
-
-            async function executeFireSequence(bookingId) {
-                const all = loadAll();
-                const booking = all.find(b => b.id === bookingId);
-                if (!booking || booking.status !== SCHEDULED_STATUS_PENDING) return;
-
-                updateBooking(bookingId, { status: SCHEDULED_STATUS_FIRING });
-
-                const headers = buildAuthHeaders();
-                if (!headers) {
-                    failBooking(bookingId, 'Session expired \u2014 please reload the page.');
-                    return;
-                }
-
-                try {
-                    // Step 1: POST courtbookings.
-                    const bookingResponse = await fetch(`${BOOKING_API_BASE}/courtbookings`, {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify(booking.bookingBody),
-                    });
-                    if (!bookingResponse.ok) {
-                        const errorText = await bookingResponse.text().catch(() => '');
-                        throw new Error(`Booking POST failed: HTTP ${bookingResponse.status} ${errorText}`);
-                    }
-                    const bookingResult = await bookingResponse.json();
-                    const courtBookingId = bookingResult.courtBookingId;
-                    if (!courtBookingId) {
-                        throw new Error('Booking POST did not return a courtBookingId.');
-                    }
-
-                    // Step 2: PUT confirm with partners.
-                    const confirmResponse = await fetch(`${BOOKING_API_BASE}/courtbookings/${courtBookingId}/confirm`, {
-                        method: 'PUT',
-                        headers,
-                        body: JSON.stringify(booking.confirmBody),
-                    });
-                    if (!confirmResponse.ok) {
-                        const errorText = await confirmResponse.text().catch(() => '');
-                        throw new Error(`Confirm PUT failed: HTTP ${confirmResponse.status} ${errorText}`);
-                    }
-
-                    succeedBooking(bookingId);
-                } catch (error) {
-                    failBooking(bookingId, error.message || String(error));
-                }
-            }
-
-            function succeedBooking(bookingId) {
-                updateBooking(bookingId, { status: SCHEDULED_STATUS_SUCCEEDED });
-                clearTimersForBooking(bookingId);
-                removeTabClosePreventionIfDone();
-                showNotification('Booking Succeeded', loadAll().find(b => b.id === bookingId)?.slotLabel || 'Your scheduled booking was placed successfully.');
-                getDebugService().log('info', 'scheduled-booking-succeeded', { id: bookingId });
-            }
-
-            function failBooking(bookingId, reason) {
-                updateBooking(bookingId, { status: SCHEDULED_STATUS_FAILED, failureReason: reason });
-                clearTimersForBooking(bookingId);
-                removeTabClosePreventionIfDone();
-                showNotification('Booking Failed', `${reason}\n${loadAll().find(b => b.id === bookingId)?.slotLabel || ''}`);
-                getDebugService().log('warn', 'scheduled-booking-failed', { id: bookingId, reason });
-            }
+            // Booking lifecycle helpers.
 
             function cancelBooking(id) {
                 updateBooking(id, { status: SCHEDULED_STATUS_CANCELLED });
-                clearTimersForBooking(id);
-                removeTabClosePreventionIfDone();
                 getDebugService().log('info', 'scheduled-booking-cancelled', { id });
-            }
-
-            // Timer management.
-
-            function scheduleTimersForBooking(booking) {
-                clearTimersForBooking(booking.id);
-                const now = Date.now();
-                const timeUntilFire = booking.fireAtMs - now;
-                const timers = [];
-
-                // T-minus-2-min: freshen auth headers by checking availability.
-                const tMinus2 = timeUntilFire - (2 * 60 * 1000);
-                if (tMinus2 > 0) {
-                    timers.push(setTimeout(() => prefireAuthCheck(booking.id), tMinus2));
-                }
-
-                // T-zero: attempt the booking.
-                if (timeUntilFire > 0) {
-                    timers.push(setTimeout(() => attemptFireWithPolling(booking.id), timeUntilFire));
-                } else {
-                    // Overdue: fire immediately.
-                    timers.push(setTimeout(() => attemptFireWithPolling(booking.id), 0));
-                }
-
-                timersByBookingId.set(booking.id, timers);
-                startSlotMonitoringForBooking(booking);
-            }
-
-            function clearTimersForBooking(bookingId) {
-                const timers = timersByBookingId.get(bookingId);
-                if (timers) {
-                    timers.forEach(t => clearTimeout(t));
-                    timersByBookingId.delete(bookingId);
-                }
-            }
-
-            // Append a timer ID to an existing booking's timer list without
-            // replacing timers that were already registered. Used by monitoring
-            // polls scheduled after the initial fire/prefire timers are set.
-            function addTimerForBooking(bookingId, timerId) {
-                const timers = timersByBookingId.get(bookingId);
-                if (timers) {
-                    timers.push(timerId);
-                } else {
-                    timersByBookingId.set(bookingId, [timerId]);
-                }
-            }
-
-            // Fetch availability for the booking's specific court and time slot.
-            // Returns SLOT_CHECK_STATUS.AVAILABLE if the slot is visible in the
-            // availability response, SLOT_CHECK_STATUS.TAKEN if it is absent
-            // (someone else has booked it), or SLOT_CHECK_STATUS.UNKNOWN if the
-            // check could not be completed (e.g., no auth headers available yet).
-            async function checkSlotTaken(booking) {
-                const headers = buildAuthHeaders();
-                if (!headers) return SLOT_CHECK_STATUS.UNKNOWN;
-
-                const body = booking.bookingBody;
-                const url = `${BOOKING_API_BASE}/availability?clubId=${body.clubId}&date=${body.date.value}&categoryCode=${body.categoryCode}&categoryOptionsId=${body.categoryOptionsId}&timeSlotId=${body.timeSlotId}`;
-                try {
-                    const response = await fetch(url, { headers });
-                    if (!response.ok) return SLOT_CHECK_STATUS.UNKNOWN;
-                    const data = await response.json();
-                    const timeSlots = (data && data.clubsAvailabilities &&
-                        data.clubsAvailabilities[0] &&
-                        data.clubsAvailabilities[0].availableTimeSlots) || [];
-                    const isAvailable = timeSlots.some(function (slot) {
-                        return slot.courtId === body.courtId &&
-                            slot.fromInMinutes === body.timeFromInMinutes &&
-                            slot.toInMinutes === body.timeToInMinutes;
-                    });
-                    return isAvailable ? SLOT_CHECK_STATUS.AVAILABLE : SLOT_CHECK_STATUS.TAKEN;
-                } catch (_e) {
-                    return SLOT_CHECK_STATUS.UNKNOWN;
-                }
-            }
-
-            // Begin polling for the locked slot starting 24 hours before the
-            // fire time — that is, when the premium-member 4-day booking window
-            // opens. Polls every 4 hours until fire time or until the booking
-            // is cancelled. Each poll timer is tracked in timersByBookingId so
-            // clearTimersForBooking stops them all.
-            function startSlotMonitoringForBooking(booking) {
-                const MONITOR_LEAD_MS = 24 * 60 * 60 * 1000;
-                const MONITOR_INTERVAL_MS = 4 * 60 * 60 * 1000;
-                const monitorStartMs = booking.fireAtMs - MONITOR_LEAD_MS;
-                const now = Date.now();
-
-                if (now >= booking.fireAtMs) return;
-
-                const delayToFirstCheck = Math.max(0, monitorStartMs - now);
-
-                function scheduleNextCheck(delayMs) {
-                    addTimerForBooking(booking.id, setTimeout(runCheck, delayMs));
-                }
-
-                async function runCheck() {
-                    const current = loadAll().find(function (b) { return b.id === booking.id; });
-                    if (!current || current.status !== SCHEDULED_STATUS_PENDING) return;
-                    if (Date.now() >= current.fireAtMs) return;
-
-                    const status = await checkSlotTaken(current);
-                    if (status !== SLOT_CHECK_STATUS.UNKNOWN && current.slotCheckStatus !== status) {
-                        updateBooking(booking.id, { slotCheckStatus: status });
-                        updateTitlePrefix();
-                        if (status === SLOT_CHECK_STATUS.TAKEN) {
-                            getDebugService().log('warn', 'scheduled-booking-slot-taken', { id: booking.id });
-                        }
-                    }
-
-                    const nextCheckAt = Date.now() + MONITOR_INTERVAL_MS;
-                    if (nextCheckAt < current.fireAtMs) {
-                        scheduleNextCheck(MONITOR_INTERVAL_MS);
-                    }
-                }
-
-                scheduleNextCheck(delayToFirstCheck);
-            }
-
-            function prefireAuthCheck(bookingId) {
-                // Fire a lightweight availability check to keep the session alive.
-                const lastFetchState = getBookingStateService().getLastFetchState();
-                if (!lastFetchState) {
-                    showNotification('Booking Warning', 'Your scheduled booking fires soon but no session is active. Please interact with the page.');
-                    return;
-                }
-                const headers = buildAuthHeaders();
-                if (!headers) {
-                    showNotification('Booking Warning', 'Auth headers missing. Please reload the page before your booking fires.');
-                    return;
-                }
-                // Make a simple availability GET to keep the session warm.
-                const params = lastFetchState.params;
-                fetch(`${BOOKING_API_BASE}/availability?clubId=${Object.values(CLUBS)[0]}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${params.timeSlotId}`, {
-                    headers,
-                }).catch(() => {
-                    // Non-critical; we just wanted to touch the session.
-                });
-                getDebugService().log('info', 'scheduled-booking-prefire-auth-check', { id: bookingId });
-            }
-
-            async function attemptFireWithPolling(bookingId, attempt) {
-                const currentAttempt = attempt || 0;
-                const maxAttempts = 4;
-
-                const booking = loadAll().find(b => b.id === bookingId);
-                if (!booking || booking.status !== SCHEDULED_STATUS_PENDING) return;
-
-                // Check if the slot is now available by checking current time against fire time.
-                if (Date.now() >= booking.fireAtMs) {
-                    // Window should be open; fire the booking.
-                    await executeFireSequence(bookingId);
-                    return;
-                }
-
-                // Still locked; poll again if under max attempts.
-                if (currentAttempt < maxAttempts) {
-                    const pollInterval = 30 * 1000;
-                    setTimeout(() => attemptFireWithPolling(bookingId, currentAttempt + 1), pollInterval);
-                } else {
-                    failBooking(bookingId, 'Slot did not open in time after polling. Please book manually.');
-                }
-            }
-
-            // Notifications.
-
-            function showNotification(title, body) {
-                if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-                    try {
-                        new Notification(title, { body, requireInteraction: true });
-                    } catch (_e) {
-                        // Notification API may not be fully supported.
-                    }
-                }
-                getDebugService().log('info', 'scheduled-booking-notification', { title, body });
-            }
-
-            // Tab-close prevention.
-
-            function installTabClosePreventionIfNeeded() {
-                if (getActiveBookings().length === 0) return;
-
-                // Title prefix with countdown.
-                if (!titleIntervalId) {
-                    originalTitle = document.title;
-                    updateTitlePrefix();
-                    titleIntervalId = setInterval(updateTitlePrefix, 60 * 1000);
-
-                    // Watch for Angular overwriting the title and re-apply our prefix.
-                    // updateTitlePrefix() compares the computed title against document.title
-                    // before assigning, so when this observer fires after our own assignment
-                    // the titles match and no further mutation is made — breaking the loop.
-                    const titleEl = document.querySelector('title');
-                    if (titleEl) {
-                        titleObserver = new MutationObserver(() => {
-                            if (getActiveBookings().length > 0) {
-                                updateTitlePrefix();
-                            }
-                        });
-                        titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
-                    }
-                }
-
-                // Beforeunload handler.
-                if (!beforeUnloadHandler) {
-                    beforeUnloadHandler = (e) => {
-                        // Only warn when a booking is about to fire (within 10 minutes).
-                        // For bookings further out, the script reinitializes timers from
-                        // localStorage on the next page load, so navigation is safe and
-                        // blocking it would cause unnecessary friction (e.g. when the user
-                        // navigates between pages on bayclubconnect.com).
-                        const TEN_MINUTES_MS = 10 * 60 * 1000;
-                        const hasSoonBooking = getActiveBookings().some(
-                            b => b.fireAtMs - Date.now() < TEN_MINUTES_MS
-                        );
-                        if (!hasSoonBooking) return;
-                        e.preventDefault();
-                        e.returnValue = '';
-                    };
-                    window.addEventListener('beforeunload', beforeUnloadHandler);
-                }
-            }
-
-            function updateTitlePrefix() {
-                const active = getActiveBookings();
-                if (active.length === 0) return;
-
-                const anyTaken = active.some(b => b.slotCheckStatus === SLOT_CHECK_STATUS.TAKEN);
-
-                // Find the soonest fire time.
-                const soonest = Math.min(...active.map(b => b.fireAtMs));
-                const diff = soonest - Date.now();
-                const prefix = anyTaken ? '\u26a0\ufe0f' : '\u23f3';
-                const newTitle = diff <= 0
-                    ? `${prefix} Booking firing\u2026 \u00b7 ` + (originalTitle || 'COURT BOOKING')
-                    : (() => {
-                        const hours = Math.floor(diff / (1000 * 60 * 60));
-                        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-                        const countdown = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-                        return `${prefix} Booking in ${countdown} \u00b7 ` + (originalTitle || 'COURT BOOKING');
-                    })();
-
-                // Skip the assignment when the title is already correct. If we always
-                // assigned, our own assignment would fire the MutationObserver, which
-                // would call updateTitlePrefix again, looping at microtask speed.
-                if (document.title === newTitle) return;
-                document.title = newTitle;
-            }
-
-            // Remove the beforeunload guard for a programmatic navigation to the bookings
-            // page. The guard will be reinstalled by initializeOnPageLoad on the new page
-            // load if there are still active bookings.
-            function suppressTabCloseForNavigation() {
-                if (beforeUnloadHandler) {
-                    window.removeEventListener('beforeunload', beforeUnloadHandler);
-                    beforeUnloadHandler = null;
-                }
-            }
-
-            function removeTabClosePreventionIfDone() {
-                if (getActiveBookings().length > 0) return;
-
-                if (titleIntervalId) {
-                    clearInterval(titleIntervalId);
-                    titleIntervalId = null;
-                }
-                if (titleObserver) {
-                    titleObserver.disconnect();
-                    titleObserver = null;
-                }
-                if (originalTitle) {
-                    document.title = originalTitle;
-                    originalTitle = null;
-                }
-                if (beforeUnloadHandler) {
-                    window.removeEventListener('beforeunload', beforeUnloadHandler);
-                    beforeUnloadHandler = null;
-                }
             }
 
             // Page-load initialization.
 
             function initializeOnPageLoad() {
-                const pending = getPendingBookings();
-                if (pending.length === 0) return;
-
-                for (const booking of pending) {
-                    scheduleTimersForBooking(booking);
-                }
-                installTabClosePreventionIfNeeded();
-
                 // Clean up old completed/cancelled bookings older than 7 days.
                 const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
                 const all = loadAll();
@@ -1623,7 +1261,7 @@
                 }
 
                 getDebugService().log('info', 'scheduled-bookings-initialized-on-load', {
-                    pendingCount: pending.length,
+                    pendingCount: getPendingBookings().length,
                 });
             }
 
@@ -1639,7 +1277,6 @@
                 cancelBooking,
                 dismissBooking,
                 initializeOnPageLoad,
-                suppressTabCloseForNavigation,
                 cachePlayersFromXhr,
                 cachePhotosFromXhr,
                 fetchPhotos,
@@ -3308,12 +2945,7 @@
                     }));
 
                     try {
-                        Notification.requestPermission();
                         getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners);
-                        // Suppress the tab-close guard for this intentional navigation so the
-                        // browser doesn't show a "changes may not be saved" dialog. The guard
-                        // is reinstalled by initializeOnPageLoad on the next page load.
-                        getScheduledBookingService().suppressTabCloseForNavigation();
                         window.location.href = '/bookings';
                     } catch (error) {
                         console.log('[bc] failed to schedule booking:', error);
@@ -3327,11 +2959,6 @@
             }
 
             async function handleLockedSlotClick(anchorElement, el) {
-                // Request notification permission on user gesture.
-                if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-                    Notification.requestPermission();
-                }
-
                 let players, photosByMemberId;
                 try {
                     ({ players, photosByMemberId } = getScheduledBookingService().fetchPossiblePlayers());
@@ -3714,18 +3341,15 @@
                 history.pushState = function (...args) {
                     originalPushState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
-                    installLoginAutoLoginBanner();
                 };
 
                 history.replaceState = function (...args) {
                     originalReplaceState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
-                    installLoginAutoLoginBanner();
                 };
 
                 window.addEventListener('popstate', function () {
                     evaluateBookingFlowMonitoringState();
-                    installLoginAutoLoginBanner();
                 });
             }
 
@@ -4098,82 +3722,6 @@
         };
     })();
 
-    // Detects when the site has redirected to the login page (typically because
-    // the session expired while the tab was left open overnight). Polls briefly
-    // for the Angular-rendered LOG IN button, then shows a countdown banner.
-    // After 5 minutes the button is clicked automatically, re-authenticating
-    // via the browser's saved credentials. The user can hit Cancel to abort.
-    //
-    // Re-entrant: returns immediately if already on a non-login URL or if the
-    // banner is already present, so it is safe to call from SPA navigation hooks.
-    function installLoginAutoLoginBanner() {
-        if (!location.pathname.includes('/account/login')) return;
-        if (document.querySelector('[data-bc-autologin-banner]')) return;
-
-        let pollCount = 0;
-        const pollId = setInterval(function () {
-            pollCount++;
-            const loginButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                .find(function (btn) { return /LOG\s*IN/i.test(btn.textContent); });
-            if (loginButton) {
-                clearInterval(pollId);
-                startLoginCountdown();
-            } else if (pollCount >= 20) {
-                // Button not found after 10 seconds; give up silently.
-                clearInterval(pollId);
-            }
-        }, 500);
-    }
-
-    function startLoginCountdown() {
-        if (document.querySelector('[data-bc-autologin-banner]')) return;
-
-        const TOTAL_SECONDS = 5 * 60;
-        let remaining = TOTAL_SECONDS;
-
-        function formatTime(seconds) {
-            const m = Math.floor(seconds / 60);
-            const s = seconds % 60;
-            return `${m}:${String(s).padStart(2, '0')}`;
-        }
-
-        const banner = document.createElement('div');
-        banner.setAttribute('data-bc-autologin-banner', '');
-        banner.style.cssText = 'position: fixed; bottom: 24px; right: 24px; background: rgba(25,25,25,0.96); color: white; border-radius: 10px; padding: 14px 18px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 14px; z-index: 99999; box-shadow: 0 4px 16px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 14px; border: 1px solid rgba(255,255,255,0.12);';
-
-        const label = document.createElement('span');
-        label.textContent = `Session expired \u2014 auto-login in ${formatTime(remaining)}`;
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.style.cssText = 'background: none; border: 1px solid rgba(255,255,255,0.35); color: rgba(255,255,255,0.75); border-radius: 4px; padding: 5px 12px; cursor: pointer; font-size: 13px; flex-shrink: 0;';
-
-        banner.appendChild(label);
-        banner.appendChild(cancelBtn);
-        document.body.appendChild(banner);
-
-        let cancelled = false;
-        cancelBtn.addEventListener('click', function () {
-            cancelled = true;
-            clearInterval(intervalId);
-            banner.remove();
-        });
-
-        const intervalId = setInterval(function () {
-            if (cancelled) return;
-            remaining--;
-            if (remaining <= 0) {
-                clearInterval(intervalId);
-                banner.remove();
-                // Re-query the button at fire time in case Angular re-rendered it.
-                const loginButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                    .find(function (btn) { return /LOG\s*IN/i.test(btn.textContent); });
-                if (loginButton) loginButton.click();
-                return;
-            }
-            label.textContent = `Session expired \u2014 auto-login in ${formatTime(remaining)}`;
-        }, 1000);
-    }
 
     // Start script services and monitoring.
     installXhrInterceptors();
@@ -4182,6 +3730,5 @@
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
     getScheduledBookingService().initializeOnPageLoad();
-    installLoginAutoLoginBanner();
     // #endregion Startup installers and bootstrap.
 })();
