@@ -1150,7 +1150,7 @@
 
             // Returns bookings the Worker should still be monitoring — both those waiting
             // to fire (pending) and those currently being executed by the cron (firing).
-            // Used to decide whether the pending section and tab-close guard are needed.
+            // Used to decide whether the pending section needs to be shown.
             function getActiveBookings() {
                 return loadAll().filter(b => b.status === SCHEDULED_STATUS_PENDING || b.status === SCHEDULED_STATUS_FIRING);
             }
@@ -1254,7 +1254,6 @@
             }
 
             // Photo URL helper.
-
             function getPlayerPhotoUrl(memberId, photosByMemberId) {
                 const photoInfo = photosByMemberId[memberId];
                 if (!photoInfo || !photoInfo.photoId) return null;
@@ -1262,7 +1261,6 @@
             }
 
             // Compute when the booking window opens for a given slot.
-
             function computeFireAtMs(date, fromMinutes) {
                 const slotDate = new Date(date + 'T00:00:00');
                 slotDate.setMinutes(slotDate.getMinutes() + fromMinutes);
@@ -1273,7 +1271,6 @@
             // Schedule a booking: build bodies and POST to Worker. Returns a promise
             // that resolves once the Worker has confirmed the booking is stored, so
             // callers can safely navigate away without cancelling the in-flight request.
-
             async function scheduleBooking(slotInfo, selectedPartners) {
                 const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) throw new Error('No fetch state available to build booking body.');
@@ -1405,11 +1402,10 @@
                 }
             }
 
-            // Page-load initialization.
-
             function initializeOnPageLoad() {
                 // Fetch bookings from the Worker to populate the local cache. The
-                // /bookings page reconciliation loop picks up results on the next RAF tick.
+                // /bookings page reconciliation loop picks up results on the next 
+                // requestAnimationFrame tick.
                 fetchAllFromWorker();
                 // Keep the Worker's KV refresh token current on every page load.
                 syncRefreshTokenFromAppStorage();
@@ -1874,7 +1870,8 @@
 
                 // Section already present — countdowns are updated by the dedicated interval
                 // in startPendingCountdownUpdates(). Updating textContent here would re-trigger
-                // the MutationObserver, causing scheduleReconcile to loop at RAF speed.
+                // the MutationObserver, causing scheduleReconcile to loop at requestAnimationFrame 
+                // speed.
                 if (existingSection) return;
 
                 // Insert before app-calendar-cancelled-by-me-list so the pending section
@@ -1933,7 +1930,7 @@
             // (so succeeded/failed status changes are picked up) and updates countdown text
             // in the pending section. If the booking list changes the section is removed and
             // re-injected on the next reconcile pass rather than updated in place, to avoid
-            // triggering the MutationObserver → scheduleReconcile → RAF loop.
+            // triggering the MutationObserver → scheduleReconcile → requestAnimationFrame loop.
             let pendingCountdownInterval = null;
 
             function startPendingCountdownUpdates() {
@@ -1970,7 +1967,7 @@
                         return;
                     }
 
-                    // No structural change — update countdown text in place.
+                    // Update countdown text in place.
                     activeBookings.forEach(booking => {
                         const row = section.querySelector(`[data-bc-pending-booking="${booking.id}"]`);
                         if (row) {
