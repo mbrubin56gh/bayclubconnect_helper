@@ -1081,6 +1081,7 @@
             const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
             const PLAYER_PHOTOS_KEY = 'bc_player_photos';
             const NOTIFICATION_EMAIL_KEY = 'bc_notification_email';
+            const SELF_PROFILE_KEY = 'bc_self_profile';
             const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
@@ -1363,6 +1364,14 @@
                     if (email) {
                         getLocalStorageService().setString(NOTIFICATION_EMAIL_KEY, email);
                     }
+                    // Also cache name and memberId for the partner picker self card.
+                    if (data.firstName && data.lastName) {
+                        getLocalStorageService().setJson(SELF_PROFILE_KEY, {
+                            firstName: data.firstName,
+                            lastName: data.lastName,
+                            memberId: data.memberId || null,
+                        });
+                    }
                     return email;
                 } catch (_e) {
                     return null;
@@ -1392,10 +1401,25 @@
                     const raw = localStorage.getItem('connect20auth');
                     if (!raw) return;
                     const state = JSON.parse(raw);
+                    const profileData = state && state.profile && state.profile.data;
                     const token = state && state.token && state.token.refresh_token;
-                    const userId = state && state.profile && state.profile.data && state.profile.data.email;
+                    const userId = profileData && profileData.email;
                     if (token && userId) {
                         pushRefreshToken(token, userId);
+                    }
+                    // Seed the self profile cache from connect20auth if memberId is not
+                    // yet cached. fetchNotificationEmail will overwrite with the
+                    // authoritative profile API result, which is more likely to carry
+                    // memberId and will always have fresher data.
+                    if (profileData && profileData.firstName && profileData.lastName) {
+                        const existing = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile') || {};
+                        if (!existing.memberId) {
+                            getLocalStorageService().setJson(SELF_PROFILE_KEY, {
+                                firstName: profileData.firstName,
+                                lastName: profileData.lastName,
+                                memberId: profileData.memberId || null,
+                            });
+                        }
                     }
                 } catch (_e) {
                     // Ignore parse errors — app storage format may change.
@@ -3036,6 +3060,30 @@
                 return 1;
             }
 
+            // Renders a non-interactive self card for the logged-in user, shown as
+            // the first item in the partner picker grid to match the native Bay Club
+            // UI where the logged-in user appears pre-selected and cannot be removed.
+            function buildSelfCardHtml(selfProfile, photoUrl) {
+                const initials = (selfProfile.firstName[0] || '') + (selfProfile.lastName[0] || '');
+                let hash = 0;
+                const nameStr = selfProfile.firstName + selfProfile.lastName;
+                for (let i = 0; i < nameStr.length; i++) {
+                    hash = nameStr.charCodeAt(i) + ((hash << 5) - hash);
+                }
+                const hue = Math.abs(hash) % 360;
+                const avatarHtml = photoUrl
+                    ? `<img src="${photoUrl}" style="width: 56px; height: 56px; border-radius: 50%; object-fit: cover;" alt="${selfProfile.firstName}">`
+                    : `<div style="width: 56px; height: 56px; border-radius: 50%; background: hsl(${hue}, 45%, 45%); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: 600;">${initials}</div>`;
+                return `<div style="display: flex; flex-direction: column; align-items: center; padding: 8px; border-radius: 8px; position: relative; min-width: 80px; pointer-events: none; cursor: default;">
+                    <div style="position: relative;">
+                        ${avatarHtml}
+                        <div style="position: absolute; bottom: -2px; right: -2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(160,160,160,0.9); color: white; display: flex; align-items: center; justify-content: center; font-size: 12px;">&#10003;</div>
+                    </div>
+                    <div style="margin-top: 4px; font-size: 12px; color: white; text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${selfProfile.firstName}</div>
+                    <div style="font-size: 11px; color: rgba(255,255,255,0.6); text-align: center; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${selfProfile.lastName}</div>
+                </div>`;
+            }
+
             function buildPlayerCardHtml(player, photoUrl) {
                 const initials = ((player.firstName || '')[0] || '') + ((player.lastName || '')[0] || '');
                 // Derive a background color from the player's name for the initials circle.
@@ -3073,10 +3121,15 @@
                     ? `today at ${fireAtTimeLabel}`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-                const playerCardsHtml = players.map(player => {
-                    const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(player.memberId, photosByMemberId);
-                    return buildPlayerCardHtml(player, photoUrl);
-                }).join('');
+                const selfProfile = getLocalStorageService().getJson('bc_self_profile', '[bc] failed to parse self profile');
+                const selfPhotoUrl = selfProfile && selfProfile.memberId
+                    ? getScheduledBookingService().getPlayerPhotoUrl(selfProfile.memberId, photosByMemberId)
+                    : null;
+                const playerCardsHtml = (selfProfile ? buildSelfCardHtml(selfProfile, selfPhotoUrl) : '') +
+                    players.map(player => {
+                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(player.memberId, photosByMemberId);
+                        return buildPlayerCardHtml(player, photoUrl);
+                    }).join('');
 
                 return `<div data-bc-schedule-panel style="padding: 16px;">
                     <div style="display: flex; align-items: center; margin-bottom: 16px;">

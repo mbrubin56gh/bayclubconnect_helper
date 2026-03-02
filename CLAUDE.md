@@ -190,6 +190,7 @@ Duration/player preference auto-selection also uses an in-file closure service (
 - `bc_possible_players` — player list cached from the `possiblePlayers` API, populated by XHR interception during normal booking flows and used by the partner picker for locked slots
 - `bc_player_photos` — photo map `{ memberId: { photoId, state } }`, always merged (never replaced) on update to preserve richer XHR-intercepted data over sparser on-demand fetch results
 - `bc_notification_email` — user's email address cached from `profile/api/1.0/profile`, embedded in booking records for Worker email notifications
+- `bc_self_profile` — `{ firstName, lastName }` of the logged-in user, cached from `connect20auth` or `profile/api/1.0/profile`; used to show the logged-in user as a pre-selected non-interactive card at the top of the partner picker
 
 Note: scheduled booking records are stored in Cloudflare Worker KV (`scheduled_bookings` key), not in localStorage. The extension maintains a local `cachedBookings` array populated by `GET /bookings` from the Worker.
 
