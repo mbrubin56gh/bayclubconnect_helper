@@ -33,7 +33,7 @@ const STATUS_FAILED = 'failed';
 // this Worker from its fetch() calls in the page context.
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': 'https://bayclubconnect.com',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Secret',
 };
 
