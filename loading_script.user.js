@@ -1361,12 +1361,32 @@
                 }).catch(e => getDebugService().log('warn', 'worker-push-token-failed', { error: e.message }));
             }
 
+            // Reads the refresh token the Angular app persists to localStorage after
+            // login and pushes it to the Worker. The app writes connect20auth before
+            // our script runs, so this reliably captures the token on every page load
+            // without needing to intercept any network calls.
+            function syncRefreshTokenFromAppStorage() {
+                try {
+                    const raw = localStorage.getItem('connect20auth');
+                    if (!raw) return;
+                    const state = JSON.parse(raw);
+                    const token = state && state.token && state.token.refresh_token;
+                    if (token) {
+                        pushRefreshToken(token);
+                    }
+                } catch (_e) {
+                    // Ignore parse errors — app storage format may change.
+                }
+            }
+
             // Page-load initialization.
 
             function initializeOnPageLoad() {
                 // Fetch bookings from the Worker to populate the local cache. The
                 // /bookings page reconciliation loop picks up results on the next RAF tick.
                 fetchAllFromWorker();
+                // Keep the Worker's KV refresh token current on every page load.
+                syncRefreshTokenFromAppStorage();
                 getDebugService().log('info', 'scheduled-bookings-initialized-on-load');
             }
 
