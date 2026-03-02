@@ -159,6 +159,43 @@ async function fireBooking(booking, env) {
     }
 }
 
+// --- Email notifications ---
+
+// Sends a success or failure email via Resend. Requires RESEND_API_KEY and
+// NOTIFICATION_EMAIL secrets. Uses onboarding@resend.dev as sender until a
+// custom domain is configured (Phase 5).
+async function sendEmailNotification(booking, env) {
+    const to = booking.notificationEmail;
+    if (!env.RESEND_API_KEY || !to) return;
+
+    const succeeded = booking.status === STATUS_SUCCEEDED;
+    const subject = succeeded
+        ? `✅ Booking confirmed: ${booking.slotLabel}`
+        : `❌ Booking failed: ${booking.slotLabel}`;
+    const partners = (booking.partnerNames || []).join(', ') || 'none';
+    const html = succeeded
+        ? `<p>Your scheduled booking was placed successfully.</p>
+           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
+        : `<p>Your scheduled booking could not be placed.</p>
+           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
+           <p>Reason: ${booking.failureReason || 'Unknown error'}</p>
+           <p>You can try booking manually on <a href="https://bayclubconnect.com">bayclubconnect.com</a>.</p>`;
+
+    await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            from: 'onboarding@resend.dev',
+            to,
+            subject,
+            html,
+        }),
+    });
+}
+
 // --- Cron tick ---
 
 // Runs every minute. Finds all pending bookings whose fireAtMs has passed,
@@ -191,7 +228,12 @@ async function runCronTick(env) {
 
     await saveBookings(env, bookings);
 
-    // TODO Phase 4: send email notification via Resend for each completed booking.
+    // Send email notification for each completed booking.
+    for (const booking of due) {
+        await sendEmailNotification(booking, env).catch(() => {
+            // Non-critical: log failure but don't let it affect booking status.
+        });
+    }
 }
 
 // --- HTTP request handler ---

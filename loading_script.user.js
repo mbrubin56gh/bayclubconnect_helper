@@ -1112,6 +1112,20 @@
                 getDebugService().log('info', 'scheduled-booking-dismissed', { id });
             }
 
+            // Extracts the email claim from the captured Bearer JWT so the Worker
+            // knows who to notify. Returns null if the token is missing or unparseable.
+            function getEmailFromCapturedToken() {
+                const auth = getBookingStateService().getCapturedHeader('Authorization');
+                if (!auth) return null;
+                try {
+                    const token = auth.replace(/^Bearer\s+/i, '');
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    return payload.email || null;
+                } catch (_e) {
+                    return null;
+                }
+            }
+
             // Auth headers for scheduled booking API calls.
 
             function buildAuthHeaders() {
@@ -1242,6 +1256,7 @@
                     },
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
+                    notificationEmail: getEmailFromCapturedToken(),
                     status: SCHEDULED_STATUS_PENDING,
                     slotCheckStatus: SLOT_CHECK_STATUS.UNKNOWN,
                     failureReason: null,
