@@ -1032,6 +1032,7 @@
             const SCHEDULED_BOOKING_ADVANCE_DAYS = 3;
             const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
             const PLAYER_PHOTOS_KEY = 'bc_player_photos';
+            const NOTIFICATION_EMAIL_KEY = 'bc_notification_email';
             const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
@@ -1110,20 +1111,6 @@
                     headers: workerHeaders(),
                 }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
                 getDebugService().log('info', 'scheduled-booking-dismissed', { id });
-            }
-
-            // Extracts the email claim from the captured Bearer JWT so the Worker
-            // knows who to notify. Returns null if the token is missing or unparseable.
-            function getEmailFromCapturedToken() {
-                const auth = getBookingStateService().getCapturedHeader('Authorization');
-                if (!auth) return null;
-                try {
-                    const token = auth.replace(/^Bearer\s+/i, '');
-                    const payload = JSON.parse(atob(token.split('.')[1]));
-                    return payload.email || null;
-                } catch (_e) {
-                    return null;
-                }
             }
 
             // Auth headers for scheduled booking API calls.
@@ -1256,7 +1243,7 @@
                     },
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
-                    notificationEmail: getEmailFromCapturedToken(),
+                    notificationEmail: await fetchNotificationEmail(),
                     status: SCHEDULED_STATUS_PENDING,
                     slotCheckStatus: SLOT_CHECK_STATUS.UNKNOWN,
                     failureReason: null,
@@ -1301,6 +1288,29 @@
                     headers: workerHeaders(),
                 }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
                 getDebugService().log('info', 'scheduled-booking-cancelled', { id });
+            }
+
+            // Fetches the logged-in user's email from the Bay Club profile API,
+            // caching the result in localStorage so only one API call is ever made
+            // per device. Returns null if auth headers are unavailable or the call
+            // fails — in which case the Worker will simply skip the email notification.
+            async function fetchNotificationEmail() {
+                const cached = getLocalStorageService().getString(NOTIFICATION_EMAIL_KEY);
+                if (cached) return cached;
+                const headers = buildAuthHeaders();
+                if (!headers) return null;
+                try {
+                    const response = await fetch('https://connect-api.bayclubs.io/profile/api/1.0/profile', { headers });
+                    if (!response.ok) return null;
+                    const data = await response.json();
+                    const email = data.email || null;
+                    if (email) {
+                        getLocalStorageService().setString(NOTIFICATION_EMAIL_KEY, email);
+                    }
+                    return email;
+                } catch (_e) {
+                    return null;
+                }
             }
 
             // Page-load initialization.
@@ -2911,6 +2921,7 @@
             function buildSchedulePanelHtml(slotInfo, players, photosByMemberId) {
                 const requiredPartners = getRequiredPartnerCount();
                 const partnerLabel = requiredPartners === 1 ? 'Select 1 partner' : `Select ${requiredPartners} partners`;
+
                 const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
                 const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
