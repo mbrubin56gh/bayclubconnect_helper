@@ -1364,12 +1364,14 @@
                     if (email) {
                         getLocalStorageService().setString(NOTIFICATION_EMAIL_KEY, email);
                     }
-                    // Also cache name and memberId for the partner picker self card.
+                    // Also cache name and memberIdentifier for the partner picker self card.
+                    // The photos API keys photos by memberIdentifier (the numeric member
+                    // number), not by personId (the CRM UUID).
                     if (data.firstName && data.lastName) {
                         getLocalStorageService().setJson(SELF_PROFILE_KEY, {
                             firstName: data.firstName,
                             lastName: data.lastName,
-                            memberId: data.memberId || null,
+                            memberId: data.memberIdentifier || null,
                         });
                     }
                     return email;
@@ -1409,15 +1411,15 @@
                     }
                     // Seed the self profile cache from connect20auth if memberId is not
                     // yet cached. fetchNotificationEmail will overwrite with the
-                    // authoritative profile API result, which is more likely to carry
-                    // memberId and will always have fresher data.
+                    // authoritative profile API result. memberIdentifier is the numeric
+                    // member number the photos API keys photos by.
                     if (profileData && profileData.firstName && profileData.lastName) {
                         const existing = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile') || {};
                         if (!existing.memberId) {
                             getLocalStorageService().setJson(SELF_PROFILE_KEY, {
                                 firstName: profileData.firstName,
                                 lastName: profileData.lastName,
-                                memberId: profileData.memberId || null,
+                                memberId: profileData.memberIdentifier || null,
                             });
                         }
                     }
@@ -3073,8 +3075,8 @@
                 const hue = Math.abs(hash) % 360;
                 const avatarHtml = photoUrl
                     ? `<img src="${photoUrl}" style="width: 56px; height: 56px; border-radius: 50%; object-fit: cover;" alt="${selfProfile.firstName}">`
-                    : `<div style="width: 56px; height: 56px; border-radius: 50%; background: hsl(${hue}, 45%, 45%); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: 600;">${initials}</div>`;
-                return `<div style="display: flex; flex-direction: column; align-items: center; padding: 8px; border-radius: 8px; position: relative; min-width: 80px; pointer-events: none; cursor: default;">
+                    : `<div data-bc-initials style="width: 56px; height: 56px; border-radius: 50%; background: hsl(${hue}, 45%, 45%); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: 600;">${initials}</div>`;
+                return `<div data-bc-self-card style="display: flex; flex-direction: column; align-items: center; padding: 8px; border-radius: 8px; position: relative; min-width: 80px; pointer-events: none; cursor: default;">
                     <div style="position: relative;">
                         ${avatarHtml}
                         <div style="position: absolute; bottom: -2px; right: -2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(160,160,160,0.9); color: white; display: flex; align-items: center; justify-content: center; font-size: 12px;">&#10003;</div>
@@ -3290,12 +3292,26 @@
                     bindSchedulePanelInteractions(panel, anchorElement, slotInfo);
                 }
 
-                // If the cache had no photos, attempt a direct API fetch and swap initials cards
-                // to real photos as they arrive. Skip the fetch when the cache is already populated
-                // so we never overwrite the richer XHR-intercepted data with a sparser result.
-                const hasCachedPhotos = Object.keys(photosByMemberId).length > 0;
-                const freshPhotos = hasCachedPhotos ? null : await getScheduledBookingService().fetchPhotos(players);
+                // Fetch fresh photos as needed. The logged-in user is never in the possible
+                // players list (you cannot invite yourself), so their photo must be fetched
+                // separately even when other player photos are already cached.
+                const selfProfileForPhoto = getLocalStorageService().getJson('bc_self_profile', '[bc] failed to parse self profile');
+                const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
+                const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
+                const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
+
+                let freshPhotos = null;
+                if (!hasCachedPhotosForPlayers) {
+                    // Cache is empty: fetch photos for all players and the logged-in user together.
+                    const playersForPhotos = selfMemberId ? players.concat([{ memberId: selfMemberId }]) : players;
+                    freshPhotos = await getScheduledBookingService().fetchPhotos(playersForPhotos);
+                } else if (selfPhotoMissing) {
+                    // Player photos are cached but the logged-in user's photo is absent: fetch only self.
+                    freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
+                }
+
                 if (freshPhotos && panel && panel.isConnected) {
+                    // Swap initials to photos for partner cards.
                     panel.querySelectorAll('.bc-player-card').forEach(card => {
                         const memberId = card.dataset.memberId;
                         const photoInfo = freshPhotos[memberId];
@@ -3309,6 +3325,25 @@
                         img.alt = card.dataset.firstName || '';
                         initialsEl.replaceWith(img);
                     });
+                    // Swap initials to photo for the self card — fetched above since self
+                    // is never in the possible players list.
+                    if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
+                        const selfCard = panel.querySelector('[data-bc-self-card]');
+                        if (selfCard && selfMemberId) {
+                            const photoInfo = freshPhotos[selfMemberId];
+                            const initialsEl = selfCard.querySelector('[data-bc-initials]');
+                            if (photoInfo && photoInfo.photoId && initialsEl) {
+                                const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(selfMemberId, freshPhotos);
+                                if (photoUrl) {
+                                    const img = document.createElement('img');
+                                    img.src = photoUrl;
+                                    img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                                    img.alt = (selfProfileForPhoto && selfProfileForPhoto.firstName) || '';
+                                    initialsEl.replaceWith(img);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
