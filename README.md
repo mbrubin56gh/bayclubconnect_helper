@@ -74,13 +74,14 @@ The instructions are essentially the same as for Chrome:
 <img width="1144" height="668" alt="Screenshot 2026-02-24 at 4 33 54 PM" src="https://github.com/user-attachments/assets/58412af9-e4b3-49e9-8dce-c85eaf55c0c7" />
 
 - Cards for times with edge courts are outlined in gold and show a gold **E**: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa. Cards for times with courts that are gated (e.g. surrounded by a fence) have a heavier gold border and show a gold **G** instead (only Santa Clara has these courts). Courts adjacent to a hitting wall show an **H** alongside the E or G badge (currently courts 9 and 10 at Santa Clara).
-- If a time slot is available, but not within the 3 day booking period, it will display, but dimmed with a lock on it (matching the native picker).
-<img width="1116" height="639" alt="Screenshot 2026-02-24 at 4 34 34 PM" src="https://github.com/user-attachments/assets/c360b0cf-db61-457f-8c74-40a058ec4f60" />
+
 - Select your time slot and court and then click the button to proceed with booking.
 
 - Once you're on the bookings page, you'll see links to add your booking to Google calendar or to download more generically the calendar entry to add on your own to your calendar application.
 
 <img width="834" height="300" alt="Screenshot 2026-02-25 at 7 20 41 PM" src="https://github.com/user-attachments/assets/f3e2eecb-8cd6-4f08-a4ff-e1622dfdc3af" />
+
+- If a time slot is available, but not within the 3 day booking period, you can still select it and walk through a custom booking flow that will schedule an attempt to reserve the slot when the 3 day booking period opens up for that slot. The slot will display with a calendar icon in the top right and a note at the bottom saying when the slot opens up. Click on the slot and go through the booking flow (you'll get a slightly different partner picker, but don't let that throw you). When you're done, you'll see on the /bookings page a card indicating the pending booking attempt, which you can also cancel from there.
 
 ## Debugging
 
