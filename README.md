@@ -83,6 +83,11 @@ The instructions are essentially the same as for Chrome:
 
 - If a time slot is available, but not within the 3 day booking period, you can still select it and walk through a custom booking flow that will schedule an attempt to reserve the slot when the 3 day booking period opens up for that slot. The slot will display with a calendar icon in the top right and a note at the bottom saying when the slot opens up. Click on the slot and go through the booking flow (you'll get a slightly different partner picker, but don't let that throw you). When you're done, you'll see on the /bookings page a card indicating the pending booking attempt, which you can also cancel from there.
 
+<img width="343" height="309" alt="Screenshot 2026-03-02 at 8 29 35 AM" src="https://github.com/user-attachments/assets/c9c0dac2-e379-49ee-b1f3-6927c83376a9" />
+
+<img width="1147" height="219" alt="Screenshot 2026-03-02 at 8 33 54 AM" src="https://github.com/user-attachments/assets/ba70709b-9c9c-4852-9d62-31780cca6b2a" />
+
+
 ## Debugging
 
 If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
