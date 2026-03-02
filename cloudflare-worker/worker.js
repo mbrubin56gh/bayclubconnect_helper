@@ -1,9 +1,9 @@
 // Cloudflare Worker for BayClub scheduled court booking execution.
 //
 // KV keys (all stored in BC_BOOKINGS namespace):
-//   refresh_token       — current valid refresh token (rotates on every use)
-//   scheduled_bookings  — JSON array of booking records
-//   last_token_refresh  — ISO timestamp of last successful token refresh
+//   refresh_token:{email} — current valid refresh token for that user (rotates on every use)
+//   scheduled_bookings    — JSON array of booking records
+//   last_token_refresh    — ISO timestamp of the most recent token rotation (any user)
 //
 // Secrets (set via `wrangler secret put`):
 //   WORKER_SECRET  — required on all write endpoints (X-Worker-Secret header)
@@ -20,7 +20,13 @@ const AUTH_URL = 'https://authentication2-api.bayclubs.io/connect/token';
 const BOOKING_API_BASE = 'https://connect-api.bayclubs.io/court-booking/api/1.0';
 const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
 
+// Token keys are per-user: refresh_token:{notificationEmail}. The bare key is
+// a fallback for booking records that pre-date the per-user scheme.
 const KV_REFRESH_TOKEN = 'refresh_token';
+
+function tokenKvKey(userId) {
+    return userId ? `${KV_REFRESH_TOKEN}:${userId}` : KV_REFRESH_TOKEN;
+}
 const KV_BOOKINGS = 'scheduled_bookings';
 const KV_LAST_REFRESH = 'last_token_refresh';
 
@@ -66,13 +72,16 @@ function buildApiHeaders(accessToken, sessionId) {
     };
 }
 
-// Refreshes the access token using the stored refresh token. Rotates the
-// refresh token in KV immediately — Bay Club refresh tokens are single-use.
+// Refreshes the access token for the given user (identified by their email).
+// Tokens are stored per-user under refresh_token:{email} so multiple extension
+// users cannot clobber each other's tokens. Rotates immediately in KV after
+// use — Bay Club refresh tokens are single-use.
 // Returns the new access token.
-async function refreshAccessToken(env) {
-    const currentRefreshToken = await env.BC_BOOKINGS.get(KV_REFRESH_TOKEN);
+async function refreshAccessToken(env, userId) {
+    const kvKey = tokenKvKey(userId);
+    const currentRefreshToken = await env.BC_BOOKINGS.get(kvKey);
     if (!currentRefreshToken) {
-        throw new Error('No refresh token stored in KV.');
+        throw new Error(`No refresh token stored in KV for user ${userId || '(unknown)'}.`);
     }
 
     const body = new URLSearchParams({
@@ -101,7 +110,7 @@ async function refreshAccessToken(env) {
     }
 
     // Rotate immediately — the old token is now invalid.
-    await env.BC_BOOKINGS.put(KV_REFRESH_TOKEN, newRefreshToken);
+    await env.BC_BOOKINGS.put(kvKey, newRefreshToken);
     await env.BC_BOOKINGS.put(KV_LAST_REFRESH, new Date().toISOString());
 
     return accessToken;
@@ -125,10 +134,11 @@ async function saveBookings(env, bookings) {
 
 // --- Booking execution ---
 
-// Fires a single booking: refreshes the token, POSTs courtbookings, then PUTs
-// confirm. Throws on any failure so the cron tick can mark the booking failed.
+// Fires a single booking: refreshes the token for the booking's owner, POSTs
+// courtbookings, then PUTs confirm. Throws on any failure so the cron tick can
+// mark the booking failed.
 async function fireBooking(booking, env) {
-    const accessToken = await refreshAccessToken(env);
+    const accessToken = await refreshAccessToken(env, booking.notificationEmail);
     const headers = buildApiHeaders(accessToken, crypto.randomUUID());
 
     // Step 1: POST courtbookings.
@@ -296,13 +306,14 @@ async function handleRequest(request, env) {
         return jsonResponse({ ok: true });
     }
 
-    // Receives a fresh refresh token from the extension's XHR interceptor and
-    // stores it in KV. Called automatically whenever the Bay Club app renews
-    // its access token, keeping the Worker's token perpetually up to date.
+    // Receives a fresh refresh token from the extension and stores it in KV
+    // under the per-user key refresh_token:{userId}. Called automatically on
+    // every page load, keeping each user's token perpetually up to date without
+    // manual intervention.
     if (method === 'PUT' && path === '/token') {
-        const { refresh_token: newToken } = await request.json();
+        const { refresh_token: newToken, userId } = await request.json();
         if (!newToken) return new Response('Bad Request', { status: 400 });
-        await env.BC_BOOKINGS.put(KV_REFRESH_TOKEN, newToken);
+        await env.BC_BOOKINGS.put(tokenKvKey(userId), newToken);
         await env.BC_BOOKINGS.put(KV_LAST_REFRESH, new Date().toISOString());
         return jsonResponse({ ok: true });
     }

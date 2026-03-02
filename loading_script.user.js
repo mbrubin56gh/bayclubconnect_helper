@@ -273,16 +273,21 @@
         };
 
         // Extracts a refresh token from an auth endpoint response and forwards it to
-        // the Worker's KV store via pushRefreshToken(). Called from both the XHR load
-        // listener and the fetch() wrapper so either code path keeps the Worker token
-        // current without the user having to manually re-bootstrap credentials.
+        // the Worker's KV store via pushRefreshToken(). The userId (email) is read
+        // from the cached bc_notification_email key so the Worker stores the token
+        // under the per-user key rather than overwriting a shared global token.
+        // If the email is not yet cached (e.g. very first login), the push is skipped;
+        // syncRefreshTokenFromAppStorage() on the next page load will catch it.
         function maybePushRefreshTokenToWorker(xhr) {
             if (xhr.status < 200 || xhr.status >= 300) return;
             if (!xhr.responseText) return;
             try {
                 const data = JSON.parse(xhr.responseText);
                 if (data && data.refresh_token) {
-                    getScheduledBookingService().pushRefreshToken(data.refresh_token);
+                    const userId = getLocalStorageService().getString('bc_notification_email');
+                    if (userId) {
+                        getScheduledBookingService().pushRefreshToken(data.refresh_token, userId);
+                    }
                 }
             } catch (_e) {
                 // Not parseable; skip.
@@ -1370,26 +1375,30 @@
             // Forwards a fresh refresh token to the Worker's KV store. Called by the
             // XHR interceptor whenever the Bay Club app renews its access token so the
             // Worker always has a valid token to use when firing scheduled bookings.
-            function pushRefreshToken(token) {
+            // Pushes a refresh token to the Worker keyed by userId (the user's email).
+            // Per-user keys prevent multiple extension users from overwriting each
+            // other's tokens in KV.
+            function pushRefreshToken(token, userId) {
                 fetch(`${WORKER_URL}/token`, {
                     method: 'PUT',
                     headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
-                    body: JSON.stringify({ refresh_token: token }),
+                    body: JSON.stringify({ refresh_token: token, userId }),
                 }).catch(e => getDebugService().log('warn', 'worker-push-token-failed', { error: e.message }));
             }
 
-            // Reads the refresh token the Angular app persists to localStorage after
-            // login and pushes it to the Worker. The app writes connect20auth before
-            // our script runs, so this reliably captures the token on every page load
-            // without needing to intercept any network calls.
+            // Reads the refresh token and email the Angular app persists to localStorage
+            // after login and pushes both to the Worker. The app writes connect20auth
+            // before our script runs, so this reliably captures the token on every page
+            // load without needing to intercept any network calls.
             function syncRefreshTokenFromAppStorage() {
                 try {
                     const raw = localStorage.getItem('connect20auth');
                     if (!raw) return;
                     const state = JSON.parse(raw);
                     const token = state && state.token && state.token.refresh_token;
-                    if (token) {
-                        pushRefreshToken(token);
+                    const userId = state && state.profile && state.profile.data && state.profile.data.email;
+                    if (token && userId) {
+                        pushRefreshToken(token, userId);
                     }
                 } catch (_e) {
                     // Ignore parse errors — app storage format may change.

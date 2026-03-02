@@ -61,13 +61,18 @@ deploy. It declares:
 ## KV Storage
 
 The KV namespace is named **BC_BOOKINGS** in code (bound in `wrangler.toml`) and
-has the Cloudflare ID `299d14645bed49458addc9751cc6c241`. It holds three keys:
+has the Cloudflare ID `299d14645bed49458addc9751cc6c241`. It holds these keys:
 
 | Key | What it stores |
 |-----|---------------|
-| `refresh_token` | Current valid Bay Club refresh token. **Single-use** — the Worker rotates it on every use. |
+| `refresh_token:{email}` | Current valid Bay Club refresh token for that user. **Single-use** — the Worker rotates it on every use. One entry per extension user (keyed by their Bay Club account email). |
 | `scheduled_bookings` | JSON array of all booking records (pending, fired, failed, cancelled). |
-| `last_token_refresh` | ISO timestamp of the last successful token rotation. Visible on `/status` as a sanity check. |
+| `last_token_refresh` | ISO timestamp of the most recent token rotation (any user). Visible on `/status` as a sanity check. |
+
+Tokens are stored per-user so multiple people using the extension don't
+overwrite each other's tokens. When the Worker fires a booking it looks up
+`refresh_token:{booking.notificationEmail}` to get the right token for that
+booking's owner.
 
 ---
 
@@ -117,17 +122,18 @@ returned. This means:
 1. The Worker must rotate the token in KV immediately after every use.
 2. If the Worker ever fails to store the new token (e.g. a crash mid-flight), the
    chain is broken and the next booking attempt will fail with "No refresh token
-   stored in KV."
+   stored in KV for user {email}."
 
-**How the token stays fresh**: The extension monitors the Bay Club app's auth
-token storage (`connect20auth` in localStorage). On every page load it reads the
-stored refresh token and sends it to the Worker via `PUT /token`. This keeps the
-Worker's token perpetually up to date as long as you log into bayclubconnect.com
-occasionally.
+**How the token stays fresh**: The extension reads the Bay Club app's auth
+storage (`connect20auth` in localStorage) on every page load. This key contains
+both the current refresh token and the user's email. The extension sends both to
+the Worker via `PUT /token`, which stores the token under `refresh_token:{email}`.
+This keeps each user's token perpetually up to date as long as they visit
+bayclubconnect.com occasionally — no manual steps needed.
 
 **If the token chain breaks** (Worker fails to store, or Bay Club invalidates all
-refresh tokens, or you haven't logged in for a long time): you need to bootstrap
-a fresh token manually. See the Troubleshooting section below.
+refresh tokens, or a user hasn't logged in for a long time): the token for that
+user needs to be bootstrapped manually. See the Troubleshooting section below.
 
 ---
 
@@ -216,27 +222,28 @@ curl https://bayclubconnect-bookings.mark-rubin.workers.dev/status
 Returns `lastTokenRefresh` (when the token was last rotated), `pendingBookings`
 count, `nextFireAt`, and the full booking list.
 
-### "No refresh token stored in KV"
+### "No refresh token stored in KV for user {email}"
 
-The refresh token chain is broken. Bootstrap a new one:
+The refresh token chain for that user is broken. The easiest fix is to reload
+bayclubconnect.com with the extension active — the extension reads `connect20auth`
+on every page load and automatically pushes the refresh token to the Worker via
+`PUT /token`. Check `/status` after the page loads to confirm `lastTokenRefresh`
+updated.
+
+If that doesn't work (e.g. the user was logged out), bootstrap manually:
 
 1. Log into bayclubconnect.com in your browser.
 2. Open DevTools → Application → Local Storage → `https://bayclubconnect.com`.
-3. Find the `connect20auth` key. Click it and copy the value.
-4. Paste it into a text editor, find the `"refresh_token"` field, and copy just
-   that token string.
-5. Run:
+3. Find the `connect20auth` key. In its JSON value, locate the `"refresh_token"`
+   field and copy just that token string. Also note the email from
+   `profile.data.email` (e.g. `mark.rubin@gmail.com`).
+4. Run (substituting the actual email and token):
    ```bash
    cd cloudflare-worker
-   wrangler kv key put --binding BC_BOOKINGS refresh_token "<paste token here>"
+   wrangler kv key put --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com" "<paste token here>"
    ```
-6. Verify with `curl .../status` — `lastTokenRefresh` should update on the next
-   page load (the extension sends the token to the Worker on startup).
-
-Alternatively: simply reload bayclubconnect.com with the extension active. The
-extension reads `connect20auth` on page load and automatically pushes the refresh
-token to the Worker via `PUT /token`. Check `/status` after the page loads to
-confirm `lastTokenRefresh` updated.
+5. Verify with `curl .../status` — `lastTokenRefresh` should update on the next
+   page load.
 
 ### View Worker logs
 
@@ -254,11 +261,14 @@ tick fire in real time.
 # Read the full bookings list
 wrangler kv key get --binding BC_BOOKINGS scheduled_bookings
 
-# Read the current refresh token (to confirm it's present)
-wrangler kv key get --binding BC_BOOKINGS refresh_token
+# Read a user's current refresh token (substitute their email)
+wrangler kv key get --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com"
 
-# Manually write a value
-wrangler kv key put --binding BC_BOOKINGS refresh_token "<token>"
+# Manually write a token for a user
+wrangler kv key put --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com" "<token>"
+
+# List all KV keys (to see which users have tokens stored)
+wrangler kv key list --binding BC_BOOKINGS
 
 # Delete a value
 wrangler kv key delete --binding BC_BOOKINGS scheduled_bookings

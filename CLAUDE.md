@@ -199,9 +199,9 @@ Server-side component that executes scheduled bookings without requiring the bro
 
 - **Worker URL**: `https://bayclubconnect-bookings.mark-rubin.workers.dev`
 - **Secrets** (set via `wrangler secret put`): `WORKER_SECRET`, `RESEND_API_KEY`
-- **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token`, `scheduled_bookings`, `last_token_refresh`
+- **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token:{email}` (per user), `scheduled_bookings`, `last_token_refresh`
 - **Cron**: every minute — finds `status === 'pending'` bookings whose `fireAtMs` has passed, marks `firing`, calls Bay Club two-step booking API, saves result, sends email
-- **Auth**: Bay Club refresh token stored in KV; rotated immediately after every use (single-use tokens). `client_id=connect20`, `client_secret=connectSecret` for both password and refresh grants.
+- **Auth**: Bay Club refresh token stored in KV per-user under `refresh_token:{notificationEmail}`; rotated immediately after every use (single-use tokens). `client_id=connect20`, `client_secret=connectSecret` for both password and refresh grants. Per-user storage prevents multiple extension users from overwriting each other's tokens.
 - **Email**: Resend API, sender `notifications@bayclubhelper.app`. `RESEND_API_KEY` secret. Recipient is `notificationEmail` embedded in the booking record (fetched from `profile/api/1.0/profile` at scheduling time and cached to `bc_notification_email` in localStorage).
 - **CORS**: allows `https://bayclubconnect.com` for `GET, POST, PUT, DELETE, OPTIONS`.
 - **HTTP endpoints**:
@@ -209,8 +209,8 @@ Server-side component that executes scheduled bookings without requiring the bro
   - `GET /bookings` — list all bookings (secret required)
   - `POST /bookings` — add a booking (secret required)
   - `DELETE /bookings/{id}` — remove a booking (secret required)
-  - `PUT /token` — store a fresh refresh token in KV (secret required); called automatically by the extension on page load
-- **Token bootstrap**: if KV `refresh_token` is ever lost, run `wrangler kv key put --binding BC_BOOKINGS refresh_token "<token>"`. The extension's `syncRefreshTokenFromAppStorage()` repopulates it automatically on the next page load.
+  - `PUT /token` — store a fresh refresh token in KV under `refresh_token:{userId}` (secret required); called automatically by the extension on page load
+- **Token bootstrap**: if a user's KV token is ever lost, reload bayclubconnect.com — `syncRefreshTokenFromAppStorage()` pushes it automatically. For manual recovery: `wrangler kv key put --binding BC_BOOKINGS "refresh_token:email@example.com" "<token>"`.
 - **Deploy**: `cd cloudflare-worker && wrangler deploy`
 
 ## Files
