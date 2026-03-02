@@ -296,5 +296,16 @@ async function handleRequest(request, env) {
         return jsonResponse({ ok: true });
     }
 
+    // Receives a fresh refresh token from the extension's XHR interceptor and
+    // stores it in KV. Called automatically whenever the Bay Club app renews
+    // its access token, keeping the Worker's token perpetually up to date.
+    if (method === 'PUT' && path === '/token') {
+        const { refresh_token: newToken } = await request.json();
+        if (!newToken) return new Response('Bad Request', { status: 400 });
+        await env.BC_BOOKINGS.put(KV_REFRESH_TOKEN, newToken);
+        await env.BC_BOOKINGS.put(KV_LAST_REFRESH, new Date().toISOString());
+        return jsonResponse({ ok: true });
+    }
+
     return new Response('Not Found', { status: 404 });
 }

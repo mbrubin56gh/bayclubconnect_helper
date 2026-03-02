@@ -272,6 +272,19 @@
             return originalSetRequestHeader.apply(this, arguments);
         };
 
+        function maybePushRefreshTokenToWorker(xhr) {
+            if (xhr.status < 200 || xhr.status >= 300) return;
+            if (!xhr.responseText) return;
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (data && data.refresh_token) {
+                    getScheduledBookingService().pushRefreshToken(data.refresh_token);
+                }
+            } catch (_e) {
+                // Not parseable; skip.
+            }
+        }
+
         function maybeCachePossiblePlayersResponse(xhr) {
             if (xhr.status < 200 || xhr.status >= 300) return;
             if (!xhr.responseText) return;
@@ -314,6 +327,11 @@
             if (typeof url === 'string' && url.includes('photos/members')) {
                 this.addEventListener('load', function () {
                     maybeCachePlayerPhotosResponse(this);
+                });
+            }
+            if (typeof url === 'string' && url.includes('authentication2-api.bayclubs.io/connect/token')) {
+                this.addEventListener('load', function () {
+                    maybePushRefreshTokenToWorker(this);
                 });
             }
             setRequestInfo(this, method, url);
@@ -1313,6 +1331,17 @@
                 }
             }
 
+            // Forwards a fresh refresh token to the Worker's KV store. Called by the
+            // XHR interceptor whenever the Bay Club app renews its access token so the
+            // Worker always has a valid token to use when firing scheduled bookings.
+            function pushRefreshToken(token) {
+                fetch(`${WORKER_URL}/token`, {
+                    method: 'PUT',
+                    headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
+                    body: JSON.stringify({ refresh_token: token }),
+                }).catch(e => getDebugService().log('warn', 'worker-push-token-failed', { error: e.message }));
+            }
+
             // Page-load initialization.
 
             function initializeOnPageLoad() {
@@ -1335,6 +1364,7 @@
                 dismissBooking,
                 initializeOnPageLoad,
                 refreshFromWorker: fetchAllFromWorker,
+                pushRefreshToken,
                 cachePlayersFromXhr,
                 cachePhotosFromXhr,
                 fetchPhotos,
