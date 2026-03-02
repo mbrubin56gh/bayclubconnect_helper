@@ -2567,13 +2567,38 @@
         const slotDate = new Date(fetchDate + 'T00:00:00');
         slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
         const slotLocked = slotDate > limitDate;
-        const lockIcon = slotLocked
-            ? `<div class="i-lock-blue position-absolute-top position-absolute-right icon-size-16 time-slot-icon"></div>`
+
+        // Flip-calendar SVG returned as a bare element (no wrapper) so callers can
+        // place it inside a shared flex row alongside the E/G/H badge text.
+        // Filled body + colored header + two binding posts gives the "tear-off
+        // calendar" look that connotes scheduling rather than a blocked slot.
+        const calendarIcon = slotLocked
+            ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                    stroke-linecap="round" stroke-linejoin="round">
+                 <rect x="3" y="4" width="18" height="18" rx="2" fill="rgba(80,140,255,0.3)" stroke="rgba(180,215,255,0.9)" stroke-width="2"/>
+                 <rect x="4" y="5" width="16" height="6" fill="rgba(130,180,255,0.85)" stroke="none"/>
+                 <line x1="3" y1="11" x2="21" y2="11" stroke="rgba(180,215,255,0.4)" stroke-width="1"/>
+                 <line x1="8" y1="2" x2="8" y2="7" stroke="rgba(200,225,255,1)" stroke-width="2.5"/>
+                 <line x1="16" y1="2" x2="16" y2="7" stroke="rgba(200,225,255,1)" stroke-width="2.5"/>
+               </svg>`
             : '';
+
+        // Raised to 0.80 so locked slots read as clearly actionable.
         const disabledStyle = slotLocked
-            ? 'opacity: 0.35; background-color: rgba(255,255,255,0.05);'
+            ? 'opacity: 0.80; background-color: rgba(255,255,255,0.05);'
             : '';
-        return { slotLocked, lockIcon, disabledStyle };
+
+        // "Opens Wed 3/5" label — shown inside the card below the court list.
+        let openDateLabel = '';
+        if (slotLocked) {
+            const openDate = new Date(slotDate.getTime() - 3 * 24 * 60 * 60 * 1000);
+            const weekday = openDate.toLocaleDateString('en-US', { weekday: 'short' });
+            const month = openDate.getMonth() + 1;
+            const day = openDate.getDate();
+            openDateLabel = `Opens ${weekday} ${month}/${day}`;
+        }
+
+        return { slotLocked, lockIcon: calendarIcon, disabledStyle, openDateLabel };
     }
 
     function buildSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
@@ -2583,7 +2608,7 @@
     }
 
     function buildSingleCourtSlotHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
-        const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
+        const { slotLocked, lockIcon, disabledStyle, openDateLabel } = computeSlotLockState(slot, fetchDate, limitDate);
         const court = slot.courts[0];
         const gated = isCourtGated(court.courtName, clubId);
         const edge = isCourtEdge(court.courtName, clubId);
@@ -2591,7 +2616,13 @@
         const primaryLabel = gated ? 'G' : edge ? 'E' : '';
         const badgeText = [primaryLabel, hasHittingWall ? 'H' : ''].filter(Boolean).join(' ');
         const badgeColor = gated ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
-        const courtBadgeHtml = badgeText ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</div>` : '';
+        // Single flex-row container in the top-right corner holds both the E/G/H
+        // badge text and the calendar icon so they never overlap each other.
+        const topRightHtml = (badgeText || slotLocked) ? `
+        <div style="position: absolute; top: 2px; right: 4px; display: flex; align-items: center; gap: 3px;">
+          ${badgeText ? `<span style="font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</span>` : ''}
+          ${lockIcon}
+        </div>` : '';
         const dataAttrs = `data-club-name="${meta.shortName}"
                 data-from="${slot.fromHumanTime}"
                 data-to="${slot.toHumanTime}"
@@ -2607,14 +2638,14 @@
            ${dataAttrs} style="${disabledStyle}${gated ? ' border: 2px solid rgba(255,215,0,1);' : edge ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${court.courtName}</div>
-        ${courtBadgeHtml}
-        ${lockIcon}
+        ${openDateLabel ? `<div style="font-size: 10px; color: rgba(255,215,90,0.95); margin-top: 5px;">${openDateLabel}</div>` : ''}
+        ${topRightHtml}
       </div>
     </div>`;
     }
 
     function buildMultiCourtGroupHtml(slot, fetchDate, limitDate, meta, clubId, labelMode) {
-        const { slotLocked, lockIcon, disabledStyle } = computeSlotLockState(slot, fetchDate, limitDate);
+        const { slotLocked, lockIcon, disabledStyle, openDateLabel } = computeSlotLockState(slot, fetchDate, limitDate);
         const hasGatedCourt = slot.courts.some(c => isCourtGated(c.courtName, clubId));
         const hasEdgeCourt = slot.courts.some(c => isCourtEdge(c.courtName, clubId));
         const hasHittingWallCourt = slot.courts.some(c => courtHasHittingWall(c.courtName, clubId));
@@ -2652,7 +2683,12 @@
         const primaryLabel = hasGatedCourt ? 'G' : hasEdgeCourt ? 'E' : '';
         const badgeText = [primaryLabel, hasHittingWallCourt ? 'H' : ''].filter(Boolean).join(' ');
         const badgeColor = hasGatedCourt ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
-        const cardBadgeHtml = badgeText ? `<div style="position: absolute; top: 2px; right: 4px; font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</div>` : '';
+        // Same combined flex-row top-right container as the single-court builder.
+        const topRightHtml = (badgeText || slotLocked) ? `
+        <div style="position: absolute; top: 2px; right: 4px; display: flex; align-items: center; gap: 3px;">
+          ${badgeText ? `<span style="font-size: 11px; font-weight: bold; color: ${badgeColor};">${badgeText}</span>` : ''}
+          ${lockIcon}
+        </div>` : '';
 
         return `
     <div data-slot-wrapper data-from-minutes="${slot.fromInMinutes}">
@@ -2660,11 +2696,11 @@
            style="${disabledStyle}${hasGatedCourt ? ' border: 2px solid rgba(255,215,0,1);' : hasEdgeCourt ? ' border: 1px solid rgba(255,200,50,0.7);' : ''} padding: 10px 14px;">
         <div class="${labelMode === LABEL_MODE_TIME ? 'text-lowercase' : ''}" style="font-weight: 500;">${labelMode === LABEL_MODE_CLUB ? CLUB_SHORT_NAMES[clubId] : `${slot.fromHumanTime} - ${slot.toHumanTime}`}</div>
         <div style="font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 2px;">${courtSummary}</div>
-        ${cardBadgeHtml}
-        ${lockIcon}
+        ${topRightHtml}
         <div class="bc-court-expand" style="display: none; margin-top: 6px; text-align: left; padding: 0 4px;">
             ${expandedCourts}
         </div>
+        ${openDateLabel ? `<div style="font-size: 10px; color: rgba(255,215,90,0.95); margin-top: 5px;">${openDateLabel}</div>` : ''}
       </div>
     </div>`;
     }
