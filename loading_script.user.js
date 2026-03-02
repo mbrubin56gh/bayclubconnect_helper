@@ -338,6 +338,25 @@
             return originalXhrOpen.apply(this, [method, url, ...rest]);
         };
 
+        // Intercept fetch()-based token calls (the Bay Club app may use fetch rather
+        // than XHR for authentication). We clone the response so the app's own
+        // handlers can still consume it normally.
+        const originalFetch = window.fetch;
+        window.fetch = function (input, _init) {
+            const urlStr = typeof input === 'string' ? input : (input?.url || '');
+            const promise = originalFetch.apply(this, arguments);
+            if (urlStr.includes('authentication2-api.bayclubs.io/connect/token')) {
+                promise.then(function (response) {
+                    response.clone().json().then(function (data) {
+                        if (data && data.refresh_token) {
+                            maybePushRefreshTokenToWorker({ status: 200, responseText: JSON.stringify(data) });
+                        }
+                    }).catch(function () {});
+                }).catch(function () {});
+            }
+            return promise;
+        };
+
         XMLHttpRequest.prototype.send = function (_body) {
             // Detect the native app's native request for court availability and use it to add our own
             // for data we actually want based on what our user selected for duration across
