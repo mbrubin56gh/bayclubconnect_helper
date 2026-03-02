@@ -272,6 +272,10 @@
             return originalSetRequestHeader.apply(this, arguments);
         };
 
+        // Extracts a refresh token from an auth endpoint response and forwards it to
+        // the Worker's KV store via pushRefreshToken(). Called from both the XHR load
+        // listener and the fetch() wrapper so either code path keeps the Worker token
+        // current without the user having to manually re-bootstrap credentials.
         function maybePushRefreshTokenToWorker(xhr) {
             if (xhr.status < 200 || xhr.status >= 300) return;
             if (!xhr.responseText) return;
@@ -338,9 +342,10 @@
             return originalXhrOpen.apply(this, [method, url, ...rest]);
         };
 
-        // Intercept fetch()-based token calls (the Bay Club app may use fetch rather
-        // than XHR for authentication). We clone the response so the app's own
-        // handlers can still consume it normally.
+        // Intercept fetch()-based token calls (the Bay Club app uses fetch rather than
+        // XHR for authentication). Any refresh_token in the response is forwarded to
+        // the Worker's KV via maybePushRefreshTokenToWorker(). We clone the response
+        // before consuming it so the app's own handlers receive the original unread body.
         const originalFetch = window.fetch;
         window.fetch = function (input, _init) {
             const urlStr = typeof input === 'string' ? input : (input?.url || '');
@@ -1095,6 +1100,9 @@
             // synchronously; writes update it optimistically then call the Worker.
             let cachedBookings = [];
 
+            // Returns the authentication header required on all write endpoints of the
+            // Cloudflare Worker. The secret is shared between the extension and the Worker
+            // via the WORKER_SECRET environment variable set with wrangler secret put.
             function workerHeaders() {
                 return { 'X-Worker-Secret': WORKER_SECRET };
             }
@@ -1129,18 +1137,26 @@
                 }
             }
 
+            // Returns bookings that have not yet fired (awaiting the cron tick).
             function getPendingBookings() {
                 return loadAll().filter(b => b.status === SCHEDULED_STATUS_PENDING);
             }
 
+            // Returns bookings the Worker should still be monitoring — both those waiting
+            // to fire (pending) and those currently being executed by the cron (firing).
+            // Used to decide whether the pending section and tab-close guard are needed.
             function getActiveBookings() {
                 return loadAll().filter(b => b.status === SCHEDULED_STATUS_PENDING || b.status === SCHEDULED_STATUS_FIRING);
             }
 
+            // Returns bookings the Worker could not complete. Shown in the pending section
+            // with a Dismiss button so the user can acknowledge and clear them.
             function getFailedBookings() {
                 return loadAll().filter(b => b.status === SCHEDULED_STATUS_FAILED);
             }
 
+            // Removes a failed booking from the local cache and deletes it from the
+            // Worker's KV store. Used when the user dismisses a failed booking row.
             function dismissBooking(id) {
                 cachedBookings = cachedBookings.filter(b => b.id !== id);
                 fetch(`${WORKER_URL}/bookings/${id}`, {
@@ -1903,7 +1919,11 @@
                 insertionPoint.parentElement.insertBefore(section, insertionPoint);
             }
 
-            // Update pending section countdowns every minute.
+            // Starts a 60-second interval that refreshes the booking cache from the Worker
+            // (so succeeded/failed status changes are picked up) and updates countdown text
+            // in the pending section. If the booking list changes the section is removed and
+            // re-injected on the next reconcile pass rather than updated in place, to avoid
+            // triggering the MutationObserver → scheduleReconcile → RAF loop.
             let pendingCountdownInterval = null;
 
             function startPendingCountdownUpdates() {
