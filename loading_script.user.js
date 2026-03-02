@@ -1030,17 +1030,18 @@
             if (serviceInstance) return serviceInstance;
 
             const SCHEDULED_BOOKING_ADVANCE_DAYS = 3;
-            const SCHEDULED_BOOKINGS_KEY = 'bc_scheduled_bookings';
             const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
             const PLAYER_PHOTOS_KEY = 'bc_player_photos';
             const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
 
+            const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
+            const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
+
             const SCHEDULED_STATUS_PENDING = 'pending';
             const SCHEDULED_STATUS_FIRING = 'firing';
             const SCHEDULED_STATUS_FAILED = 'failed';
-            const SCHEDULED_STATUS_CANCELLED = 'cancelled';
 
             // Enum values for whether a locked slot was taken by a premium
             // member during their 4-day advance window. Exposed on serviceInstance
@@ -1052,22 +1053,42 @@
                 TAKEN: 'taken',
             });
 
+            // Local cache of bookings fetched from the Worker. Reads use this
+            // synchronously; writes update it optimistically then call the Worker.
+            let cachedBookings = [];
+
+            function workerHeaders() {
+                return { 'X-Worker-Secret': WORKER_SECRET };
+            }
+
             // Persistence helpers.
 
             function loadAll() {
-                return getLocalStorageService().getJson(SCHEDULED_BOOKINGS_KEY, '[bc] failed to parse scheduled bookings') || [];
+                return cachedBookings;
             }
 
-            function saveAll(bookings) {
-                getLocalStorageService().setJson(SCHEDULED_BOOKINGS_KEY, bookings);
-            }
-
-            function updateBooking(id, updates) {
-                const all = loadAll();
-                const idx = all.findIndex(b => b.id === id);
-                if (idx === -1) return;
-                Object.assign(all[idx], updates);
-                saveAll(all);
+            // Fetches all bookings from the Worker and refreshes the local cache.
+            // After updating the cache, nudges the MutationObserver so the /bookings
+            // page reconciliation loop re-runs with the fresh data immediately.
+            async function fetchAllFromWorker() {
+                try {
+                    const response = await fetch(`${WORKER_URL}/bookings`, { headers: workerHeaders() });
+                    if (!response.ok) {
+                        getDebugService().log('warn', 'worker-get-bookings-failed', { status: response.status });
+                        return;
+                    }
+                    cachedBookings = await response.json();
+                    // Append and immediately remove a marker so the bookings-page
+                    // MutationObserver fires scheduleReconcile with the updated cache.
+                    if (document.body) {
+                        const trigger = document.createElement('span');
+                        trigger.setAttribute('data-bc-worker-sync', '');
+                        document.body.appendChild(trigger);
+                        trigger.remove();
+                    }
+                } catch (e) {
+                    getDebugService().log('warn', 'worker-get-bookings-error', { error: e.message });
+                }
             }
 
             function getPendingBookings() {
@@ -1083,7 +1104,11 @@
             }
 
             function dismissBooking(id) {
-                saveAll(loadAll().filter(b => b.id !== id));
+                cachedBookings = cachedBookings.filter(b => b.id !== id);
+                fetch(`${WORKER_URL}/bookings/${id}`, {
+                    method: 'DELETE',
+                    headers: workerHeaders(),
+                }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
                 getDebugService().log('info', 'scheduled-booking-dismissed', { id });
             }
 
@@ -1221,9 +1246,12 @@
                     createdAtMs: Date.now(),
                 };
 
-                const all = loadAll();
-                all.push(booking);
-                saveAll(all);
+                cachedBookings = [...cachedBookings, booking];
+                fetch(`${WORKER_URL}/bookings`, {
+                    method: 'POST',
+                    headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
+                    body: JSON.stringify(booking),
+                }).catch(e => getDebugService().log('warn', 'worker-post-booking-failed', { error: e.message }));
 
                 getDebugService().log('info', 'scheduled-booking-created', {
                     id: booking.id,
@@ -1242,27 +1270,21 @@
             // Booking lifecycle helpers.
 
             function cancelBooking(id) {
-                updateBooking(id, { status: SCHEDULED_STATUS_CANCELLED });
+                cachedBookings = cachedBookings.filter(b => b.id !== id);
+                fetch(`${WORKER_URL}/bookings/${id}`, {
+                    method: 'DELETE',
+                    headers: workerHeaders(),
+                }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
                 getDebugService().log('info', 'scheduled-booking-cancelled', { id });
             }
 
             // Page-load initialization.
 
             function initializeOnPageLoad() {
-                // Clean up old completed/cancelled bookings older than 7 days.
-                const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-                const all = loadAll();
-                const cleaned = all.filter(b => {
-                    if (b.status === SCHEDULED_STATUS_PENDING || b.status === SCHEDULED_STATUS_FIRING) return true;
-                    return b.createdAtMs > sevenDaysAgo;
-                });
-                if (cleaned.length !== all.length) {
-                    saveAll(cleaned);
-                }
-
-                getDebugService().log('info', 'scheduled-bookings-initialized-on-load', {
-                    pendingCount: getPendingBookings().length,
-                });
+                // Fetch bookings from the Worker to populate the local cache. The
+                // /bookings page reconciliation loop picks up results on the next RAF tick.
+                fetchAllFromWorker();
+                getDebugService().log('info', 'scheduled-bookings-initialized-on-load');
             }
 
             serviceInstance = {
@@ -1277,6 +1299,7 @@
                 cancelBooking,
                 dismissBooking,
                 initializeOnPageLoad,
+                refreshFromWorker: fetchAllFromWorker,
                 cachePlayersFromXhr,
                 cachePhotosFromXhr,
                 fetchPhotos,
@@ -1781,14 +1804,39 @@
 
             function startPendingCountdownUpdates() {
                 if (pendingCountdownInterval) return;
-                pendingCountdownInterval = setInterval(() => {
+                pendingCountdownInterval = setInterval(async () => {
+                    // Refresh from Worker so status changes (succeeded/failed) are picked up.
+                    await getScheduledBookingService().refreshFromWorker();
+
                     const section = document.querySelector('[data-bc-pending-section]');
-                    if (!section) {
+                    const activeBookings = getScheduledBookingService().getActiveBookings();
+                    const failedBookings = getScheduledBookingService().getFailedBookings();
+
+                    if (activeBookings.length === 0 && failedBookings.length === 0) {
+                        if (section) section.remove();
                         clearInterval(pendingCountdownInterval);
                         pendingCountdownInterval = null;
                         return;
                     }
-                    const activeBookings = getScheduledBookingService().getActiveBookings();
+
+                    if (!section) return;
+
+                    // If the rendered rows no longer match current bookings (e.g. a booking
+                    // succeeded or failed), remove the section. The MutationObserver will
+                    // trigger scheduleReconcile which re-injects it with fresh data.
+                    const currentIds = new Set([...activeBookings, ...failedBookings].map(b => b.id));
+                    const renderedIds = new Set(
+                        Array.from(section.querySelectorAll('[data-bc-pending-booking],[data-bc-failed-booking]'))
+                            .map(el => el.dataset.bcPendingBooking || el.dataset.bcFailedBooking)
+                    );
+                    const needsRebuild = currentIds.size !== renderedIds.size ||
+                        [...currentIds].some(id => !renderedIds.has(id));
+                    if (needsRebuild) {
+                        section.remove();
+                        return;
+                    }
+
+                    // No structural change — update countdown text in place.
                     activeBookings.forEach(booking => {
                         const row = section.querySelector(`[data-bc-pending-booking="${booking.id}"]`);
                         if (row) {

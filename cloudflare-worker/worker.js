@@ -28,7 +28,6 @@ const STATUS_PENDING = 'pending';
 const STATUS_FIRING = 'firing';
 const STATUS_SUCCEEDED = 'succeeded';
 const STATUS_FAILED = 'failed';
-const STATUS_CANCELLED = 'cancelled';
 
 // CORS headers allowing the extension (running on bayclubconnect.com) to call
 // this Worker from its fetch() calls in the page context.
@@ -251,10 +250,7 @@ async function handleRequest(request, env) {
     if (method === 'DELETE' && path.startsWith('/bookings/')) {
         const id = path.slice('/bookings/'.length);
         const bookings = await loadBookings(env);
-        const updated = bookings.map(b =>
-            b.id === id ? Object.assign({}, b, { status: STATUS_CANCELLED }) : b
-        );
-        await saveBookings(env, updated);
+        await saveBookings(env, bookings.filter(b => b.id !== id));
         return jsonResponse({ ok: true });
     }
 
