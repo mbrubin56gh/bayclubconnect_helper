@@ -61,7 +61,7 @@ export default {
     },
 };
 
-// --- Auth ---
+// #region Auth.
 
 function buildApiHeaders(accessToken, sessionId) {
     return {
@@ -116,7 +116,9 @@ async function refreshAccessToken(env, userId) {
     return accessToken;
 }
 
-// --- KV helpers ---
+// #endregion Auth.
+
+// #region KV helpers.
 
 async function loadBookings(env) {
     const raw = await env.BC_BOOKINGS.get(KV_BOOKINGS);
@@ -132,7 +134,9 @@ async function saveBookings(env, bookings) {
     await env.BC_BOOKINGS.put(KV_BOOKINGS, JSON.stringify(bookings));
 }
 
-// --- Booking execution ---
+// #endregion KV helpers.
+
+// #region Booking execution.
 
 // Fires a single booking: refreshes the token for the booking's owner, POSTs
 // courtbookings, then PUTs confirm. Throws on any failure so the cron tick can
@@ -169,7 +173,9 @@ async function fireBooking(booking, env) {
     }
 }
 
-// --- Email notifications ---
+// #endregion Booking execution.
+
+// #region Email notifications.
 
 // Sends a success or failure email via Resend. Requires RESEND_API_KEY and
 // NOTIFICATION_EMAIL secrets. Uses onboarding@resend.dev as sender until a
@@ -206,7 +212,9 @@ async function sendEmailNotification(booking, env) {
     });
 }
 
-// --- Cron tick ---
+// #endregion Email notifications.
+
+// #region Cron tick.
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -260,7 +268,9 @@ async function runCronTick(env) {
     }
 }
 
-// --- HTTP request handler ---
+// #endregion Cron tick.
+
+// #region HTTP request handler.
 
 function jsonResponse(data, status) {
     return new Response(JSON.stringify(data), {
@@ -334,3 +344,5 @@ async function handleRequest(request, env) {
 
     return new Response('Not Found', { status: 404 });
 }
+
+// #endregion HTTP request handler.
