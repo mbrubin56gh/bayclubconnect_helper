@@ -1,0 +1,10 @@
+name = "bayclubconnect-bookings"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "BC_BOOKINGS"
+id = "299d14645bed49458addc9751cc6c241"
+
+[triggers]
+crons = ["* * * * *"]
