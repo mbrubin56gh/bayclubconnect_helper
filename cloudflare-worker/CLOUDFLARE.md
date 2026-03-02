@@ -240,7 +240,7 @@ If that doesn't work (e.g. the user was logged out), bootstrap manually:
 4. Run (substituting the actual email and token):
    ```bash
    cd cloudflare-worker
-   wrangler kv key put --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com" "<paste token here>"
+   wrangler kv key put --namespace-id 299d14645bed49458addc9751cc6c241 "refresh_token:mark.rubin@gmail.com" "<paste token here>" --remote
    ```
 5. Verify with `curl .../status` — `lastTokenRefresh` should update on the next
    page load.
@@ -257,21 +257,25 @@ tick fire in real time.
 
 ### Inspect or edit KV directly
 
+**Important**: Wrangler v4 defaults to local simulation for KV commands, and `--binding` can be
+unreliable when combined with `--remote`. Use `--namespace-id` with `--remote` for all production
+KV operations. The namespace ID for `BC_BOOKINGS` is `299d14645bed49458addc9751cc6c241`.
+
 ```bash
+# List all KV keys (to see which users have tokens stored)
+wrangler kv key list --namespace-id 299d14645bed49458addc9751cc6c241 --remote
+
 # Read the full bookings list
-wrangler kv key get --binding BC_BOOKINGS scheduled_bookings
+wrangler kv key get --namespace-id 299d14645bed49458addc9751cc6c241 scheduled_bookings --remote
 
 # Read a user's current refresh token (substitute their email)
-wrangler kv key get --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com"
+wrangler kv key get --namespace-id 299d14645bed49458addc9751cc6c241 "refresh_token:mark.rubin@gmail.com" --remote
 
 # Manually write a token for a user
-wrangler kv key put --binding BC_BOOKINGS "refresh_token:mark.rubin@gmail.com" "<token>"
-
-# List all KV keys (to see which users have tokens stored)
-wrangler kv key list --binding BC_BOOKINGS
+wrangler kv key put --namespace-id 299d14645bed49458addc9751cc6c241 "refresh_token:mark.rubin@gmail.com" "<token>" --remote
 
 # Delete a value
-wrangler kv key delete --binding BC_BOOKINGS scheduled_bookings
+wrangler kv key delete --namespace-id 299d14645bed49458addc9751cc6c241 scheduled_bookings --remote
 ```
 
 ---
