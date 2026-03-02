@@ -1210,9 +1210,11 @@
                 return slotDate.getTime();
             }
 
-            // Schedule a booking: build bodies, persist, set timers.
+            // Schedule a booking: build bodies and POST to Worker. Returns a promise
+            // that resolves once the Worker has confirmed the booking is stored, so
+            // callers can safely navigate away without cancelling the in-flight request.
 
-            function scheduleBooking(slotInfo, selectedPartners) {
+            async function scheduleBooking(slotInfo, selectedPartners) {
                 const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) throw new Error('No fetch state available to build booking body.');
 
@@ -1247,11 +1249,19 @@
                 };
 
                 cachedBookings = [...cachedBookings, booking];
-                fetch(`${WORKER_URL}/bookings`, {
-                    method: 'POST',
-                    headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
-                    body: JSON.stringify(booking),
-                }).catch(e => getDebugService().log('warn', 'worker-post-booking-failed', { error: e.message }));
+                try {
+                    const response = await fetch(`${WORKER_URL}/bookings`, {
+                        method: 'POST',
+                        headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
+                        body: JSON.stringify(booking),
+                    });
+                    if (!response.ok) {
+                        throw new Error(`Worker rejected booking: HTTP ${response.status}`);
+                    }
+                } catch (e) {
+                    getDebugService().log('warn', 'worker-post-booking-failed', { error: e.message });
+                    throw e;
+                }
 
                 getDebugService().log('info', 'scheduled-booking-created', {
                     id: booking.id,
@@ -2984,7 +2994,7 @@
                 panel.querySelector('[data-bc-schedule-cancel]')?.addEventListener('click', returnToSlotGrid);
 
                 // Schedule button submits the booking.
-                panel.querySelector('[data-bc-schedule-submit]')?.addEventListener('click', () => {
+                panel.querySelector('[data-bc-schedule-submit]')?.addEventListener('click', async () => {
                     const selectedCards = panel.querySelectorAll('.bc-player-card[data-player-selected]:not([data-current-user])');
                     const selectedPartners = Array.from(selectedCards).map(card => ({
                         personId: card.dataset.personId,
@@ -2993,7 +3003,7 @@
                     }));
 
                     try {
-                        getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners);
+                        await getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners);
                         window.location.href = '/bookings';
                     } catch (error) {
                         console.log('[bc] failed to schedule booking:', error);
