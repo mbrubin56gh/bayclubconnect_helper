@@ -474,7 +474,7 @@
     }
     // #endregion Core time and availability transformations.
 
-    // #region DOM query and preference services.
+    // #region DOM query and localStorage services.
     const getBookingDomQueryService = (() => {
         let serviceInstance = null;
 
@@ -626,6 +626,7 @@
             return serviceInstance;
         };
     })();
+    // #endregion DOM query and localStorage services.
 
     // #region Debug mode service, panel, and activation.
     // These constants identify where a debug panel instance is rendered.
@@ -1430,7 +1431,7 @@
     })();
     // #endregion Scheduled bookings service.
 
-    // #region Bookings page calendar export.
+    // #region Bookings page: calendar export and pending bookings.
     const getBookingsDomQueryService = (() => {
         let serviceInstance = null;
 
@@ -1997,8 +1998,9 @@
             scheduleReconcile();
         };
     })();
-    // #endregion Bookings page calendar export.
+    // #endregion Bookings page: calendar export and pending bookings.
 
+    // #region UI preference controls and filter widgets.
     const getPreferenceAutoSelectService = (() => {
         let serviceInstance = null;
 
@@ -2492,7 +2494,7 @@
             return serviceInstance;
         };
     })();
-    // #endregion DOM query and preference services.
+    // #endregion UI preference controls and filter widgets.
 
     // #region Availability rendering and interaction pipeline.
     // Create a data structure well-tailored for rendering our slots by time of day per club.

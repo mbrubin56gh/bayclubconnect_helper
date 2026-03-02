@@ -1,0 +1,6 @@
+# Wrangler local development cache and miniflare state. These are machine-local
+# and should never be committed.
+.wrangler/
+
+# Node modules if ever added.
+node_modules/
