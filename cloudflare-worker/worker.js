@@ -208,14 +208,28 @@ async function sendEmailNotification(booking, env) {
 
 // --- Cron tick ---
 
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 // Runs every minute. Finds all pending bookings whose fireAtMs has passed,
 // marks them firing (to prevent double-fire on concurrent ticks), then
-// attempts to fire each one and updates its status.
+// attempts to fire each one and updates its status. Also prunes old completed
+// bookings so the KV value does not grow without bound.
 async function runCronTick(env) {
     const now = Date.now();
     const bookings = await loadBookings(env);
 
-    const due = bookings.filter(b => b.status === STATUS_PENDING && b.fireAtMs <= now);
+    // Prune succeeded, failed, and cancelled bookings older than 7 days.
+    const retained = bookings.filter(b => {
+        const isTerminal = b.status === STATUS_SUCCEEDED ||
+            b.status === STATUS_FAILED ||
+            b.status === 'cancelled';
+        return !isTerminal || (now - (b.fireAtMs || b.createdAtMs || 0)) < RETENTION_MS;
+    });
+    if (retained.length !== bookings.length) {
+        await saveBookings(env, retained);
+    }
+
+    const due = retained.filter(b => b.status === STATUS_PENDING && b.fireAtMs <= now);
     if (due.length === 0) return;
 
     // Mark all due bookings as firing before any async work so a concurrent
@@ -223,7 +237,7 @@ async function runCronTick(env) {
     for (const booking of due) {
         booking.status = STATUS_FIRING;
     }
-    await saveBookings(env, bookings);
+    await saveBookings(env, retained);
 
     // Fire each booking and record the result.
     for (const booking of due) {
@@ -236,7 +250,7 @@ async function runCronTick(env) {
         }
     }
 
-    await saveBookings(env, bookings);
+    await saveBookings(env, retained);
 
     // Send email notification for each completed booking.
     for (const booking of due) {
