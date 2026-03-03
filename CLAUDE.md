@@ -69,6 +69,7 @@ property is defined more than once.
 
 ### Angular State Machine Hack
 The app is Angular-based. We can't easily drive its state machine directly, so when a user selects one of our injected slots, we secretly click a native Angular time slot to advance Angular's state. We then intercept the outgoing booking request and replace it with our own. This means the native club must have at least one available slot on the selected date.  See the documentation for XHR Response Interception (Fake Slot Injection) on how we ensure that there is always an available slot on the selected date, even if we have to synthesize falsely that slot.
+Cross-browser note: Chrome pre-renders the bottom bar container (`.white-bg.p-2 .container`) in a disabled state before any slot is clicked, so it is always present when `selectCourtOption` runs. Firefox renders it asynchronously, only after Angular processes the `nativeSlot.click()`. Therefore `nativeSlot.click()` must be called unconditionally before any bottom bar querySelector check; a one-shot `MutationObserver` (`tryUpdateBottomBar`) then fires once Angular renders the bar.
  
 ### DOM Injection
 We hide (not remove) native content and inject our own `<div class="all-clubs-availability">` into two containers Angular uses for desktop (`.item-tile`) and mobile (`.d-md-none.px-3`). We re-inject whenever the MutationObserver detects container changes (e.g. date change).
