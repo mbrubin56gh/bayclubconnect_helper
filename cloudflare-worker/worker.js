@@ -4,6 +4,7 @@
 //   refresh_token:{email} — current valid refresh token for that user (rotates on every use)
 //   scheduled_bookings    — JSON array of booking records
 //   last_token_refresh    — ISO timestamp of the most recent token rotation (any user)
+//   prefs:{email}         — JSON object of synced user preferences
 //
 // D1 database (BC_BOOKINGS_HISTORY binding, bayclubconnect-history):
 //   booking_history — permanent record of all completed/cancelled bookings
@@ -16,6 +17,8 @@
 //   GET  /bookings          — list all bookings (requires secret)
 //   POST /bookings          — add a booking (requires secret)
 //   DELETE /bookings/{id}   — cancel a booking (requires secret)
+//   GET  /prefs             — get synced preferences for a user (requires secret + X-User-Id header)
+//   PUT  /prefs             — save synced preferences for a user (requires secret)
 //   GET  /history           — booking history from D1 (requires secret; header or ?secret=)
 //   GET  /dashboard         — HTML monitoring dashboard (requires secret; header or ?secret=)
 //
@@ -44,6 +47,7 @@ const WEEKLY_SUMMARY_CRON = '0 16 * * 1';
 
 const KV_BOOKINGS = 'scheduled_bookings';
 const KV_LAST_REFRESH = 'last_token_refresh';
+const KV_PREFS = 'prefs';
 
 const STATUS_PENDING = 'pending';
 const STATUS_FIRING = 'firing';
@@ -55,7 +59,7 @@ const STATUS_FAILED = 'failed';
 const CORS_HEADERS = {
     'Access-Control-Allow-Origin': 'https://bayclubconnect.com',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Secret',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Worker-Secret, X-User-Id',
 };
 
 export default {
@@ -151,6 +155,20 @@ async function loadBookings(env) {
 
 async function saveBookings(env, bookings) {
     await env.BC_BOOKINGS.put(KV_BOOKINGS, JSON.stringify(bookings));
+}
+
+async function loadPrefs(env, userId) {
+    const raw = await env.BC_BOOKINGS.get(`${KV_PREFS}:${userId}`);
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (_e) {
+        return null;
+    }
+}
+
+async function savePrefs(env, userId, prefs) {
+    await env.BC_BOOKINGS.put(`${KV_PREFS}:${userId}`, JSON.stringify(prefs));
 }
 
 // Appends a completed or cancelled booking to the D1 history table. Uses
@@ -579,6 +597,24 @@ async function handleRequest(request, env) {
         if (!newToken) return new Response('Bad Request', { status: 400 });
         await env.BC_BOOKINGS.put(tokenKvKey(userId), newToken);
         await env.BC_BOOKINGS.put(KV_LAST_REFRESH, new Date().toISOString());
+        return jsonResponse({ ok: true });
+    }
+
+    // Returns the stored preference object for a user. The extension calls this
+    // on every page load to propagate preferences across devices.
+    if (method === 'GET' && path === '/prefs') {
+        const userId = request.headers.get('X-User-Id');
+        if (!userId) return new Response('Bad Request', { status: 400 });
+        const prefs = await loadPrefs(env, userId);
+        return jsonResponse(prefs || {});
+    }
+
+    // Stores the full preference object for a user. Called whenever the user
+    // changes a preference, with an 800 ms debounce on the extension side.
+    if (method === 'PUT' && path === '/prefs') {
+        const { userId, prefs } = await request.json();
+        if (!userId || !prefs) return new Response('Bad Request', { status: 400 });
+        await savePrefs(env, userId, prefs);
         return jsonResponse({ ok: true });
     }
 

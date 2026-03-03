@@ -633,6 +633,98 @@
     })();
     // #endregion DOM query and localStorage services.
 
+    // #region Preference sync service.
+
+    // Syncs the six user-configurable preferences to the Cloudflare Worker KV so
+    // they follow the user across devices and browsers. On page load the service
+    // pulls the stored prefs and writes them to localStorage (server wins). After
+    // any preference change it debounces for 800 ms then pushes all six keys.
+    const getPreferenceSyncService = (() => {
+        let serviceInstance = null;
+
+        return function getPreferenceSyncService() {
+            if (serviceInstance) return serviceInstance;
+
+            const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
+            const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
+            const PREF_KEYS = [
+                'bc_club_order', 'bc_view_mode', 'bc_indoor_only',
+                'bc_time_range', 'bc_players', 'bc_duration',
+            ];
+
+            let debounceTimer = null;
+
+            function getUserId() {
+                return getLocalStorageService().getString('bc_notification_email');
+            }
+
+            function readAllPrefsFromLocalStorage() {
+                const prefs = {};
+                PREF_KEYS.forEach(function (key) {
+                    const val = getLocalStorageService().getString(key);
+                    if (val !== null) prefs[key] = val;
+                });
+                return prefs;
+            }
+
+            function applyPrefsToLocalStorage(prefs) {
+                PREF_KEYS.forEach(function (key) {
+                    if (prefs[key] !== undefined && prefs[key] !== null) {
+                        getLocalStorageService().setString(key, prefs[key]);
+                    }
+                });
+            }
+
+            async function pushToWorker() {
+                const userId = getUserId();
+                if (!userId) return;
+                const prefs = readAllPrefsFromLocalStorage();
+                try {
+                    await fetch(`${WORKER_URL}/prefs`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': WORKER_SECRET },
+                        body: JSON.stringify({ userId, prefs }),
+                    });
+                } catch (e) {
+                    getDebugService().log('warn', 'prefs-push-failed', { error: e.message });
+                }
+            }
+
+            async function pullFromWorker() {
+                const userId = getUserId();
+                if (!userId) return;
+                try {
+                    const response = await fetch(`${WORKER_URL}/prefs`, {
+                        headers: { 'X-Worker-Secret': WORKER_SECRET, 'X-User-Id': userId },
+                    });
+                    if (!response.ok) return;
+                    const prefs = await response.json();
+                    if (prefs && typeof prefs === 'object') {
+                        applyPrefsToLocalStorage(prefs);
+                    }
+                } catch (e) {
+                    getDebugService().log('warn', 'prefs-pull-failed', { error: e.message });
+                }
+            }
+
+            // Schedules a push after 800 ms, cancelling any pending push. This
+            // collapses rapid successive changes (e.g. slider drags) into one call.
+            function notifyPreferenceChanged() {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(pushToWorker, 800);
+            }
+
+            async function initializeOnPageLoad() {
+                await pullFromWorker();
+            }
+
+            serviceInstance = { notifyPreferenceChanged, initializeOnPageLoad };
+            return serviceInstance;
+        };
+    })();
+
+    // #endregion Preference sync service.
+
     // #region Debug mode service, panel, and activation.
     // These constants identify where a debug panel instance is rendered.
     // They let us target cleanup and binding behavior without fragile selectors.
@@ -2103,8 +2195,10 @@
                             .map(b => b.textContent.trim());
                         if (labels.includes('Singles')) {
                             getLocalStorageService().setString(PLAYERS_KEY, btn.textContent.trim());
+                            getPreferenceSyncService().notifyPreferenceChanged();
                         } else if (labels.includes('30 minutes')) {
                             getLocalStorageService().setString(DURATION_KEY, btn.textContent.trim());
+                            getPreferenceSyncService().notifyPreferenceChanged();
                         }
                     });
                     container.dataset.bcListening = 'true';
@@ -2158,6 +2252,7 @@
 
     function saveClubOrder(order) {
         getLocalStorageService().setJson(CLUB_ORDER_KEY, order);
+        getPreferenceSyncService().notifyPreferenceChanged();
     }
 
     function injectClubOrderWidget() {
@@ -2315,6 +2410,7 @@
 
     function saveViewMode(mode) {
         getLocalStorageService().setString(VIEW_MODE_KEY, mode);
+        getPreferenceSyncService().notifyPreferenceChanged();
     }
 
     function initViewToggle(anchorElement) {
@@ -2345,6 +2441,7 @@
 
     function saveShowIndoorClubsOnly(value) {
         getLocalStorageService().setJson(INDOOR_ONLY_KEY, value);
+        getPreferenceSyncService().notifyPreferenceChanged();
     }
 
     function buildShowIndoorCourtsOnlyToggleHtml() {
@@ -2393,6 +2490,7 @@
 
     function saveTimeRange(startMinutes, endMinutes) {
         getLocalStorageService().setJson(TIME_RANGE_KEY, { startMinutes, endMinutes });
+        getPreferenceSyncService().notifyPreferenceChanged();
     }
 
     function minutesToSliderPercent(minutes) {
@@ -4075,6 +4173,7 @@
     createBookingsCalendarExportInstaller();
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
+    getPreferenceSyncService().initializeOnPageLoad();
     getScheduledBookingService().initializeOnPageLoad();
     // #endregion Startup installers and bootstrap.
 })();
