@@ -19,7 +19,14 @@
 //   GET  /history           — booking history from D1 (requires secret; header or ?secret=)
 //   GET  /dashboard         — HTML monitoring dashboard (requires secret; header or ?secret=)
 //
-// Cron: fires every minute, executes any booking whose fireAtMs has passed.
+// Cron triggers:
+//   * * * * *   — fires every minute, executes any booking whose fireAtMs has passed
+//   0 16 * * 1  — fires every Monday at 16:00 UTC (≈ 8 AM Pacific), sends weekly summary email
+//
+// Secrets (set via `wrangler secret put`):
+//   WORKER_SECRET  — required on all write endpoints (X-Worker-Secret header)
+//   RESEND_API_KEY — Resend transactional email API key
+//   ADMIN_EMAIL    — admin email address for the weekly summary
 
 const AUTH_URL = 'https://authentication2-api.bayclubs.io/connect/token';
 const BOOKING_API_BASE = 'https://connect-api.bayclubs.io/court-booking/api/1.0';
@@ -32,6 +39,9 @@ const KV_REFRESH_TOKEN = 'refresh_token';
 function tokenKvKey(userId) {
     return userId ? `${KV_REFRESH_TOKEN}:${userId}` : KV_REFRESH_TOKEN;
 }
+// Cron expression for the weekly summary trigger — must match wrangler.toml exactly.
+const WEEKLY_SUMMARY_CRON = '0 16 * * 1';
+
 const KV_BOOKINGS = 'scheduled_bookings';
 const KV_LAST_REFRESH = 'last_token_refresh';
 
@@ -61,7 +71,11 @@ export default {
         return corsed;
     },
 
-    async scheduled(_event, env, ctx) {
+    async scheduled(event, env, ctx) {
+        if (event.cron === WEEKLY_SUMMARY_CRON) {
+            ctx.waitUntil(sendWeeklySummaryEmail(env));
+            return;
+        }
         ctx.waitUntil(runCronTick(env));
     },
 };
@@ -240,6 +254,125 @@ async function sendEmailNotification(booking, env) {
             from: 'notifications@bayclubhelper.app',
             to,
             subject,
+            html,
+        }),
+    });
+}
+
+// Sends a weekly activity summary to the admin email. Queries D1 for the
+// past 7 days of booking_history. Skips sending if there was no activity.
+// Flags unusual volume (> 20 bookings) and any failures in an alert banner.
+// Requires RESEND_API_KEY, ADMIN_EMAIL, and DB bindings.
+async function sendWeeklySummaryEmail(env) {
+    if (!env.RESEND_API_KEY || !env.ADMIN_EMAIL || !env.DB) return;
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let rows = [];
+    try {
+        const result = await env.DB.prepare(
+            'SELECT * FROM booking_history WHERE completed_at_ms >= ? ORDER BY completed_at_ms DESC'
+        ).bind(sevenDaysAgo).all();
+        rows = result.results || [];
+    } catch (_e) {
+        return;
+    }
+
+    // Nothing happened this week — skip the email to avoid noise.
+    if (rows.length === 0) return;
+
+    const nSucceeded = rows.filter(r => r.status === STATUS_SUCCEEDED).length;
+    const nFailed    = rows.filter(r => r.status === STATUS_FAILED).length;
+    const nCancelled = rows.filter(r => r.status === 'cancelled').length;
+
+    const isHighActivity = rows.length > 20;
+    const hasFailed      = nFailed > 0;
+
+    const fmtDate = (ms) => new Date(ms).toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles',
+    });
+    const fmtDateTime = (ms) => new Date(ms).toLocaleString('en-US', {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        timeZone: 'America/Los_Angeles',
+    });
+
+    const weekStart = fmtDate(sevenDaysAgo);
+    const weekEnd   = fmtDate(Date.now());
+    const dashUrl   = `https://bayclubconnect-bookings.mark-rubin.workers.dev/dashboard?secret=${env.WORKER_SECRET || ''}`;
+
+    const alertLines = [];
+    if (isHighActivity) {
+        alertLines.push(`⚠️ Unusually high activity this week (${rows.length} bookings).`);
+    }
+    if (hasFailed) {
+        alertLines.push(`⚠️ ${nFailed} booking${nFailed === 1 ? '' : 's'} failed — <a href="${dashUrl}">check the dashboard</a> for details.`);
+    }
+    const alertBanner = alertLines.length > 0
+        ? `<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin-bottom:20px;">${alertLines.map(l => `<p style="margin:0 0 4px;">${l}</p>`).join('')}</div>`
+        : '';
+
+    const statsHtml = `
+        <div style="display:flex;gap:32px;margin-bottom:24px;">
+            <div style="text-align:center;">
+                <div style="font-size:32px;font-weight:700;color:#2e7d32;">${nSucceeded}</div>
+                <div style="color:#555;font-size:13px;">Succeeded</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="font-size:32px;font-weight:700;color:#c62828;">${nFailed}</div>
+                <div style="color:#555;font-size:13px;">Failed</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="font-size:32px;font-weight:700;color:#777;">${nCancelled}</div>
+                <div style="color:#555;font-size:13px;">Cancelled</div>
+            </div>
+        </div>`;
+
+    const tableRows = rows.map(r => {
+        const statusIcon = r.status === STATUS_SUCCEEDED ? '✅'
+            : r.status === STATUS_FAILED ? '❌' : '✗';
+        const partners = (() => {
+            try { return JSON.parse(r.partner_names || '[]').join(', ') || '—'; } catch (_e) { return '—'; }
+        })();
+        return `<tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;">${statusIcon}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;">${escHtml(r.slot_label || '—')}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#555;">${escHtml(r.user_email || '—')}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#555;">${escHtml(partners)}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#888;">${fmtDateTime(r.completed_at_ms)}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `<div style="font-family:sans-serif;max-width:700px;margin:0 auto;padding:24px;color:#1a1a1a;">
+        <h2 style="margin:0 0 4px;">Bay Club Bookings — Weekly Summary</h2>
+        <p style="margin:0 0 20px;color:#888;font-size:13px;">${weekStart} – ${weekEnd}</p>
+        ${alertBanner}
+        ${statsHtml}
+        <table style="width:100%;border-collapse:collapse;">
+            <thead>
+                <tr style="background:#f5f5f5;">
+                    <th style="padding:6px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;width:28px;"></th>
+                    <th style="padding:6px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;">Slot</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;">User</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;">Partners</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:12px;color:#888;font-weight:600;">Completed</th>
+                </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+        </table>
+        <p style="margin:20px 0 0;font-size:12px;color:#aaa;">
+            <a href="${dashUrl}" style="color:#1a73e8;">Open dashboard</a> · Sent by bayclubhelper.app
+        </p>
+    </div>`;
+
+    await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            from: 'notifications@bayclubhelper.app',
+            to: env.ADMIN_EMAIL,
+            subject: `Bay Club Bookings — Week of ${weekStart}`,
             html,
         }),
     });

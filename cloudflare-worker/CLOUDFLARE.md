@@ -209,6 +209,7 @@ Cloudflare.
 |-------------|-----------|-----------|
 | `WORKER_SECRET` | Shared secret the extension includes in its requests to authenticate itself (`X-Worker-Secret` header). | `wrangler secret put WORKER_SECRET` |
 | `RESEND_API_KEY` | API key for the Resend email service. | `wrangler secret put RESEND_API_KEY` |
+| `ADMIN_EMAIL` | Email address that receives the weekly activity summary. | `wrangler secret put ADMIN_EMAIL` |
 
 To view which secrets are currently set (without revealing values):
 
@@ -320,9 +321,14 @@ wrangler login            # authenticate with your Cloudflare account (one time)
 
 ### Changing the Cron Schedule
 
-Edit the `crons` line in `wrangler.toml`, then redeploy. The current schedule
-`* * * * *` means "every minute." Cloudflare Workers cron syntax is standard
-cron but with a minimum granularity of one minute.
+Edit the `crons` array in `wrangler.toml`, then redeploy. There are two
+triggers:
+- `* * * * *` — fires every minute to execute scheduled bookings.
+- `0 16 * * 1` — fires every Monday at 16:00 UTC (≈ 8 AM Pacific) to send
+  the weekly activity summary email to `ADMIN_EMAIL`.
+
+Cloudflare Workers cron syntax is standard cron but with a minimum granularity
+of one minute.
 
 ### Changing or Rotating Secrets
 
@@ -330,6 +336,7 @@ cron but with a minimum granularity of one minute.
 cd cloudflare-worker
 wrangler secret put WORKER_SECRET   # prompts for new value
 wrangler secret put RESEND_API_KEY
+wrangler secret put ADMIN_EMAIL
 ```
 
 After rotating `WORKER_SECRET` you must also update the `WORKER_SECRET` constant
