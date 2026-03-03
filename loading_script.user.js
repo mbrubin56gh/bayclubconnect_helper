@@ -1301,6 +1301,10 @@
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
                     notificationEmail: await fetchNotificationEmail(),
+                    userName: (() => {
+                        const p = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile');
+                        return (p && p.firstName && p.lastName) ? `${p.firstName} ${p.lastName}` : '';
+                    })(),
                     status: SCHEDULED_STATUS_PENDING,
                     slotCheckStatus: SLOT_CHECK_STATUS.UNKNOWN,
                     failureReason: null,

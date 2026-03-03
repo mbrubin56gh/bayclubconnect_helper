@@ -162,12 +162,13 @@ async function appendToHistory(env, booking, status, failureReason, completedAtM
     try {
         await env.DB.prepare(
             'INSERT OR IGNORE INTO booking_history' +
-            ' (id, user_email, slot_label, partner_names, status, failure_reason,' +
+            ' (id, user_email, user_name, slot_label, partner_names, status, failure_reason,' +
             '  scheduled_at_ms, fire_at_ms, completed_at_ms)' +
-            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         ).bind(
             booking.id,
             booking.notificationEmail || '',
+            booking.userName || '',
             booking.slotLabel || '',
             JSON.stringify(booking.partnerNames || []),
             status,
@@ -335,7 +336,7 @@ async function sendWeeklySummaryEmail(env) {
         return `<tr>
             <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;">${statusIcon}</td>
             <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;">${escHtml(r.slot_label || '—')}</td>
-            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#555;">${escHtml(r.user_email || '—')}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#555;">${escHtml(r.user_name || r.user_email || '—')}</td>
             <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#555;">${escHtml(partners)}</td>
             <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:13px;color:#888;">${fmtDateTime(r.completed_at_ms)}</td>
         </tr>`;
@@ -645,7 +646,7 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
             return `<tr>
                 <td>${badge(b.status)}</td>
                 <td>${escHtml(b.slotLabel || '—')}</td>
-                <td>${escHtml(b.notificationEmail || '—')}</td>
+                <td>${escHtml(b.userName || b.notificationEmail || '—')}</td>
                 <td>${escHtml(partners)}</td>
                 <td>${ptTime(b.fireAtMs)}</td>
                 <td>${countdown(b.fireAtMs)}</td>
@@ -695,7 +696,7 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
             return `<tr>
                 <td>${badge(r.status)}</td>
                 <td>${escHtml(r.slot_label || '—')}</td>
-                <td>${escHtml(r.user_email || '—')}</td>
+                <td>${escHtml(r.user_name || r.user_email || '—')}</td>
                 <td>${escHtml(partners)}</td>
                 <td style="white-space:nowrap;">${ptTime(r.completed_at_ms)}</td>
                 ${reasonCell}
