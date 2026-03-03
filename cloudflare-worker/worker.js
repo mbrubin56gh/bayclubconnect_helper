@@ -267,7 +267,7 @@ async function sendWeeklySummaryEmail(env) {
     if (!env.RESEND_API_KEY || !env.ADMIN_EMAIL || !env.DB) return;
 
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    let rows = [];
+    let rows;
     try {
         const result = await env.DB.prepare(
             'SELECT * FROM booking_history WHERE completed_at_ms >= ? ORDER BY completed_at_ms DESC'

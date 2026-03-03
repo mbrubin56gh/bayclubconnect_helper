@@ -38,4 +38,12 @@ export default defineConfig([
       ],
     },
   },
+  // The Cloudflare Worker uses ES module syntax (export default) — override
+  // the script sourceType so ESLint accepts the module-level export.
+  {
+    files: ["cloudflare-worker/**/*.js"],
+    languageOptions: {
+      sourceType: "module",
+    },
+  },
 ]);
