@@ -368,22 +368,37 @@ async function handleRequest(request, env) {
         if (!checkSecretFlexible(request, env)) {
             return new Response('Unauthorized', { status: 401, headers: { 'Content-Type': 'text/plain' } });
         }
-        const dashSecret = new URL(request.url).searchParams.get('secret') || '';
+        const dashUrl = new URL(request.url);
+        const dashSecret = dashUrl.searchParams.get('secret') || '';
+        const pageSize = 25;
+        const page = Math.max(1, parseInt(dashUrl.searchParams.get('page') || '1', 10) || 1);
         const activeBookings = await loadBookings(env);
         let historyRows = [];
+        let statsRows = [];
+        let totalHistoryCount = 0;
         if (env.DB) {
             try {
-                const result = await env.DB.prepare(
-                    'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT 100'
-                ).all();
-                historyRows = result.results;
+                // Three parallel queries: paginated rows, all-time status counts, total row count.
+                const [histResult, statsResult, countResult] = await Promise.all([
+                    env.DB.prepare(
+                        'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT ? OFFSET ?'
+                    ).bind(pageSize, (page - 1) * pageSize).all(),
+                    env.DB.prepare(
+                        'SELECT status, COUNT(*) as count FROM booking_history GROUP BY status'
+                    ).all(),
+                    env.DB.prepare('SELECT COUNT(*) as total FROM booking_history').all(),
+                ]);
+                historyRows = histResult.results;
+                statsRows = statsResult.results;
+                totalHistoryCount = (countResult.results[0] && countResult.results[0].total) || 0;
             } catch (_e) {
                 // Table may not exist yet if schema has not been applied.
             }
         }
-        return new Response(renderDashboardHtml(activeBookings, historyRows, dashSecret), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+        return new Response(
+            renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, dashSecret),
+            { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+        );
     }
 
     // All remaining endpoints require the secret via header.
@@ -448,7 +463,7 @@ function escHtml(str) {
         .replace(/"/g, '&quot;');
 }
 
-function renderDashboardHtml(activeBookings, historyRows, secret) {
+function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, secret) {
     const now = Date.now();
 
     function ptTime(ms) {
@@ -509,10 +524,12 @@ function renderDashboardHtml(activeBookings, historyRows, secret) {
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
-    // Stats bar.
-    const nSucceeded = historyRows.filter(r => r.status === STATUS_SUCCEEDED).length;
-    const nFailed    = historyRows.filter(r => r.status === STATUS_FAILED).length;
-    const nCancelled = historyRows.filter(r => r.status === 'cancelled').length;
+    // Stats bar — derived from the all-time aggregate query, not the paginated rows.
+    const statsByStatus = {};
+    statsRows.forEach(r => { statsByStatus[r.status] = r.count; });
+    const nSucceeded = statsByStatus[STATUS_SUCCEEDED] || 0;
+    const nFailed    = statsByStatus[STATUS_FAILED]    || 0;
+    const nCancelled = statsByStatus['cancelled']      || 0;
     function statBox(value, label, bg, color) {
         return `<div style="background:${bg};border-radius:8px;padding:12px 20px;min-width:90px;text-align:center;">
             <div style="font-size:26px;font-weight:700;color:${color};">${value}</div>
@@ -525,7 +542,12 @@ function renderDashboardHtml(activeBookings, historyRows, secret) {
         ${statBox(nCancelled, 'Cancelled', '#f5f5f5', '#757575')}
     </div>`;
 
-    // History table.
+    // History table with pagination.
+    const totalPages = Math.max(1, Math.ceil(totalHistoryCount / pageSize));
+    const firstOnPage = totalHistoryCount === 0 ? 0 : (page - 1) * pageSize + 1;
+    const lastOnPage  = Math.min(page * pageSize, totalHistoryCount);
+    const pageBase    = `/dashboard?secret=${escHtml(secret)}`;
+
     let historyHtml;
     if (historyRows.length === 0) {
         historyHtml = '<p style="color:#999;font-style:italic;padding:8px 0;">No history yet.</p>';
@@ -546,9 +568,20 @@ function renderDashboardHtml(activeBookings, historyRows, secret) {
                 ${reasonCell}
             </tr>`;
         }).join('');
+        const prevLink = page > 1
+            ? `<a href="${pageBase}&page=${page - 1}" style="color:#1a73e8;">← Previous</a>`
+            : `<span style="color:#ccc;">← Previous</span>`;
+        const nextLink = page < totalPages
+            ? `<a href="${pageBase}&page=${page + 1}" style="color:#1a73e8;">Next →</a>`
+            : `<span style="color:#ccc;">Next →</span>`;
+        const paginationHtml = `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;">
+            ${prevLink}
+            <span style="color:#999;">Showing ${firstOnPage}–${lastOnPage} of ${totalHistoryCount}</span>
+            ${nextLink}
+        </div>`;
         historyHtml = `<table><thead><tr>
             <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Completed (PT)</th><th>Reason</th>
-        </tr></thead><tbody>${rows}</tbody></table>`;
+        </tr></thead><tbody>${rows}</tbody></table>${paginationHtml}`;
     }
 
     const timestamp = new Date().toLocaleString('en-US', {
@@ -580,7 +613,7 @@ function renderDashboardHtml(activeBookings, historyRows, secret) {
   <div class="sub">Last updated: ${timestamp} PT &nbsp;·&nbsp; Auto-refreshes every 60s</div>
   <h2>Active Bookings</h2>
   ${activeHtml}
-  <h2>History (last ${historyRows.length} records)</h2>
+  <h2>History</h2>
   ${statsHtml}
   ${historyHtml}
 <script>
