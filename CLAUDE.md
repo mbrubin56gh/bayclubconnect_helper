@@ -201,6 +201,7 @@ Server-side component that executes scheduled bookings without requiring the bro
 - **Worker URL**: `https://bayclubconnect-bookings.mark-rubin.workers.dev`
 - **Secrets** (set via `wrangler secret put`): `WORKER_SECRET`, `RESEND_API_KEY`
 - **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token:{email}` (per user), `scheduled_bookings`, `last_token_refresh`
+- **D1 database**: `bayclubconnect-history` (id `e1f2166f-1c61-47f4-8675-bfa4a003d29a`); bound as `DB`; table `booking_history` — permanent record of every completed, failed, or cancelled booking. Rows written via `appendToHistory()` after every cron outcome and every cancel/dismiss. Uses `INSERT OR IGNORE` to prevent duplicates.
 - **Cron**: every minute — finds `status === 'pending'` bookings whose `fireAtMs` has passed, marks `firing`, calls Bay Club two-step booking API, saves result, sends email
 - **Auth**: Bay Club refresh token stored in KV per-user under `refresh_token:{notificationEmail}`; rotated immediately after every use (single-use tokens). `client_id=connect20`, `client_secret=connectSecret` for both password and refresh grants. Per-user storage prevents multiple extension users from overwriting each other's tokens.
 - **Email**: Resend API, sender `notifications@bayclubhelper.app`. `RESEND_API_KEY` secret. Recipient is `notificationEmail` embedded in the booking record (fetched from `profile/api/1.0/profile` at scheduling time and cached to `bc_notification_email` in localStorage).
@@ -211,14 +212,17 @@ Server-side component that executes scheduled bookings without requiring the bro
   - `POST /bookings` — add a booking (secret required)
   - `DELETE /bookings/{id}` — remove a booking (secret required)
   - `PUT /token` — store a fresh refresh token in KV under `refresh_token:{userId}` (secret required); called automatically by the extension on page load
-- **Token bootstrap**: if a user's KV token is ever lost, reload bayclubconnect.com — `syncRefreshTokenFromAppStorage()` pushes it automatically. For manual recovery: `wrangler kv key put --binding BC_BOOKINGS "refresh_token:email@example.com" "<token>"`.
+  - `GET /history` — last 100 rows from D1 `booking_history` as JSON (secret required; header or `?secret=`)
+  - `GET /dashboard` — self-refreshing HTML monitoring page with active bookings + history (secret required; header or `?secret=`)
+- **Token bootstrap**: if a user's KV token is ever lost, reload bayclubconnect.com — `syncRefreshTokenFromAppStorage()` pushes it automatically. For manual recovery: `wrangler kv key put --namespace-id 299d14645bed49458addc9751cc6c241 "refresh_token:email@example.com" "<token>" --remote`.
 - **Deploy**: `cd cloudflare-worker && wrangler deploy`
 
 ## Files
 
 - `loading_script.user.js` — Tampermonkey userscript, wrapped in an IIFE. No build step, no dependencies.
 - `cloudflare-worker/worker.js` — Cloudflare Worker source.
-- `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, cron schedule).
+- `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, D1 binding, cron schedule).
+- `cloudflare-worker/CLOUDFLARE.md` — Detailed setup, architecture, and dev workflow notes for the Worker, written for someone new to Cloudflare.
 
 ## External Assumptions And Contracts
 

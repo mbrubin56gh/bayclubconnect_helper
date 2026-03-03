@@ -33,11 +33,15 @@ Cloudflare Worker  ←── cron fires every minute
   │
   ├── Bay Club auth API — exchange refresh token for access token
   ├── Bay Club court booking API — POST + PUT to place the booking
-  └── Resend email API — send success/failure email to user
+  ├── Resend email API — send success/failure email to user
+  ├── Cloudflare KV — active bookings + per-user refresh tokens
+  └── Cloudflare D1 — permanent history of all completed bookings
 ```
 
-The Worker stores everything in **Cloudflare KV** — a simple key/value store that
-persists between cron runs and HTTP requests.
+The Worker stores **active bookings and tokens** in **Cloudflare KV** (a simple
+key/value store) and writes a **permanent history record** to **Cloudflare D1**
+(a SQLite-compatible relational database) every time a booking completes, fails,
+or is cancelled.
 
 ---
 
@@ -45,8 +49,9 @@ persists between cron runs and HTTP requests.
 
 ```
 cloudflare-worker/
-  worker.js       — all Worker logic: HTTP endpoints, cron tick, auth, booking, email
-  wrangler.toml   — Wrangler config: Worker name, KV binding, cron schedule
+  worker.js       — all Worker logic: HTTP endpoints, cron tick, auth, booking, email, dashboard
+  wrangler.toml   — Wrangler config: Worker name, KV binding, D1 binding, cron schedule
+  CLOUDFLARE.md   — this document
   .gitignore      — excludes .wrangler/ local dev cache from git
 ```
 
@@ -54,6 +59,7 @@ cloudflare-worker/
 deploy. It declares:
 - The Worker name (`bayclubconnect-bookings`)
 - Which KV namespace to bind (under the name `BC_BOOKINGS`)
+- Which D1 database to bind (under the name `DB`)
 - The cron schedule (`* * * * *` = every minute)
 
 ---
@@ -73,6 +79,123 @@ Tokens are stored per-user so multiple people using the extension don't
 overwrite each other's tokens. When the Worker fires a booking it looks up
 `refresh_token:{booking.notificationEmail}` to get the right token for that
 booking's owner.
+
+---
+
+## D1 Database (Booking History)
+
+Cloudflare D1 is a SQLite-compatible database that runs in Cloudflare's cloud.
+Unlike KV (which only stores raw values), D1 lets you run SQL queries, which
+makes it a natural fit for storing a historical log you might want to filter,
+sort, or aggregate later.
+
+The database is named **bayclubconnect-history** and is bound in code as `DB`
+(declared in `wrangler.toml`). Its ID is `e1f2166f-1c61-47f4-8675-bfa4a003d29a`.
+
+### What Gets Written There
+
+Every time a booking completes — successfully, with a failure, or via
+Cancel/Dismiss — the Worker writes one row to the `booking_history` table.
+Active (pending/firing) bookings are **not** stored in D1; those live in KV.
+D1 is append-only from the Worker's perspective: rows are written with
+`INSERT OR IGNORE` so duplicate writes (e.g. a cron tick racing a cancel) are
+safe.
+
+### Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS booking_history (
+    id              TEXT     PRIMARY KEY,
+    user_email      TEXT     NOT NULL DEFAULT '',
+    slot_label      TEXT     NOT NULL DEFAULT '',
+    partner_names   TEXT     NOT NULL DEFAULT '[]',  -- JSON array
+    status          TEXT     NOT NULL,               -- succeeded | failed | cancelled
+    failure_reason  TEXT,                            -- NULL unless status = failed
+    scheduled_at_ms INTEGER  NOT NULL DEFAULT 0,     -- when the user scheduled it
+    fire_at_ms      INTEGER  NOT NULL DEFAULT 0,     -- when it was supposed to fire
+    completed_at_ms INTEGER  NOT NULL DEFAULT 0      -- when the outcome was recorded
+);
+```
+
+### How It Was Set Up (One-Time Steps)
+
+These steps were run once when the D1 database was first created. You should not
+need to run them again unless you're setting up the Worker from scratch.
+
+**1. Create the database:**
+
+```bash
+cd cloudflare-worker
+wrangler d1 create bayclubconnect-history
+```
+
+This printed the database ID (`e1f2166f-...`) and a `wrangler.toml` snippet to
+add. The snippet was pasted into `wrangler.toml` under `[[d1_databases]]`.
+
+**2. Create the schema:**
+
+```bash
+wrangler d1 execute bayclubconnect-history \
+  --command "CREATE TABLE IF NOT EXISTS booking_history (id TEXT PRIMARY KEY, user_email TEXT NOT NULL DEFAULT '', slot_label TEXT NOT NULL DEFAULT '', partner_names TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, failure_reason TEXT, scheduled_at_ms INTEGER NOT NULL DEFAULT 0, fire_at_ms INTEGER NOT NULL DEFAULT 0, completed_at_ms INTEGER NOT NULL DEFAULT 0);" \
+  --remote
+```
+
+The `--remote` flag is required to target the real Cloudflare D1 instance. Without
+it, Wrangler v4 silently creates a local SQLite file for development simulation and
+reports success — so a missing `--remote` is easy to miss. Verify with:
+
+```bash
+wrangler d1 execute bayclubconnect-history \
+  --command "SELECT COUNT(*) as total FROM booking_history;" \
+  --remote
+```
+
+If the table doesn't exist yet you'll get `no such table: booking_history` — in
+that case re-run the CREATE TABLE command above with `--remote`.
+
+**3. Deploy the updated Worker:**
+
+```bash
+wrangler deploy
+```
+
+### Querying History via the CLI
+
+```bash
+# Show the 20 most recent completed bookings
+wrangler d1 execute bayclubconnect-history \
+  --command "SELECT id, user_email, slot_label, status, datetime(completed_at_ms/1000, 'unixepoch', 'localtime') as completed FROM booking_history ORDER BY completed_at_ms DESC LIMIT 20;" \
+  --remote
+
+# Show all failed bookings and their reasons
+wrangler d1 execute bayclubconnect-history \
+  --command "SELECT user_email, slot_label, failure_reason, datetime(completed_at_ms/1000, 'unixepoch', 'localtime') as completed FROM booking_history WHERE status = 'failed' ORDER BY completed_at_ms DESC;" \
+  --remote
+
+# Summary counts by status
+wrangler d1 execute bayclubconnect-history \
+  --command "SELECT status, COUNT(*) as count FROM booking_history GROUP BY status;" \
+  --remote
+```
+
+### Querying History via the Cloudflare Dashboard
+
+1. Go to [dash.cloudflare.com](https://dash.cloudflare.com).
+2. In the left sidebar, click **D1 SQL Database** (under Storage & Databases).
+3. Click **bayclubconnect-history**.
+4. Use the **Query** tab to run any SQL against the live database — no CLI needed.
+
+### Viewing History via the Dashboard URL
+
+The Worker's `/dashboard` endpoint renders a formatted HTML page showing both
+active bookings and the last 100 history rows. Access it at:
+
+```
+https://bayclubconnect-bookings.mark-rubin.workers.dev/dashboard?secret=<WORKER_SECRET>
+```
+
+Bookmark this URL (with the secret in the query string) for quick access. The
+page auto-refreshes every 60 seconds.
 
 ---
 
@@ -107,9 +230,13 @@ that origin).
 | `POST /bookings` | Yes | Adds a booking record. Called when user clicks Schedule. |
 | `DELETE /bookings/{id}` | Yes | Removes a booking. Called on Cancel or Dismiss. |
 | `PUT /token` | Yes | Stores a new refresh token in KV. Called automatically by the extension whenever it sees the Bay Club app renew its token. |
+| `GET /history` | Yes | Returns the last 100 rows from the D1 `booking_history` table as JSON. |
+| `GET /dashboard` | Yes | Renders a self-refreshing HTML monitoring page showing active bookings and history. |
 
 "Auth required" means the request must include the `X-Worker-Secret` header with
-the value of the `WORKER_SECRET` secret.
+the value of the `WORKER_SECRET` secret. The `/history` and `/dashboard` endpoints
+also accept the secret as a `?secret=` query parameter so they can be bookmarked
+in a browser.
 
 ---
 
@@ -291,3 +418,5 @@ Everything above can also be inspected visually at
   directly in the browser
 - **Workers & Pages** → `bayclubconnect-bookings` → Settings → Variables and
   Secrets → view (not reveal) configured secrets
+- **D1 SQL Database** → `bayclubconnect-history` → run SQL queries against the
+  booking history table directly in the browser (no CLI needed)

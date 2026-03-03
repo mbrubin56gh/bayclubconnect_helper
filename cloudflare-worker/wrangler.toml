@@ -6,5 +6,10 @@ compatibility_date = "2024-01-01"
 binding = "BC_BOOKINGS"
 id = "299d14645bed49458addc9751cc6c241"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "bayclubconnect-history"
+database_id = "e1f2166f-1c61-47f4-8675-bfa4a003d29a"
+
 [triggers]
 crons = ["* * * * *"]

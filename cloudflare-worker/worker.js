@@ -5,14 +5,19 @@
 //   scheduled_bookings    — JSON array of booking records
 //   last_token_refresh    — ISO timestamp of the most recent token rotation (any user)
 //
+// D1 database (BC_BOOKINGS_HISTORY binding, bayclubconnect-history):
+//   booking_history — permanent record of all completed/cancelled bookings
+//
 // Secrets (set via `wrangler secret put`):
 //   WORKER_SECRET  — required on all write endpoints (X-Worker-Secret header)
 //
 // HTTP endpoints:
-//   GET  /status          — health check, no auth required
-//   GET  /bookings        — list all bookings (requires secret)
-//   POST /bookings        — add a booking (requires secret)
-//   DELETE /bookings/{id} — cancel a booking (requires secret)
+//   GET  /status            — health check, no auth required
+//   GET  /bookings          — list all bookings (requires secret)
+//   POST /bookings          — add a booking (requires secret)
+//   DELETE /bookings/{id}   — cancel a booking (requires secret)
+//   GET  /history           — booking history from D1 (requires secret; header or ?secret=)
+//   GET  /dashboard         — HTML monitoring dashboard (requires secret; header or ?secret=)
 //
 // Cron: fires every minute, executes any booking whose fireAtMs has passed.
 
@@ -134,6 +139,34 @@ async function saveBookings(env, bookings) {
     await env.BC_BOOKINGS.put(KV_BOOKINGS, JSON.stringify(bookings));
 }
 
+// Appends a completed or cancelled booking to the D1 history table. Uses
+// INSERT OR IGNORE so a dismiss (DELETE) arriving after the cron tick has
+// already written the row is silently a no-op. Failures are swallowed so
+// D1 unavailability can never affect the booking outcome itself.
+async function appendToHistory(env, booking, status, failureReason, completedAtMs) {
+    if (!env.DB) return;
+    try {
+        await env.DB.prepare(
+            'INSERT OR IGNORE INTO booking_history' +
+            ' (id, user_email, slot_label, partner_names, status, failure_reason,' +
+            '  scheduled_at_ms, fire_at_ms, completed_at_ms)' +
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(
+            booking.id,
+            booking.notificationEmail || '',
+            booking.slotLabel || '',
+            JSON.stringify(booking.partnerNames || []),
+            status,
+            failureReason || null,
+            booking.createdAtMs || 0,
+            booking.fireAtMs || 0,
+            completedAtMs,
+        ).run();
+    } catch (_e) {
+        // Non-critical: history write failure must not affect booking outcome.
+    }
+}
+
 // #endregion KV helpers.
 
 // #region Booking execution.
@@ -252,9 +285,11 @@ async function runCronTick(env) {
         try {
             await fireBooking(booking, env);
             booking.status = STATUS_SUCCEEDED;
+            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now());
         } catch (error) {
             booking.status = STATUS_FAILED;
             booking.failureReason = error.message || String(error);
+            await appendToHistory(env, booking, STATUS_FAILED, booking.failureReason, Date.now());
         }
     }
 
@@ -284,6 +319,14 @@ function checkSecret(request, env) {
     return secret && secret === env.WORKER_SECRET;
 }
 
+// Accepts the secret via X-Worker-Secret header OR ?secret= query param so
+// the dashboard and history endpoints can be bookmarked in a browser.
+function checkSecretFlexible(request, env) {
+    const url = new URL(request.url);
+    const s = request.headers.get('X-Worker-Secret') || url.searchParams.get('secret');
+    return s && s === env.WORKER_SECRET;
+}
+
 async function handleRequest(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -305,7 +348,45 @@ async function handleRequest(request, env) {
         });
     }
 
-    // All write/read endpoints require the shared secret.
+    // Dashboard and history accept the secret via query param for browser bookmarking.
+    if (method === 'GET' && path === '/history') {
+        if (!checkSecretFlexible(request, env)) {
+            return new Response('Unauthorized', { status: 401 });
+        }
+        if (!env.DB) return jsonResponse([]);
+        try {
+            const result = await env.DB.prepare(
+                'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT 200'
+            ).all();
+            return jsonResponse(result.results);
+        } catch (_e) {
+            return jsonResponse([]);
+        }
+    }
+
+    if (method === 'GET' && path === '/dashboard') {
+        if (!checkSecretFlexible(request, env)) {
+            return new Response('Unauthorized', { status: 401, headers: { 'Content-Type': 'text/plain' } });
+        }
+        const dashSecret = new URL(request.url).searchParams.get('secret') || '';
+        const activeBookings = await loadBookings(env);
+        let historyRows = [];
+        if (env.DB) {
+            try {
+                const result = await env.DB.prepare(
+                    'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT 100'
+                ).all();
+                historyRows = result.results;
+            } catch (_e) {
+                // Table may not exist yet if schema has not been applied.
+            }
+        }
+        return new Response(renderDashboardHtml(activeBookings, historyRows, dashSecret), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+    }
+
+    // All remaining endpoints require the secret via header.
     if (!checkSecret(request, env)) {
         return new Response('Unauthorized', { status: 401 });
     }
@@ -326,6 +407,16 @@ async function handleRequest(request, env) {
     if (method === 'DELETE' && path.startsWith('/bookings/')) {
         const id = path.slice('/bookings/'.length);
         const bookings = await loadBookings(env);
+        const booking = bookings.find(b => b.id === id);
+        if (booking) {
+            // Pending/firing bookings are being cancelled; succeeded/failed bookings
+            // are being dismissed — in that case the cron tick already wrote the
+            // history row and INSERT OR IGNORE will silently skip the duplicate.
+            const historyStatus = (booking.status === STATUS_PENDING || booking.status === STATUS_FIRING)
+                ? 'cancelled'
+                : booking.status;
+            await appendToHistory(env, booking, historyStatus, booking.failureReason || null, Date.now());
+        }
         await saveBookings(env, bookings.filter(b => b.id !== id));
         return jsonResponse({ ok: true });
     }
@@ -346,3 +437,183 @@ async function handleRequest(request, env) {
 }
 
 // #endregion HTTP request handler.
+
+// #region Dashboard.
+
+function escHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function renderDashboardHtml(activeBookings, historyRows, secret) {
+    const now = Date.now();
+
+    function ptTime(ms) {
+        if (!ms) return '—';
+        return new Date(ms).toLocaleString('en-US', {
+            timeZone: 'America/Los_Angeles',
+            month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+        });
+    }
+
+    function countdown(ms) {
+        const diff = ms - now;
+        if (diff <= 0) return 'now';
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        if (h >= 24) return `${Math.floor(h / 24)}d ${h % 24}h`;
+        if (h > 0) return `${h}h ${m}m`;
+        return `${m}m`;
+    }
+
+    function badge(status) {
+        const styles = {
+            pending:   ['#fff3e0', '#e65100', 'Pending'],
+            firing:    ['#e3f2fd', '#1565c0', 'Firing'],
+            succeeded: ['#e8f5e9', '#2e7d32', '✓ OK'],
+            failed:    ['#ffebee', '#c62828', '✗ Failed'],
+            cancelled: ['#f5f5f5', '#757575', 'Cancelled'],
+        };
+        const [bg, color, label] = styles[status] || ['#f5f5f5', '#333', status];
+        return `<span style="background:${bg};color:${color};padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;">${label}</span>`;
+    }
+
+    // Active bookings section.
+    const active = activeBookings.filter(b => b.status === STATUS_PENDING || b.status === STATUS_FIRING);
+    let activeHtml;
+    if (active.length === 0) {
+        activeHtml = '<p style="color:#999;font-style:italic;padding:8px 0;">No active bookings.</p>';
+    } else {
+        const rows = active.map(b => {
+            const partners = (b.partnerNames || []).join(', ') || '—';
+            // Only pending bookings can be cancelled — firing means the API call is already in-flight.
+            const cancelCell = b.status === STATUS_PENDING
+                ? `<td id="cancel-cell-${escHtml(b.id)}"><button onclick="cancelBooking('${escHtml(b.id)}')" style="background:#c62828;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;">Cancel</button></td>`
+                : `<td style="color:#999;font-size:12px;">Firing…</td>`;
+            return `<tr>
+                <td>${badge(b.status)}</td>
+                <td>${escHtml(b.slotLabel || '—')}</td>
+                <td>${escHtml(b.notificationEmail || '—')}</td>
+                <td>${escHtml(partners)}</td>
+                <td>${ptTime(b.fireAtMs)}</td>
+                <td>${countdown(b.fireAtMs)}</td>
+                ${cancelCell}
+            </tr>`;
+        }).join('');
+        activeHtml = `<table><thead><tr>
+            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Opens At (PT)</th><th>In</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Stats bar.
+    const nSucceeded = historyRows.filter(r => r.status === STATUS_SUCCEEDED).length;
+    const nFailed    = historyRows.filter(r => r.status === STATUS_FAILED).length;
+    const nCancelled = historyRows.filter(r => r.status === 'cancelled').length;
+    function statBox(value, label, bg, color) {
+        return `<div style="background:${bg};border-radius:8px;padding:12px 20px;min-width:90px;text-align:center;">
+            <div style="font-size:26px;font-weight:700;color:${color};">${value}</div>
+            <div style="font-size:12px;color:#555;margin-top:2px;">${label}</div>
+        </div>`;
+    }
+    const statsHtml = `<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px;">
+        ${statBox(nSucceeded, 'Succeeded', '#e8f5e9', '#2e7d32')}
+        ${statBox(nFailed,    'Failed',    '#ffebee', '#c62828')}
+        ${statBox(nCancelled, 'Cancelled', '#f5f5f5', '#757575')}
+    </div>`;
+
+    // History table.
+    let historyHtml;
+    if (historyRows.length === 0) {
+        historyHtml = '<p style="color:#999;font-style:italic;padding:8px 0;">No history yet.</p>';
+    } else {
+        const rows = historyRows.map(r => {
+            let partners;
+            try { partners = JSON.parse(r.partner_names).join(', ') || '—'; }
+            catch (_e) { partners = r.partner_names || '—'; }
+            const reasonCell = r.failure_reason
+                ? `<td style="color:#c62828;font-size:12px;">${escHtml(r.failure_reason)}</td>`
+                : '<td style="color:#999;">—</td>';
+            return `<tr>
+                <td>${badge(r.status)}</td>
+                <td>${escHtml(r.slot_label || '—')}</td>
+                <td>${escHtml(r.user_email || '—')}</td>
+                <td>${escHtml(partners)}</td>
+                <td style="white-space:nowrap;">${ptTime(r.completed_at_ms)}</td>
+                ${reasonCell}
+            </tr>`;
+        }).join('');
+        historyHtml = `<table><thead><tr>
+            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Completed (PT)</th><th>Reason</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    const timestamp = new Date().toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', second: '2-digit',
+    });
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bay Club Booking Dashboard</title>
+<meta id="auto-refresh" http-equiv="refresh" content="60">
+<style>
+  body { font-family: system-ui,-apple-system,sans-serif; max-width: 980px; margin: 32px auto; padding: 0 20px; color: #333; line-height: 1.5; }
+  h1   { color: #1a73e8; margin-bottom: 4px; }
+  .sub { color: #999; font-size: 13px; margin-bottom: 28px; }
+  h2   { color: #444; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; margin-top: 32px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+  th { background: #f8f8f8; text-align: left; padding: 8px 10px; font-size: 11px; color: #666; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  tr:hover td { background: #fafafa; }
+</style>
+</head>
+<body>
+  <h1>Bay Club Booking Dashboard</h1>
+  <div class="sub">Last updated: ${timestamp} PT &nbsp;·&nbsp; Auto-refreshes every 60s</div>
+  <h2>Active Bookings</h2>
+  ${activeHtml}
+  <h2>History (last ${historyRows.length} records)</h2>
+  ${statsHtml}
+  ${historyHtml}
+<script>
+  async function cancelBooking(id) {
+    // Suppress the 60s auto-refresh so it doesn't clobber our feedback.
+    const meta = document.getElementById('auto-refresh');
+    if (meta) meta.removeAttribute('http-equiv');
+
+    const cell = document.getElementById('cancel-cell-' + id);
+    if (!cell) return;
+    cell.innerHTML = '<span style="color:#888;font-size:12px;">Cancelling…</span>';
+
+    try {
+      const res = await fetch('/bookings/' + id, {
+        method: 'DELETE',
+        headers: { 'X-Worker-Secret': '${escHtml(secret)}' },
+      });
+      if (res.ok) {
+        cell.innerHTML = '<span style="color:#2e7d32;font-size:12px;font-weight:600;">Cancelled ✓</span>';
+        setTimeout(() => location.reload(), 800);
+      } else {
+        const text = await res.text().catch(() => res.status);
+        cell.innerHTML = '<span style="color:#c62828;font-size:12px;">Failed: ' + text + '</span>';
+        if (meta) meta.setAttribute('http-equiv', 'refresh');
+      }
+    } catch (err) {
+      cell.innerHTML = '<span style="color:#c62828;font-size:12px;">Error: ' + err.message + '</span>';
+      if (meta) meta.setAttribute('http-equiv', 'refresh');
+    }
+  }
+</script>
+</body>
+</html>`;
+}
+
+// #endregion Dashboard.
