@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.5
+// @version      0.6
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -361,8 +361,8 @@
                         if (data && data.refresh_token) {
                             maybePushRefreshTokenToWorker({ status: 200, responseText: JSON.stringify(data) });
                         }
-                    }).catch(function () {});
-                }).catch(function () {});
+                    }).catch(function () { });
+                }).catch(function () { });
             }
             return promise;
         };
@@ -1131,8 +1131,12 @@
                         return;
                     }
                     cachedBookings = await response.json();
-                    // Append and immediately remove a marker so the bookings-page
-                    // MutationObserver fires scheduleReconcile with the updated cache.
+                    // Dispatch a CustomEvent so the bookings-page reconciliation loop
+                    // picks up the updated cache immediately. Also nudge the
+                    // MutationObserver via a transient DOM element as a belt-and-suspenders
+                    // backup, since some mobile browsers may not fire the observer for
+                    // an append+remove that resolves before the next microtask checkpoint.
+                    document.dispatchEvent(new CustomEvent('bc-bookings-updated'));
                     if (document.body) {
                         const trigger = document.createElement('span');
                         trigger.setAttribute('data-bc-worker-sync', '');
@@ -2031,6 +2035,10 @@
                 scheduleReconcile();
             });
             observer.observe(document.body, { childList: true, subtree: true });
+            // Also reconcile whenever the Worker bookings cache is refreshed, so
+            // the pending section appears even on mobile browsers where the
+            // MutationObserver DOM nudge does not reliably trigger a reconcile.
+            document.addEventListener('bc-bookings-updated', () => scheduleReconcile());
             scheduleReconcile();
         };
     })();
@@ -3029,34 +3037,48 @@
                     toMinutes: parseInt(el.dataset.toMinutes),
                 });
 
-                const bottomBar = document.querySelector('.white-bg.p-2 .container');
-                if (!bottomBar) return;
-                const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
-
-                // The native booking flow expects a specific time slot to have been selected in
-                // the Hour View before allowing the Next button to advance. We keep that state
-                // machine happy by clicking the first visible native slot here. If Bay Club ever
-                // removes or renames these native slot elements, the helper will fall back to the
-                // native UI via our error banner rather than silently breaking the flow.
+                // Click the native slot to advance Angular's state machine. This must
+                // happen before any bottom bar check — Firefox renders the bottom bar
+                // asynchronously after the click, whereas Chrome pre-renders it in a
+                // disabled state. Skipping the click because the bottom bar is absent
+                // would leave Angular stuck and the Next button never appearing.
                 const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
                 if (nativeSlot) {
                     nativeSlot.click();
-                    const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
-                    if (nativeInfo) nativeInfo.style.display = 'none';
                 } else {
                     console.log("No native slot to click");
                 }
 
-                selectedBookingInfoHolder.textContent = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
-
-                const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                    .find(btn => btn.textContent.trim().includes('NEXT'));
-                if (nextButton) {
-                    nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
-                    nextButton.style.borderColor = 'rgb(0, 188, 212)';
-                    nextButton.style.opacity = '1';
-                    nextButton.style.cursor = 'pointer';
-                    nextButton.removeAttribute('disabled');
+                // Update the bottom bar with our selection info and style the Next button.
+                // In Chrome the bottom bar is already in the DOM so this runs immediately.
+                // In Firefox it appears after Angular processes the click above, so we
+                // observe and update once it arrives. The observer is bounded by a timeout
+                // to avoid dangling if the bottom bar never appears for any reason.
+                const slotInfoText = `${el.dataset.clubName} · ${el.dataset.court} @ ${el.dataset.from} - ${el.dataset.to}`;
+                function tryUpdateBottomBar() {
+                    const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                    if (!bottomBar) return false;
+                    const selectedBookingInfoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+                    const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                    if (nativeInfo) nativeInfo.style.display = 'none';
+                    selectedBookingInfoHolder.textContent = slotInfoText;
+                    const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                        .find(btn => btn.textContent.trim().includes('NEXT'));
+                    if (nextButton) {
+                        nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
+                        nextButton.style.borderColor = 'rgb(0, 188, 212)';
+                        nextButton.style.opacity = '1';
+                        nextButton.style.cursor = 'pointer';
+                        nextButton.removeAttribute('disabled');
+                    }
+                    return true;
+                }
+                if (!tryUpdateBottomBar()) {
+                    const bottomBarObserver = new MutationObserver(() => {
+                        if (tryUpdateBottomBar()) bottomBarObserver.disconnect();
+                    });
+                    bottomBarObserver.observe(document.body, { childList: true, subtree: true });
+                    setTimeout(() => bottomBarObserver.disconnect(), 5000);
                 }
             }
 
