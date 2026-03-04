@@ -1285,16 +1285,82 @@
                 };
             }
 
-            // Partner list: populated by XHR interception during normal booking flows.
+            // Partner list: cache-first. XHR interception populates the cache during normal
+            // booking flows. On cache miss, fetches household members and buddy list directly
+            // (no courtBookingId needed) and merges them into a unified player list.
 
-            function fetchPossiblePlayers() {
+            async function fetchPossiblePlayers() {
                 const players = getLocalStorageService().getJson(POSSIBLE_PLAYERS_KEY, '[bc] failed to parse cached players');
                 const photosByMemberId = getLocalStorageService().getJson(PLAYER_PHOTOS_KEY, '[bc] failed to parse cached player photos') || {};
-                if (!players || !Array.isArray(players) || players.length === 0) {
-                    getDebugService().log('warn', 'scheduled-booking-no-player-cache');
-                    throw new Error('Partner list not available. Complete a regular booking first to populate your partner list.');
+                if (players && Array.isArray(players) && players.length > 0) {
+                    return { players, photosByMemberId };
                 }
-                return { players, photosByMemberId };
+
+                getDebugService().log('info', 'fetch-possible-players-cache-miss-fetching-api');
+                const headers = buildAuthHeaders();
+                if (!headers) {
+                    throw new Error('Session not ready — please interact with the page first to load partner list.');
+                }
+
+                const getHeaders = Object.assign({}, headers);
+                delete getHeaders['Content-Type'];
+
+                const [householdResp, buddyResp] = await Promise.all([
+                    fetch('https://connect-api.bayclubs.io/profile/api/1.0/profile/household', { headers: getHeaders }),
+                    fetch('https://connect-api.bayclubs.io/buddy-list/api/1.0/buddylist', { headers: getHeaders }),
+                ]);
+
+                if (!householdResp.ok) throw new Error(`Household fetch failed (${householdResp.status}).`);
+                if (!buddyResp.ok) throw new Error(`Buddy list fetch failed (${buddyResp.status}).`);
+
+                const [householdData, buddyData] = await Promise.all([householdResp.json(), buddyResp.json()]);
+
+                // Merge household addOns (Active) and buddy list items (Approved), deduped by personId.
+                const byPersonId = new Map();
+
+                (householdData.addOns || [])
+                    .filter(m => m.status === 'Active')
+                    .forEach(m => byPersonId.set(m.personId, {
+                        personId: m.personId,
+                        firstName: m.firstName,
+                        lastName: m.lastName,
+                        memberIdentifier: m.memberIdentifier,
+                    }));
+
+                (buddyData.buddyListItems || [])
+                    .filter(item => item.status === 'Approved')
+                    .forEach(item => {
+                        const buddy = item.buddy;
+                        if (!byPersonId.has(buddy.personId)) {
+                            byPersonId.set(buddy.personId, {
+                                personId: buddy.personId,
+                                firstName: buddy.firstName,
+                                lastName: buddy.lastName,
+                                // Buddy list uses memberId for the same numeric member identifier.
+                                memberIdentifier: buddy.memberId,
+                                isPermanentMember: buddy.isPermanentMember,
+                            });
+                        }
+                    });
+
+                const mergedPlayers = Array.from(byPersonId.values());
+
+                // Include the primary (logged-in) user's memberIdentifier so their photo is
+                // fetched together with the rest, avoiding a separate request later.
+                const primaryMemberIdentifier = householdData.primary && householdData.primary.memberIdentifier;
+                const allMemberIdentifiers = mergedPlayers.map(p => p.memberIdentifier).filter(Boolean);
+                if (primaryMemberIdentifier) allMemberIdentifiers.push(primaryMemberIdentifier);
+
+                const fetchedPhotos = await fetchPhotos(allMemberIdentifiers);
+                cachePlayersFromXhr(mergedPlayers);
+                cachePhotosFromXhr(fetchedPhotos || {});
+
+                const finalPhotos = getLocalStorageService().getJson(PLAYER_PHOTOS_KEY, '[bc] failed to read cached photos after merge') || {};
+                getDebugService().log('info', 'fetch-possible-players-api-success', {
+                    playerCount: mergedPlayers.length,
+                    photoCount: Object.keys(finalPhotos).length,
+                });
+                return { players: mergedPlayers, photosByMemberId: finalPhotos };
             }
 
             // Called by the XHR interceptor when the native booking flow fetches the player list.
@@ -1311,16 +1377,21 @@
                 getLocalStorageService().setJson(PLAYER_PHOTOS_KEY, merged);
             }
 
-            // Fetch photos directly for a given player list. Used when the XHR cache is stale
-            // or unpopulated. Returns the photosByMemberId map, or null on failure.
-            async function fetchPhotos(players) {
+            // Fetch photos for a list of member identifiers. Accepts either an array of ID
+            // strings or an array of player objects (using memberIdentifier or memberId field).
+            // Uses repeated query params as required by the API. Returns the photosByMemberId
+            // map, or null on failure.
+            async function fetchPhotos(playersOrIds) {
                 const headers = buildAuthHeaders();
                 if (!headers) {
                     getDebugService().log('warn', 'fetch-photos-no-auth-headers');
                     return null;
                 }
 
-                const memberIds = players.map(p => p.memberId).filter(Boolean);
+                const memberIds = playersOrIds.map(item => {
+                    if (typeof item === 'string') return item;
+                    return item.memberIdentifier || item.memberId;
+                }).filter(Boolean);
                 if (memberIds.length === 0) {
                     getDebugService().log('warn', 'fetch-photos-no-member-ids');
                     return null;
@@ -1330,8 +1401,10 @@
                 const getHeaders = Object.assign({}, headers);
                 delete getHeaders['Content-Type'];
 
-                const url = `${PHOTOS_API_BASE}/photos/members?membersIds=${memberIds.join(',')}`;
-                getDebugService().log('info', 'fetch-photos-request', { url, count: memberIds.length });
+                // The photos API requires repeated params (not comma-separated).
+                const qs = memberIds.map(id => 'membersIds=' + encodeURIComponent(id)).join('&');
+                const url = `${PHOTOS_API_BASE}/photos/members?${qs}`;
+                getDebugService().log('info', 'fetch-photos-request', { count: memberIds.length });
 
                 try {
                     const response = await fetch(url, { headers: getHeaders });
@@ -1350,10 +1423,11 @@
                 }
             }
 
-            // Photo URL helper.
+            // Photo URL helper. Returns null when no photo is available or the API has
+            // marked the photo as not allowed for display.
             function getPlayerPhotoUrl(memberId, photosByMemberId) {
                 const photoInfo = photosByMemberId[memberId];
-                if (!photoInfo || !photoInfo.photoId) return null;
+                if (!photoInfo || !photoInfo.photoId || photoInfo.state === 'NotAllowed') return null;
                 return `${PHOTO_CDN_BASE}/${photoInfo.photoId}?format=raw&&height=192`;
             }
 
@@ -3368,7 +3442,7 @@
             async function handleLockedSlotClick(anchorElement, el) {
                 let players, photosByMemberId;
                 try {
-                    ({ players, photosByMemberId } = getScheduledBookingService().fetchPossiblePlayers());
+                    ({ players, photosByMemberId } = await getScheduledBookingService().fetchPossiblePlayers());
                 } catch (error) {
                     console.log('[bc] failed to load partner picker:', error);
                     const errorDiv = document.createElement('div');
