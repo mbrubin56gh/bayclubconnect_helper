@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.7S
+// @version      0.76
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1442,7 +1442,7 @@
             // Schedule a booking: build bodies and POST to Worker. Returns a promise
             // that resolves once the Worker has confirmed the booking is stored, so
             // callers can safely navigate away without cancelling the in-flight request.
-            async function scheduleBooking(slotInfo, selectedPartners) {
+            async function scheduleBooking(slotInfo, selectedPartners, isVisibleToBuddies) {
                 const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) throw new Error('No fetch state available to build booking body.');
 
@@ -1466,7 +1466,7 @@
                     },
                     confirmBody: {
                         invitations: selectedPartners.map(p => ({ personId: p.personId })),
-                        isVisibleToBuddies: true,
+                        isVisibleToBuddies: isVisibleToBuddies !== false,
                     },
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
@@ -3341,18 +3341,28 @@
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
                         <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
                     </div>
+                    <div data-bc-buddy-vis-toggle data-checked="true" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid rgba(0,188,212,0.3); border-bottom: 1px solid rgba(0,188,212,0.3); margin-bottom: 12px; cursor: pointer;">
+                        <span style="font-size: 13px; color: rgba(255,255,255,0.85);">Show to Buddy List</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span data-bc-buddy-vis-label style="font-size: 12px; font-weight: 600; color: rgb(0,188,212);">On</span>
+                            <div style="position: relative; width: 40px; height: 22px; flex-shrink: 0;">
+                                <div data-bc-toggle-track style="width: 40px; height: 22px; border-radius: 11px; background: rgb(0,188,212);"></div>
+                                <div data-bc-toggle-thumb style="position: absolute; top: 3px; right: 3px; left: auto; width: 16px; height: 16px; border-radius: 50%; background: white; transition: left 0.15s, right 0.15s;"></div>
+                            </div>
+                        </div>
+                    </div>
                     <div data-bc-partner-prompt style="font-size: 14px; color: #ef5350; margin-bottom: 12px; font-weight: 500;">${partnerLabel}</div>
-                    <div data-bc-player-grid style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 20px;">
+                    <div data-bc-player-grid style="display: grid; grid-template-columns: repeat(auto-fill, 96px); justify-content: center; gap: 8px; margin: 0 auto 20px; max-width: 420px;">
                         ${playerCardsHtml}
                     </div>
-                    <div style="display: flex; gap: 12px; align-items: center;">
+                    <div style="display: flex; justify-content: center; gap: 12px; align-items: center;">
                         <button data-bc-schedule-submit disabled style="background: rgba(0,188,212,0.4); color: white; border: none; border-radius: 4px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: not-allowed; opacity: 0.6;">Schedule</button>
                         <button data-bc-schedule-cancel style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 13px; cursor: pointer; text-decoration: underline;">Cancel</button>
                     </div>
                 </div>`;
             }
 
-            function bindSchedulePanelInteractions(panel, anchorElement, slotInfo) {
+            function bindSchedulePanelInteractions(panel, _anchorElement, slotInfo) {
                 const requiredPartners = getRequiredPartnerCount();
 
                 function updatePartnerPromptAndSubmitButton() {
@@ -3402,10 +3412,9 @@
 
                 // Back and cancel buttons return to the slot grid.
                 function returnToSlotGrid() {
-                    const existingPanel = anchorElement.querySelector('[data-bc-schedule-panel]');
-                    if (existingPanel) existingPanel.remove();
-                    const hiddenContent = anchorElement.querySelector('.all-clubs-availability');
-                    if (hiddenContent) hiddenContent.style.display = '';
+                    // Remove all panel instances — one may exist per injection host.
+                    document.querySelectorAll('[data-bc-schedule-panel]').forEach(p => p.remove());
+                    document.querySelectorAll('.all-clubs-availability').forEach(el => { el.style.display = ''; });
                     // Restore the Next button visibility and put it back in its normal disabled state.
                     const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
                         .find(btn => btn.textContent.trim().includes('NEXT'));
@@ -3416,17 +3425,42 @@
                 panel.querySelector('[data-bc-schedule-back]')?.addEventListener('click', returnToSlotGrid);
                 panel.querySelector('[data-bc-schedule-cancel]')?.addEventListener('click', returnToSlotGrid);
 
-                // Schedule button submits the booking.
+                // Buddy visibility toggle.
+                const buddyVisToggle = panel.querySelector('[data-bc-buddy-vis-toggle]');
+                if (buddyVisToggle) {
+                    buddyVisToggle.addEventListener('click', () => {
+                        const isOn = buddyVisToggle.dataset.checked !== 'true';
+                        buddyVisToggle.dataset.checked = String(isOn);
+                        const label = buddyVisToggle.querySelector('[data-bc-buddy-vis-label]');
+                        const track = buddyVisToggle.querySelector('[data-bc-toggle-track]');
+                        const thumb = buddyVisToggle.querySelector('[data-bc-toggle-thumb]');
+                        if (label) {
+                            label.textContent = isOn ? 'On' : 'Off';
+                            label.style.color = isOn ? 'rgb(0,188,212)' : 'rgba(255,255,255,0.5)';
+                        }
+                        if (track) track.style.background = isOn ? 'rgb(0,188,212)' : 'rgba(255,255,255,0.2)';
+                        if (thumb) {
+                            thumb.style.right = isOn ? '3px' : 'auto';
+                            thumb.style.left = isOn ? 'auto' : '3px';
+                        }
+                    });
+                }
+
+                // Schedule button submits the booking. Guard against double-submit when the
+                // panel is injected into multiple hosts for responsive layout support.
                 panel.querySelector('[data-bc-schedule-submit]')?.addEventListener('click', async () => {
+                    if (document.querySelector('[data-bc-schedule-panel][data-bc-submitting]')) return;
+                    panel.setAttribute('data-bc-submitting', '1');
                     const selectedCards = panel.querySelectorAll('.bc-player-card[data-player-selected]:not([data-current-user])');
                     const selectedPartners = Array.from(selectedCards).map(card => ({
                         personId: card.dataset.personId,
                         firstName: card.dataset.firstName,
                         lastName: card.dataset.lastName,
                     }));
+                    const isVisibleToBuddies = !buddyVisToggle || buddyVisToggle.dataset.checked !== 'false';
 
                     try {
-                        await getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners);
+                        await getScheduledBookingService().scheduleBooking(slotInfo, selectedPartners, isVisibleToBuddies);
                         window.location.href = '/bookings';
                     } catch (error) {
                         console.log('[bc] failed to schedule booking:', error);
@@ -3469,9 +3503,9 @@
                         : '',
                 };
 
-                // Hide the availability grid and show the schedule panel.
-                const availabilityContainer = anchorElement.querySelector('.all-clubs-availability');
-                if (availabilityContainer) availabilityContainer.style.display = 'none';
+                // Hide all availability grids (both desktop and mobile injection hosts) so
+                // neither shows through when the browser is resized across the layout breakpoint.
+                document.querySelectorAll('.all-clubs-availability').forEach(el => { el.style.display = 'none'; });
 
                 // Hide the Next button — it only drives the Angular state machine and has no
                 // role in the scheduled booking flow.
@@ -3479,16 +3513,20 @@
                     .find(btn => btn.textContent.trim().includes('NEXT'));
                 if (nextButton) nextButton.style.display = 'none';
 
-                // Render immediately with whatever photos are cached (may be initials-only).
+                // Inject the panel into every active time slot host so it remains visible
+                // when the browser is resized across the Bootstrap responsive breakpoint.
                 const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
-                const panelDiv = document.createElement('div');
-                panelDiv.innerHTML = panelHtml;
-                anchorElement.appendChild(panelDiv.firstElementChild);
-
-                const panel = anchorElement.querySelector('[data-bc-schedule-panel]');
-                if (panel) {
-                    bindSchedulePanelInteractions(panel, anchorElement, slotInfo);
-                }
+                const allHosts = getBookingDomQueryService().getTimeSlotHosts();
+                const hostsToUse = allHosts.length > 0 ? allHosts : [anchorElement];
+                hostsToUse.forEach(host => {
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = panelHtml;
+                    host.appendChild(wrapper.firstElementChild);
+                    const hostPanel = host.querySelector('[data-bc-schedule-panel]');
+                    if (hostPanel) {
+                        bindSchedulePanelInteractions(hostPanel, anchorElement, slotInfo);
+                    }
+                });
 
                 // Fetch fresh photos as needed. The logged-in user is never in the possible
                 // players list (you cannot invite yourself), so their photo must be fetched
@@ -3508,9 +3546,9 @@
                     freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
                 }
 
-                if (freshPhotos && panel && panel.isConnected) {
-                    // Swap initials to photos for partner cards.
-                    panel.querySelectorAll('.bc-player-card').forEach(card => {
+                if (freshPhotos) {
+                    // Swap initials to photos for partner cards across all panel instances.
+                    document.querySelectorAll('[data-bc-schedule-panel] .bc-player-card').forEach(card => {
                         const memberId = card.dataset.memberId;
                         const photoInfo = freshPhotos[memberId];
                         if (!photoInfo || !photoInfo.photoId) return;
@@ -3526,7 +3564,7 @@
                     // Swap initials to photo for the self card — fetched above since self
                     // is never in the possible players list.
                     if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
-                        const selfCard = panel.querySelector('[data-bc-self-card]');
+                        const selfCard = document.querySelector('[data-bc-schedule-panel] [data-bc-self-card]');
                         if (selfCard && selfMemberId) {
                             const photoInfo = freshPhotos[selfMemberId];
                             const initialsEl = selfCard.querySelector('[data-bc-initials]');
