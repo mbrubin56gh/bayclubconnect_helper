@@ -88,7 +88,9 @@ Bay Club opens booking windows exactly 3 days in advance at the minute of the sl
 **Player list strategy (cache-first)**:
 1. Check `bc_possible_players` and `bc_player_photos` in localStorage. If present, use immediately.
 2. If absent, XHR interception of the native `possiblePlayers` and `photos/members` endpoints populates the cache automatically during any normal booking flow.
-3. As a last resort, a temporary booking POST is made for an available slot to obtain a `courtBookingId`, `possiblePlayers` is fetched, photos are fetched, and both are cached. The temporary booking is never confirmed and expires server-side.
+3. If still absent, `fetchPossiblePlayers` fetches `GET /profile/api/1.0/profile/household` and `GET /buddy-list/api/1.0/buddylist` in parallel. It merges household `addOns` (status `Active`) and buddy list items (status `Approved`), deduped by `personId`. Photos are fetched for all players plus the primary user in the same call, then both player list and photos are cached. No `courtBookingId` is needed.
+- Player objects from household use `memberIdentifier` for photo lookup; buddy list objects use `memberId` for the same concept. Both are normalized to `memberIdentifier` in the merged result. Photo lookups and `data-member-id` card attributes use `player.memberIdentifier || player.memberId` to handle both XHR-cached (old format) and API-fetched (new format) players.
+- The photos API (`checkin/api/1.0/photos/members`) requires **repeated** query params (`?membersIds=X&membersIds=Y`), not comma-separated. Only use a photo when `state !== 'NotAllowed'`.
 - `cachePhotosFromXhr` always **merges** into the existing cache — never replaces — so a sparse on-demand result cannot evict richer XHR-intercepted data.
 
 **Two-step booking API**:

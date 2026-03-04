@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.6
+// @version      0.7S
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -3298,7 +3298,7 @@
                     ? `<img src="${photoUrl}" style="width: 56px; height: 56px; border-radius: 50%; object-fit: cover;" alt="${player.firstName}">`
                     : `<div data-bc-initials style="width: 56px; height: 56px; border-radius: 50%; background: hsl(${hue}, 45%, 45%); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; font-weight: 600;">${initials}</div>`;
 
-                return `<div class="bc-player-card" data-person-id="${player.personId}" data-member-id="${player.memberId}"
+                return `<div class="bc-player-card" data-person-id="${player.personId}" data-member-id="${player.memberIdentifier || player.memberId || ''}"
                     data-first-name="${player.firstName || ''}" data-last-name="${player.lastName || ''}"
                     style="display: flex; flex-direction: column; align-items: center; padding: 8px; cursor: pointer; border-radius: 8px; position: relative; min-width: 80px;">
                     <div data-bc-avatar style="position: relative;">
@@ -3327,7 +3327,7 @@
                     : null;
                 const playerCardsHtml = (selfProfile ? buildSelfCardHtml(selfProfile, selfPhotoUrl) : '') +
                     players.map(player => {
-                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(player.memberId, photosByMemberId);
+                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(player.memberIdentifier || player.memberId, photosByMemberId);
                         return buildPlayerCardHtml(player, photoUrl);
                     }).join('');
 
