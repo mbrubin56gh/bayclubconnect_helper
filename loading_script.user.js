@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.76
+// @version      0.77
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -2068,25 +2068,33 @@
                     return;
                 }
 
-                // Section already present — countdowns are updated by the dedicated interval
-                // in startPendingCountdownUpdates(). Updating textContent here would re-trigger
-                // the MutationObserver, causing scheduleReconcile to loop at requestAnimationFrame 
-                // speed.
-                if (existingSection) return;
-
                 // Insert before app-calendar-cancelled-by-me-list so the pending section
-                // appears near the cancelled bookings area. Fall back through progressively
+                // appears above the cancelled bookings area. Fall back through progressively
                 // broader elements when earlier selectors are absent.
+                const cancelledList = document.querySelector('app-calendar-cancelled-by-me-list');
                 const insertionPoint =
-                    document.querySelector('app-calendar-cancelled-by-me-list') ||
+                    cancelledList ||
                     document.querySelector('app-calendar-events-list') ||
                     document.querySelector('app-paged-list') ||
                     document.querySelector('app-calendar');
                 if (!insertionPoint || !insertionPoint.parentElement) return;
 
+                // Section already present — countdowns are updated by the dedicated interval
+                // in startPendingCountdownUpdates(). Updating textContent here would re-trigger
+                // the MutationObserver, causing scheduleReconcile to loop at requestAnimationFrame
+                // speed. However, if the section was placed before a fallback element because the
+                // cancelled list had not yet rendered, relocate it now. Moving a node is a one-shot
+                // structural change that does not loop.
+                if (existingSection) {
+                    if (cancelledList && existingSection.nextElementSibling !== cancelledList) {
+                        cancelledList.parentElement.insertBefore(existingSection, cancelledList);
+                    }
+                    return;
+                }
+
                 const section = document.createElement('div');
                 section.setAttribute('data-bc-pending-section', '');
-                section.style.cssText = 'margin: 16px 16px 24px; padding: 0;';
+                section.style.cssText = 'margin: 16px 0 24px; padding: 0;';
                 section.innerHTML = `
                     <div style="font-size: 16px; font-weight: 600; color: white; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                         <span>\u23f3</span> Pending Bookings
