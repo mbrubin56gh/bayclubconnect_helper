@@ -263,7 +263,7 @@ async function sendEmailNotification(booking, env) {
            <p>Reason: ${booking.failureReason || 'Unknown error'}</p>
            <p>You can try booking manually on <a href="https://bayclubconnect.com">bayclubconnect.com</a>.</p>`;
 
-    await fetch('https://api.resend.com/emails', {
+    const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${env.RESEND_API_KEY}`,
@@ -276,6 +276,10 @@ async function sendEmailNotification(booking, env) {
             html,
         }),
     });
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Resend sendEmailNotification failed: HTTP ${response.status} ${text}`);
+    }
 }
 
 // Sends a weekly activity summary to the admin email. Queries D1 for the
@@ -382,7 +386,7 @@ async function sendWeeklySummaryEmail(env) {
         </p>
     </div>`;
 
-    await fetch('https://api.resend.com/emails', {
+    const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${env.RESEND_API_KEY}`,
@@ -395,6 +399,10 @@ async function sendWeeklySummaryEmail(env) {
             html,
         }),
     });
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`Resend sendWeeklySummaryEmail failed: HTTP ${response.status} ${text}`);
+    }
 }
 
 // #endregion Email notifications.
