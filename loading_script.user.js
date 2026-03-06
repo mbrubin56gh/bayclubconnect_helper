@@ -61,6 +61,22 @@
     const HITTING_WALL_COURTS = {
         [CLUBS.santaClara]: ['Pickleball 9', 'Pickleball 10'],
     };
+
+    // Centralized localStorage keys used across services.
+    const STORAGE_KEYS = Object.freeze({
+        CLUB_ORDER: 'bc_club_order',
+        VIEW_MODE: 'bc_view_mode',
+        INDOOR_ONLY: 'bc_indoor_only',
+        TIME_RANGE: 'bc_time_range',
+        PLAYERS: 'bc_players',
+        DURATION: 'bc_duration',
+        DEBUG_ENABLED: 'bc_debug_enabled',
+        DEBUG_ENTRIES: 'bc_debug_entries',
+        POSSIBLE_PLAYERS: 'bc_possible_players',
+        PLAYER_PHOTOS: 'bc_player_photos',
+        NOTIFICATION_EMAIL: 'bc_notification_email',
+        SELF_PROFILE: 'bc_self_profile',
+    });
     // #endregion Core constants and club metadata.
 
     // #region Booking state and XHR interception.
@@ -284,7 +300,7 @@
             try {
                 const data = JSON.parse(xhr.responseText);
                 if (data && data.refresh_token) {
-                    const userId = getLocalStorageService().getString('bc_notification_email');
+                    const userId = getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL);
                     if (userId) {
                         getScheduledBookingService().pushRefreshToken(data.refresh_token, userId);
                     }
@@ -648,14 +664,14 @@
             const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
             const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
             const PREF_KEYS = [
-                'bc_club_order', 'bc_view_mode', 'bc_indoor_only',
-                'bc_time_range', 'bc_players', 'bc_duration',
+                STORAGE_KEYS.CLUB_ORDER, STORAGE_KEYS.VIEW_MODE, STORAGE_KEYS.INDOOR_ONLY,
+                STORAGE_KEYS.TIME_RANGE, STORAGE_KEYS.PLAYERS, STORAGE_KEYS.DURATION,
             ];
 
             let debounceTimer = null;
 
             function getUserId() {
-                return getLocalStorageService().getString('bc_notification_email');
+                return getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL);
             }
 
             function readAllPrefsFromLocalStorage() {
@@ -741,8 +757,8 @@
         return function getDebugService() {
             if (serviceInstance) return serviceInstance;
 
-            const DEBUG_ENABLED_KEY = 'bc_debug_enabled';
-            const DEBUG_ENTRIES_KEY = 'bc_debug_entries';
+            const DEBUG_ENABLED_KEY = STORAGE_KEYS.DEBUG_ENABLED;
+            const DEBUG_ENTRIES_KEY = STORAGE_KEYS.DEBUG_ENTRIES;
             const MAX_DEBUG_ENTRIES = 600;
             let debugEnabled = getLocalStorageService().getString(DEBUG_ENABLED_KEY) === '1';
             let logEntries = getLocalStorageService().getJson(DEBUG_ENTRIES_KEY, '[bc] failed to parse stored debug log JSON');
@@ -1173,10 +1189,10 @@
             if (serviceInstance) return serviceInstance;
 
             const SCHEDULED_BOOKING_ADVANCE_DAYS = 3;
-            const POSSIBLE_PLAYERS_KEY = 'bc_possible_players';
-            const PLAYER_PHOTOS_KEY = 'bc_player_photos';
-            const NOTIFICATION_EMAIL_KEY = 'bc_notification_email';
-            const SELF_PROFILE_KEY = 'bc_self_profile';
+            const POSSIBLE_PLAYERS_KEY = STORAGE_KEYS.POSSIBLE_PLAYERS;
+            const PLAYER_PHOTOS_KEY = STORAGE_KEYS.PLAYER_PHOTOS;
+            const NOTIFICATION_EMAIL_KEY = STORAGE_KEYS.NOTIFICATION_EMAIL;
+            const SELF_PROFILE_KEY = STORAGE_KEYS.SELF_PROFILE;
             const PHOTOS_API_BASE = 'https://connect-api.bayclubs.io/checkin/api/1.0';
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
@@ -2233,8 +2249,8 @@
         return function getPreferenceAutoSelectService() {
             if (serviceInstance) return serviceInstance;
             // Use these keys to store previously selected players and duration choices.
-            const PLAYERS_KEY = 'bc_players';
-            const DURATION_KEY = 'bc_duration';
+            const PLAYERS_KEY = STORAGE_KEYS.PLAYERS;
+            const DURATION_KEY = STORAGE_KEYS.DURATION;
             // Set to true while programmatically clicking a fallback duration so the save listener skips it.
             let suppressDurationSave = false;
 
@@ -2325,7 +2341,7 @@
     };
 
     // Stores the club ordering selected by the user for future sessions.
-    const CLUB_ORDER_KEY = 'bc_club_order';
+    const CLUB_ORDER_KEY = STORAGE_KEYS.CLUB_ORDER;
 
     function getClubOrder() {
         const parsed = getLocalStorageService().getJson(CLUB_ORDER_KEY, '[bc] failed to parse stored club order JSON');
@@ -2492,7 +2508,7 @@
     const VIEW_MODE_BY_CLUB = 'by-club';
     const VIEW_MODE_BY_TIME = 'by-time';
 
-    const VIEW_MODE_KEY = 'bc_view_mode';
+    const VIEW_MODE_KEY = STORAGE_KEYS.VIEW_MODE;
 
     function getViewMode() {
         return getLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
@@ -2519,7 +2535,7 @@
         });
     }
 
-    const INDOOR_ONLY_KEY = 'bc_indoor_only';
+    const INDOOR_ONLY_KEY = STORAGE_KEYS.INDOOR_ONLY;
 
     function getShowIndoorClubsOnly() {
         const saved = getLocalStorageService().getJson(INDOOR_ONLY_KEY, '[bc] failed to parse stored indoor-only JSON');
@@ -2566,7 +2582,7 @@
     const SLIDER_STEP_MINUTES = 30;
     const SLIDER_STOPS = (SLIDER_MAX_MINUTES - SLIDER_MIN_MINUTES) / SLIDER_STEP_MINUTES; // 32 intervals (16 hours × 2)
 
-    const TIME_RANGE_KEY = 'bc_time_range';
+    const TIME_RANGE_KEY = STORAGE_KEYS.TIME_RANGE;
 
     function getTimeRange() {
         const parsed = getLocalStorageService().getJson(TIME_RANGE_KEY, '[bc] failed to parse stored time range JSON');
@@ -3271,7 +3287,7 @@
             }
 
             function getRequiredPartnerCount() {
-                const playersPref = getLocalStorageService().getString('bc_players');
+                const playersPref = getLocalStorageService().getString(STORAGE_KEYS.PLAYERS);
                 if (playersPref === 'Doubles') return 3;
                 return 1;
             }
@@ -3337,7 +3353,7 @@
                     ? `today at ${fireAtTimeLabel}`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-                const selfProfile = getLocalStorageService().getJson('bc_self_profile', '[bc] failed to parse self profile');
+                const selfProfile = getLocalStorageService().getJson(STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile');
                 const selfPhotoUrl = selfProfile && selfProfile.memberId
                     ? getScheduledBookingService().getPlayerPhotoUrl(selfProfile.memberId, photosByMemberId)
                     : null;
@@ -3547,7 +3563,7 @@
                 // Fetch fresh photos as needed. The logged-in user is never in the possible
                 // players list (you cannot invite yourself), so their photo must be fetched
                 // separately even when other player photos are already cached.
-                const selfProfileForPhoto = getLocalStorageService().getJson('bc_self_profile', '[bc] failed to parse self profile');
+                const selfProfileForPhoto = getLocalStorageService().getJson(STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile');
                 const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
                 const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
                 const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
