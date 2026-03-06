@@ -647,6 +647,32 @@
             return serviceInstance;
         };
     })();
+
+    // Keeps Worker endpoint and secret private while exposing only minimal helpers.
+    const getWorkerApiConfigService = (() => {
+        let serviceInstance = null;
+
+        return function getWorkerApiConfigService() {
+            if (serviceInstance) return serviceInstance;
+
+            const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
+            const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
+
+            function buildUrl(path) {
+                return `${WORKER_URL}${path}`;
+            }
+
+            function getSecretHeaderValue() {
+                return WORKER_SECRET;
+            }
+
+            serviceInstance = {
+                buildUrl,
+                getSecretHeaderValue,
+            };
+            return serviceInstance;
+        };
+    })();
     // #endregion DOM query and localStorage services.
 
     // #region Preference sync service.
@@ -661,8 +687,6 @@
         return function getPreferenceSyncService() {
             if (serviceInstance) return serviceInstance;
 
-            const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
-            const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
             const PREF_KEYS = [
                 STORAGE_KEYS.CLUB_ORDER, STORAGE_KEYS.VIEW_MODE, STORAGE_KEYS.INDOOR_ONLY,
                 STORAGE_KEYS.TIME_RANGE, STORAGE_KEYS.PLAYERS, STORAGE_KEYS.DURATION,
@@ -696,9 +720,12 @@
                 if (!userId) return;
                 const prefs = readAllPrefsFromLocalStorage();
                 try {
-                    const response = await fetch(`${WORKER_URL}/prefs`, {
+                    const response = await fetch(getWorkerApiConfigService().buildUrl('/prefs'), {
                         method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': WORKER_SECRET },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Worker-Secret': getWorkerApiConfigService().getSecretHeaderValue(),
+                        },
                         body: JSON.stringify({ userId, prefs }),
                     });
                     if (!response.ok) {
@@ -713,8 +740,11 @@
                 const userId = getUserId();
                 if (!userId) return;
                 try {
-                    const response = await fetch(`${WORKER_URL}/prefs`, {
-                        headers: { 'X-Worker-Secret': WORKER_SECRET, 'X-User-Id': userId },
+                    const response = await fetch(getWorkerApiConfigService().buildUrl('/prefs'), {
+                        headers: {
+                            'X-Worker-Secret': getWorkerApiConfigService().getSecretHeaderValue(),
+                            'X-User-Id': userId,
+                        },
                     });
                     if (!response.ok) return;
                     const prefs = await response.json();
@@ -1197,9 +1227,6 @@
             const PHOTO_CDN_BASE = 'https://photomanagement-cdn.bayclubs.io/api/1.0/pub/photos';
             const SUBSCRIPTION_KEY = 'bac44a2d04b04413b6aea6d4e3aad294';
 
-            const WORKER_URL = 'https://bayclubconnect-bookings.mark-rubin.workers.dev';
-            const WORKER_SECRET = '724468735aec045b6ec464fce6dce1133142bb3a8fcc2cfd68dc0abdebbd0c3d';
-
             const SCHEDULED_STATUS_PENDING = 'pending';
             const SCHEDULED_STATUS_FIRING = 'firing';
             const SCHEDULED_STATUS_FAILED = 'failed';
@@ -1222,7 +1249,7 @@
             // Cloudflare Worker. The secret is shared between the extension and the Worker
             // via the WORKER_SECRET environment variable set with wrangler secret put.
             function workerHeaders() {
-                return { 'X-Worker-Secret': WORKER_SECRET };
+                return { 'X-Worker-Secret': getWorkerApiConfigService().getSecretHeaderValue() };
             }
 
             // Persistence helpers.
@@ -1236,7 +1263,7 @@
             // page reconciliation loop re-runs with the fresh data immediately.
             async function fetchAllFromWorker() {
                 try {
-                    const response = await fetch(`${WORKER_URL}/bookings`, { headers: workerHeaders() });
+                    const response = await fetch(getWorkerApiConfigService().buildUrl('/bookings'), { headers: workerHeaders() });
                     if (!response.ok) {
                         getDebugService().log('warn', 'worker-get-bookings-failed', { status: response.status });
                         return;
@@ -1281,7 +1308,7 @@
             // Worker's KV store. Used when the user dismisses a failed booking row.
             function dismissBooking(id) {
                 cachedBookings = cachedBookings.filter(b => b.id !== id);
-                fetch(`${WORKER_URL}/bookings/${id}`, {
+                fetch(getWorkerApiConfigService().buildUrl(`/bookings/${id}`), {
                     method: 'DELETE',
                     headers: workerHeaders(),
                 }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
@@ -1502,7 +1529,7 @@
 
                 cachedBookings = [...cachedBookings, booking];
                 try {
-                    const response = await fetch(`${WORKER_URL}/bookings`, {
+                    const response = await fetch(getWorkerApiConfigService().buildUrl('/bookings'), {
                         method: 'POST',
                         headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
                         body: JSON.stringify(booking),
@@ -1534,7 +1561,7 @@
 
             function cancelBooking(id) {
                 cachedBookings = cachedBookings.filter(b => b.id !== id);
-                fetch(`${WORKER_URL}/bookings/${id}`, {
+                fetch(getWorkerApiConfigService().buildUrl(`/bookings/${id}`), {
                     method: 'DELETE',
                     headers: workerHeaders(),
                 }).catch(e => getDebugService().log('warn', 'worker-delete-booking-failed', { error: e.message }));
@@ -1581,7 +1608,7 @@
             // Per-user keys prevent multiple extension users from overwriting each
             // other's tokens in KV.
             function pushRefreshToken(token, userId) {
-                fetch(`${WORKER_URL}/token`, {
+                fetch(getWorkerApiConfigService().buildUrl('/token'), {
                     method: 'PUT',
                     headers: Object.assign({ 'Content-Type': 'application/json' }, workerHeaders()),
                     body: JSON.stringify({ refresh_token: token, userId }),
