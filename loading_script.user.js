@@ -1643,7 +1643,8 @@
         return function getBookingsDomQueryService() {
             if (serviceInstance) return serviceInstance;
 
-            const EVENTS_LIST_SELECTOR = 'app-calendar-events-list app-racquet-sports-booking-calendar-event';
+            // Bay Club has used different list containers over time; support both.
+            const EVENTS_LIST_SELECTOR = 'app-paged-list app-racquet-sports-booking-calendar-event, app-calendar-events-list app-racquet-sports-booking-calendar-event';
             const DESKTOP_TILE_SELECTOR = '.item-tile.d-none.d-md-flex';
             const BOOKING_DETAILS_HEADER_SELECTOR = '.image-background .px-4.pb-4';
             const RESERVATION_MADE_BY_ROW_SELECTOR = '.row.mt-2.size-14';
