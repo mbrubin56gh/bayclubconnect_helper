@@ -468,7 +468,7 @@ function jsonResponse(data, status) {
 
 function checkSecret(request, env) {
     const secret = request.headers.get('X-Worker-Secret');
-    return secret && secret === env.WORKER_SECRET;
+    return !!secret && secret === env.WORKER_SECRET;
 }
 
 // Accepts the secret via X-Worker-Secret header OR ?secret= query param so
@@ -476,7 +476,28 @@ function checkSecret(request, env) {
 function checkSecretFlexible(request, env) {
     const url = new URL(request.url);
     const s = request.headers.get('X-Worker-Secret') || url.searchParams.get('secret');
-    return s && s === env.WORKER_SECRET;
+    return !!s && s === env.WORKER_SECRET;
+}
+
+async function readJsonBody(request) {
+    try {
+        return { ok: true, data: await request.json() };
+    } catch (_e) {
+        return { ok: false, response: new Response('Invalid JSON body', { status: 400 }) };
+    }
+}
+
+function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidBookingPayload(booking) {
+    return isPlainObject(booking) &&
+        typeof booking.id === 'string' &&
+        booking.id.length > 0 &&
+        Number.isFinite(booking.fireAtMs) &&
+        isPlainObject(booking.bookingBody) &&
+        isPlainObject(booking.confirmBody);
 }
 
 async function handleRequest(request, env) {
@@ -564,8 +585,16 @@ async function handleRequest(request, env) {
     }
 
     if (method === 'POST' && path === '/bookings') {
-        const booking = await request.json();
+        const parsed = await readJsonBody(request);
+        if (!parsed.ok) return parsed.response;
+        const booking = parsed.data;
+        if (!isValidBookingPayload(booking)) {
+            return new Response('Bad Request', { status: 400 });
+        }
         const bookings = await loadBookings(env);
+        if (bookings.some(b => b.id === booking.id)) {
+            return jsonResponse({ ok: true, duplicate: true });
+        }
         bookings.push(booking);
         await saveBookings(env, bookings);
         return jsonResponse({ ok: true });
@@ -593,8 +622,12 @@ async function handleRequest(request, env) {
     // every page load, keeping each user's token perpetually up to date without
     // manual intervention.
     if (method === 'PUT' && path === '/token') {
-        const { refresh_token: newToken, userId } = await request.json();
-        if (!newToken) return new Response('Bad Request', { status: 400 });
+        const parsed = await readJsonBody(request);
+        if (!parsed.ok) return parsed.response;
+        const { refresh_token: newToken, userId } = parsed.data || {};
+        if (typeof newToken !== 'string' || newToken.length === 0 || typeof userId !== 'string' || userId.length === 0) {
+            return new Response('Bad Request', { status: 400 });
+        }
         await env.BC_BOOKINGS.put(tokenKvKey(userId), newToken);
         await env.BC_BOOKINGS.put(KV_LAST_REFRESH, new Date().toISOString());
         return jsonResponse({ ok: true });
@@ -612,8 +645,12 @@ async function handleRequest(request, env) {
     // Stores the full preference object for a user. Called whenever the user
     // changes a preference, with an 800 ms debounce on the extension side.
     if (method === 'PUT' && path === '/prefs') {
-        const { userId, prefs } = await request.json();
-        if (!userId || !prefs) return new Response('Bad Request', { status: 400 });
+        const parsed = await readJsonBody(request);
+        if (!parsed.ok) return parsed.response;
+        const { userId, prefs } = parsed.data || {};
+        if (typeof userId !== 'string' || userId.length === 0 || !isPlainObject(prefs)) {
+            return new Response('Bad Request', { status: 400 });
+        }
         await savePrefs(env, userId, prefs);
         return jsonResponse({ ok: true });
     }
