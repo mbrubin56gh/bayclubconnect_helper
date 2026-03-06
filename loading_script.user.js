@@ -1756,7 +1756,7 @@
                 return null;
             }
 
-            function timePartsTo24Hour(hour12, minute, meridiem) {
+            function timePartsTo24Hour(hour12, meridiem) {
                 const normalizedHour = hour12 % 12;
                 if (meridiem === 'PM') return normalizedHour + 12;
                 return normalizedHour;
@@ -1792,7 +1792,7 @@
                 const endMinute = parseInt(match[4], 10);
                 const endMeridiem = match[5].toUpperCase();
 
-                const endHour24 = timePartsTo24Hour(endHour12, endMinute, endMeridiem);
+                const endHour24 = timePartsTo24Hour(endHour12, endMeridiem);
                 const startHour24 = inferStartHour24(startHour12, endHour24);
                 return {
                     startHour24,
