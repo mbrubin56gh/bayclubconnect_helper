@@ -210,7 +210,7 @@ Server-side component that executes scheduled bookings without requiring the bro
 - **Email**: Resend API, sender `notifications@bayclubhelper.app`. `RESEND_API_KEY` secret. Recipient is `notificationEmail` embedded in the booking record (fetched from `profile/api/1.0/profile` at scheduling time and cached to `bc_notification_email` in localStorage).
 - **CORS**: allows `https://bayclubconnect.com` for `GET, POST, PUT, DELETE, OPTIONS`.
 - **HTTP endpoints**:
-  - `GET /status` — public health check
+  - `GET /status` — public health check (aggregate only); includes full `scheduledBookings` only when secret-authenticated
   - `GET /bookings` — list all bookings (secret required)
   - `POST /bookings` — add a booking (secret required)
   - `DELETE /bookings/{id}` — remove a booking (secret required)

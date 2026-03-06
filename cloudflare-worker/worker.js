@@ -596,6 +596,8 @@ async function handleRequest(request, env) {
     const method = request.method;
 
     // Health check — publicly readable, no secret required.
+    // Returns aggregate state for everyone; includes full booking details only
+    // when a valid secret is supplied.
     if (method === 'GET' && path === '/status') {
         const bookings = await loadBookings(env);
         const lastRefresh = await env.BC_BOOKINGS.get(KV_LAST_REFRESH);
@@ -603,12 +605,15 @@ async function handleRequest(request, env) {
         const nextFireAt = pending.length > 0
             ? new Date(Math.min(...pending.map(b => b.fireAtMs))).toISOString()
             : null;
-        return jsonResponse({
+        const statusPayload = {
             lastTokenRefresh: lastRefresh,
             pendingBookings: pending.length,
             nextFireAt,
-            scheduledBookings: bookings,
-        });
+        };
+        if (checkSecretFlexible(request, env)) {
+            statusPayload.scheduledBookings = bookings;
+        }
+        return jsonResponse(statusPayload);
     }
 
     // Dashboard and history accept the secret via query param for browser bookmarking.

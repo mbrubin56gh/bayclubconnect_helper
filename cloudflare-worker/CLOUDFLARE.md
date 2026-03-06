@@ -233,7 +233,7 @@ that origin).
 
 | Method + Path | Auth required | Purpose |
 |---------------|--------------|---------|
-| `GET /status` | No | Health check. Returns pending booking count, next fire time, last token refresh timestamp, and full booking list. Useful for debugging. |
+| `GET /status` | No | Health check. Public response includes pending booking count, next fire time, and last token refresh timestamp. Full booking list is returned only when a valid worker secret is supplied. |
 | `GET /bookings` | Yes | Returns the full bookings array. Used by the extension to sync its local cache. |
 | `POST /bookings` | Yes | Adds a booking record. Called when user clicks Schedule. |
 | `DELETE /bookings/{id}` | Yes | Removes a booking. Called on Cancel or Dismiss. |
