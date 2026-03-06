@@ -1492,6 +1492,7 @@
                         throw new Error(`Worker rejected booking: HTTP ${response.status}`);
                     }
                 } catch (e) {
+                    cachedBookings = cachedBookings.filter(b => b.id !== booking.id);
                     getDebugService().log('warn', 'worker-post-booking-failed', { error: e.message });
                     throw e;
                 }
