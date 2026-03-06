@@ -680,11 +680,14 @@
                 if (!userId) return;
                 const prefs = readAllPrefsFromLocalStorage();
                 try {
-                    await fetch(`${WORKER_URL}/prefs`, {
+                    const response = await fetch(`${WORKER_URL}/prefs`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json', 'X-Worker-Secret': WORKER_SECRET },
                         body: JSON.stringify({ userId, prefs }),
                     });
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
                 } catch (e) {
                     getDebugService().log('warn', 'prefs-push-failed', { error: e.message });
                 }
