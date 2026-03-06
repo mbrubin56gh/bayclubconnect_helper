@@ -1601,6 +1601,9 @@
                             });
                         }
                     }
+                    if (userId) {
+                        getLocalStorageService().setString(NOTIFICATION_EMAIL_KEY, userId);
+                    }
                 } catch (_e) {
                     // Ignore parse errors — app storage format may change.
                 }
@@ -4298,7 +4301,7 @@
     createBookingsCalendarExportInstaller();
     createDashboardDebugActivationMonitor();
     createBookingFlowMonitor();
-    getPreferenceSyncService().initializeOnPageLoad();
     getScheduledBookingService().initializeOnPageLoad();
+    getPreferenceSyncService().initializeOnPageLoad();
     // #endregion Startup installers and bootstrap.
 })();
