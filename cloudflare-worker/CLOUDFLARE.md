@@ -74,18 +74,11 @@ has the Cloudflare ID `299d14645bed49458addc9751cc6c241`. It holds these keys:
 | `refresh_token:{email}` | Current valid Bay Club refresh token for that user. **Single-use** — the Worker rotates it on every use. One entry per extension user (keyed by their Bay Club account email). |
 | `scheduled_bookings` | JSON array of all booking records (pending, fired, failed, cancelled). |
 | `last_token_refresh` | ISO timestamp of the most recent token rotation (any user). Visible on `/status` as a sanity check. |
-| `cron_lease` | Best-effort cron lease record (`ownerId`, `acquiredAtMs`, `expiresAtMs`) used to reduce overlapping cron executions. |
 
 Tokens are stored per-user so multiple people using the extension don't
 overwrite each other's tokens. When the Worker fires a booking it looks up
 `refresh_token:{booking.notificationEmail}` to get the right token for that
 booking's owner.
-
-The Worker also uses a short-lived KV lease (`cron_lease`) before each cron
-tick. This is a practical overlap guard, not a strict mutex: KV is eventually
-consistent and does not provide atomic compare-and-set semantics. For this
-project scope, that best-effort lease substantially reduces duplicate firing
-risk while keeping implementation simple.
 
 ---
 

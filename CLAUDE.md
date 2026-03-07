@@ -203,9 +203,9 @@ Server-side component that executes scheduled bookings without requiring the bro
 
 - **Worker URL**: `https://bayclubconnect-bookings.mark-rubin.workers.dev`
 - **Secrets** (set via `wrangler secret put`): `WORKER_SECRET`, `RESEND_API_KEY`
-- **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token:{email}` (per user), `scheduled_bookings`, `last_token_refresh`, `prefs:{email}` (per user), `cron_lease` (best-effort cron overlap guard)
+- **KV namespace**: `BC_BOOKINGS` (id `299d14645bed49458addc9751cc6c241`); keys: `refresh_token:{email}` (per user), `scheduled_bookings`, `last_token_refresh`, `prefs:{email}` (per user)
 - **D1 database**: `bayclubconnect-history` (id `e1f2166f-1c61-47f4-8675-bfa4a003d29a`); bound as `DB`; table `booking_history` — permanent record of every completed, failed, or cancelled booking. Rows written via `appendToHistory()` after every cron outcome and every cancel/dismiss. Uses `INSERT OR IGNORE` to prevent duplicates.
-- **Cron**: every minute — acquires a best-effort KV lease (`cron_lease`) to reduce overlapping tick execution, then finds `status === 'pending'` bookings whose `fireAtMs` has passed, marks `firing`, calls Bay Club two-step booking API, saves result, sends email. This lease is intentionally best-effort (KV is eventually consistent), not a strict distributed mutex.
+- **Cron**: every minute — finds `status === 'pending'` bookings whose `fireAtMs` has passed, marks `firing`, calls Bay Club two-step booking API, saves result, sends email
 - **Auth**: Bay Club refresh token stored in KV per-user under `refresh_token:{notificationEmail}`; rotated immediately after every use (single-use tokens). `client_id=connect20`, `client_secret=connectSecret` for both password and refresh grants. Per-user storage prevents multiple extension users from overwriting each other's tokens.
 - **Email**: Resend API, sender `notifications@bayclubhelper.app`. `RESEND_API_KEY` secret. Recipient is `notificationEmail` embedded in the booking record (fetched from `profile/api/1.0/profile` at scheduling time and cached to `bc_notification_email` in localStorage).
 - **CORS**: allows `https://bayclubconnect.com` for `GET, POST, PUT, DELETE, OPTIONS`.

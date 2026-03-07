@@ -5,7 +5,6 @@
 //   scheduled_bookings    — JSON array of booking records
 //   last_token_refresh    — ISO timestamp of the most recent token rotation (any user)
 //   prefs:{email}         — JSON object of synced user preferences
-//   cron_lease            — best-effort lease record used to reduce overlapping cron execution
 //
 // D1 database (BC_BOOKINGS_HISTORY binding, bayclubconnect-history):
 //   booking_history — permanent record of all completed/cancelled bookings
@@ -49,7 +48,6 @@ const WEEKLY_SUMMARY_CRON = '0 16 * * 1';
 const KV_BOOKINGS = 'scheduled_bookings';
 const KV_LAST_REFRESH = 'last_token_refresh';
 const KV_PREFS = 'prefs';
-const KV_CRON_LEASE = 'cron_lease';
 
 const STATUS_PENDING = 'pending';
 const STATUS_FIRING = 'firing';
@@ -412,76 +410,6 @@ async function sendWeeklySummaryEmail(env) {
 // #region Cron tick.
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const CRON_LEASE_TTL_MS = 90 * 1000; // 90 seconds.
-
-// Attempts to acquire a best-effort lease in KV for cron execution.
-//
-// Important behavior note:
-// Cloudflare KV is eventually consistent and does not provide a strict atomic
-// compare-and-set primitive, so this is not a perfect distributed mutex. It is
-// still useful to significantly reduce overlap risk in the normal case.
-//
-// Lease format:
-//   {
-//     ownerId: string,     // unique token for this cron invocation
-//     acquiredAtMs: number,
-//     expiresAtMs: number   // self-expiry safety if release never runs
-//   }
-//
-// Return value:
-//   ownerId string when lease is acquired, otherwise null.
-async function tryAcquireCronLease(env, nowMs) {
-    const ownerId = crypto.randomUUID();
-
-    // Read existing lease first. If it is still valid, we should not run this tick.
-    const existingRaw = await env.BC_BOOKINGS.get(KV_CRON_LEASE);
-    if (existingRaw) {
-        try {
-            const existingLease = JSON.parse(existingRaw);
-            if (Number.isFinite(existingLease.expiresAtMs) && existingLease.expiresAtMs > nowMs) {
-                return null;
-            }
-        } catch (_e) {
-            // If lease JSON is malformed, treat it as stale and overwrite below.
-        }
-    }
-
-    const leaseRecord = {
-        ownerId,
-        acquiredAtMs: nowMs,
-        expiresAtMs: nowMs + CRON_LEASE_TTL_MS,
-    };
-
-    // Write our lease record, then verify ownership by reading back.
-    // This read-after-write check narrows (but does not eliminate) races where
-    // near-simultaneous cron invocations compete for the same lease key.
-    await env.BC_BOOKINGS.put(KV_CRON_LEASE, JSON.stringify(leaseRecord));
-
-    const confirmedRaw = await env.BC_BOOKINGS.get(KV_CRON_LEASE);
-    if (!confirmedRaw) return null;
-    try {
-        const confirmedLease = JSON.parse(confirmedRaw);
-        return confirmedLease.ownerId === ownerId ? ownerId : null;
-    } catch (_e) {
-        return null;
-    }
-}
-
-// Releases the cron lease only when this invocation still owns it.
-// Owner check is required so one tick cannot accidentally delete a newer lease
-// acquired by another tick after expiration.
-async function releaseCronLease(env, ownerId) {
-    if (!ownerId) return;
-    const raw = await env.BC_BOOKINGS.get(KV_CRON_LEASE);
-    if (!raw) return;
-    try {
-        const lease = JSON.parse(raw);
-        if (lease.ownerId !== ownerId) return;
-    } catch (_e) {
-        return;
-    }
-    await env.BC_BOOKINGS.delete(KV_CRON_LEASE);
-}
 
 // Runs every minute. Finds all pending bookings whose fireAtMs has passed,
 // marks them firing (to prevent double-fire on concurrent ticks), then
@@ -489,59 +417,49 @@ async function releaseCronLease(env, ownerId) {
 // bookings so the KV value does not grow without bound.
 async function runCronTick(env) {
     const now = Date.now();
-    const leaseOwnerId = await tryAcquireCronLease(env, now);
-    if (!leaseOwnerId) {
-        // Another invocation currently holds the lease.
-        return;
+    const bookings = await loadBookings(env);
+
+    // Prune succeeded, failed, and cancelled bookings older than 7 days.
+    const retained = bookings.filter(b => {
+        const isTerminal = b.status === STATUS_SUCCEEDED ||
+            b.status === STATUS_FAILED ||
+            b.status === 'cancelled';
+        return !isTerminal || (now - (b.fireAtMs || b.createdAtMs || 0)) < RETENTION_MS;
+    });
+    if (retained.length !== bookings.length) {
+        await saveBookings(env, retained);
     }
 
-    try {
-        const bookings = await loadBookings(env);
+    const due = retained.filter(b => b.status === STATUS_PENDING && b.fireAtMs <= now);
+    if (due.length === 0) return;
 
-        // Prune succeeded, failed, and cancelled bookings older than 7 days.
-        const retained = bookings.filter(b => {
-            const isTerminal = b.status === STATUS_SUCCEEDED ||
-                b.status === STATUS_FAILED ||
-                b.status === 'cancelled';
-            return !isTerminal || (now - (b.fireAtMs || b.createdAtMs || 0)) < RETENTION_MS;
+    // Mark all due bookings as firing before any async work so a concurrent
+    // cron tick (Cloudflare may overlap) cannot pick them up again.
+    for (const booking of due) {
+        booking.status = STATUS_FIRING;
+    }
+    await saveBookings(env, retained);
+
+    // Fire each booking and record the result.
+    for (const booking of due) {
+        try {
+            await fireBooking(booking, env);
+            booking.status = STATUS_SUCCEEDED;
+            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now());
+        } catch (error) {
+            booking.status = STATUS_FAILED;
+            booking.failureReason = error.message || String(error);
+            await appendToHistory(env, booking, STATUS_FAILED, booking.failureReason, Date.now());
+        }
+    }
+
+    await saveBookings(env, retained);
+
+    // Send email notification for each completed booking.
+    for (const booking of due) {
+        await sendEmailNotification(booking, env).catch(() => {
+            // Non-critical: log failure but don't let it affect booking status.
         });
-        if (retained.length !== bookings.length) {
-            await saveBookings(env, retained);
-        }
-
-        const due = retained.filter(b => b.status === STATUS_PENDING && b.fireAtMs <= now);
-        if (due.length === 0) return;
-
-        // Mark all due bookings as firing before any async work so a concurrent
-        // cron tick (Cloudflare may overlap) cannot pick them up again.
-        for (const booking of due) {
-            booking.status = STATUS_FIRING;
-        }
-        await saveBookings(env, retained);
-
-        // Fire each booking and record the result.
-        for (const booking of due) {
-            try {
-                await fireBooking(booking, env);
-                booking.status = STATUS_SUCCEEDED;
-                await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now());
-            } catch (error) {
-                booking.status = STATUS_FAILED;
-                booking.failureReason = error.message || String(error);
-                await appendToHistory(env, booking, STATUS_FAILED, booking.failureReason, Date.now());
-            }
-        }
-
-        await saveBookings(env, retained);
-
-        // Send email notification for each completed booking.
-        for (const booking of due) {
-            await sendEmailNotification(booking, env).catch(() => {
-                // Non-critical: log failure but don't let it affect booking status.
-            });
-        }
-    } finally {
-        await releaseCronLease(env, leaseOwnerId);
     }
 }
 
