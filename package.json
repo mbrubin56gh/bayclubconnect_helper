@@ -4,7 +4,10 @@
   "description": "This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It has only been tested on desktop Chrome.",
   "main": "loading_script.user.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test:script": "vitest run --config vitest.config.mjs",
+    "test:script:watch": "vitest --config vitest.config.mjs",
+    "test:worker": "cd cloudflare-worker && npm test",
+    "test": "npm run test:script && npm run test:worker"
   },
   "repository": {
     "type": "git",
@@ -21,6 +24,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.0.2",
-    "globals": "^17.3.0"
+    "globals": "^17.3.0",
+    "jsdom": "^26.0.0",
+    "vitest": "^2.0.0"
   }
 }

@@ -2160,6 +2160,23 @@
                 return `We will attempt to book this in ${remaining} on ${datePart} at ${timePart}`;
             }
 
+            // Populate the test-export accumulator with the pure utility functions defined
+            // in this installer. Called once during IIFE startup; used by module.exports at
+            // the end of the script for Vitest access. Has no effect in the browser.
+            Object.assign(_bcTestExports, {
+                normalizeWhitespace,
+                timePartsTo24Hour,
+                inferStartHour24,
+                parseTimeRange,
+                toGoogleDateStamp,
+                buildGoogleCalendarUrl,
+                toIcsDateStamp,
+                sanitizeIcsText,
+                buildIcsContent,
+                getIcsDownloadFileName,
+                formatCountdown,
+            });
+
             function buildPendingBookingRowHtml(booking) {
                 const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
                 const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
@@ -4476,6 +4493,11 @@
     })();
 
 
+    // Accumulator for pure utility functions that the Vitest test suite imports.
+    // Populated by createBookingsCalendarExportInstaller() during startup.
+    // Has no effect in the browser — module is undefined there.
+    const _bcTestExports = {};
+
     // Start script services and monitoring.
     installXhrInterceptors();
     createCardSelectionStyleInstaller();
@@ -4485,4 +4507,12 @@
     getScheduledBookingService().initializeOnPageLoad();
     getPreferenceSyncService().initializeOnPageLoad();
     // #endregion Startup installers and bootstrap.
+
+    // Test exports — active only in CommonJS/Node environments (Vitest), never in the browser.
+    // pacificSlotTimeMs is at IIFE top-level scope; the rest are collected via _bcTestExports.
+    if (typeof module !== 'undefined') {
+        _bcTestExports.pacificSlotTimeMs = pacificSlotTimeMs;
+        // eslint-disable-next-line no-undef
+        module.exports = _bcTestExports;
+    }
 })();

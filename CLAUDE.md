@@ -265,6 +265,16 @@ These are the main Bay Club behaviors and DOM patterns the helper depends on. Wh
 
 ESLint with flat config (`eslint.config.mjs`). Intentionally unused args, vars, and caught errors can be prefixed with `_` and are ignored by lint. When you lint, check for function calls that don't agree with the arity of the functions being called.
 
+## Userscript Tests
+
+The userscript has a Vitest suite (`loading_script.test.mjs`) covering pure utility functions that have historically had bugs. Run it after any change to `loading_script.user.js`:
+
+```bash
+npm run test:script
+```
+
+Functions covered: `pacificSlotTimeMs`, `timePartsTo24Hour`, `inferStartHour24`, `parseTimeRange`, `normalizeWhitespace`, `buildGoogleCalendarUrl`, `buildIcsContent`, `getIcsDownloadFileName`, `formatCountdown`, and their helpers. The script is loaded under jsdom via a `module.exports` escape hatch at the end of the IIFE (`_bcTestExports` accumulator). External fetch calls are stubbed in `vitest.setup.mjs`.
+
 ## Worker Tests
 
 The Cloudflare Worker has a Vitest suite. Run it after any change to `cloudflare-worker/worker.js` and before running `wrangler deploy`:
@@ -274,3 +284,9 @@ cd cloudflare-worker && npm test
 ```
 
 Tests cover all HTTP endpoints, pure helper functions, and the cron tick logic (KV and D1 are in-memory mocks; external fetch calls are stubbed). See `cloudflare-worker/CLOUDFLARE.md` → Testing for details.
+
+## Running All Tests
+
+```bash
+npm test   # runs test:script then test:worker
+```
