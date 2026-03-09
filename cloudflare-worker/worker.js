@@ -870,3 +870,17 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
 }
 
 // #endregion Dashboard.
+
+// Named exports for unit testing — the Cloudflare runtime only invokes the
+// default export's fetch and scheduled handlers, so these have no effect on
+// production behavior.
+export {
+    tokenKvKey,
+    isPlainObject,
+    isValidBookingPayload,
+    escHtml,
+    checkSecret,
+    checkSecretFlexible,
+    handleRequest,
+    runCronTick,
+};

@@ -283,6 +283,41 @@ then update the Wrangler secret: `wrangler secret put RESEND_API_KEY`.
 
 ---
 
+## Testing
+
+The worker has a Vitest test suite (`worker.test.js`) that runs entirely in Node —
+no Cloudflare account or deployment needed. KV and D1 are replaced with
+lightweight in-memory mocks; external fetch calls (Bay Club auth, booking APIs,
+Resend) are stubbed.
+
+### Running the tests
+
+```bash
+cd cloudflare-worker
+npm install        # first time only — installs vitest
+npm test           # run all tests once
+npm run test:watch # watch mode during active development
+```
+
+### What is covered
+
+| Area | What the tests verify |
+|------|-----------------------|
+| Pure helpers | `tokenKvKey`, `isPlainObject`, `isValidBookingPayload`, `escHtml`, `checkSecret`, `checkSecretFlexible` |
+| Endpoint routing | Every HTTP endpoint: correct status codes, auth guards, request validation, KV reads/writes |
+| `POST /bookings` | Adds booking, detects duplicates, rejects invalid payloads |
+| `DELETE /bookings/:id` | Removes booking, writes history row, returns ok for unknown id |
+| `PUT /token` | Stores per-user token, validates required fields |
+| `GET /prefs` / `PUT /prefs` | Reads and writes per-user preference objects |
+| Cron tick | No-op when nothing is due; fires due bookings; marks succeeded/failed; prunes old terminal bookings; skips already-firing bookings; fires multiple bookings in one tick |
+
+### When to run
+
+Run `npm test` from `cloudflare-worker/` after any change to `worker.js` before
+deploying with `wrangler deploy`.
+
+---
+
 ## Day-to-Day Dev Workflow
 
 ### Prerequisites

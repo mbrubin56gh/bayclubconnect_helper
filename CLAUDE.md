@@ -264,3 +264,13 @@ These are the main Bay Club behaviors and DOM patterns the helper depends on. Wh
 ## Linting
 
 ESLint with flat config (`eslint.config.mjs`). Intentionally unused args, vars, and caught errors can be prefixed with `_` and are ignored by lint. When you lint, check for function calls that don't agree with the arity of the functions being called.
+
+## Worker Tests
+
+The Cloudflare Worker has a Vitest suite. Run it after any change to `cloudflare-worker/worker.js` and before running `wrangler deploy`:
+
+```bash
+cd cloudflare-worker && npm test
+```
+
+Tests cover all HTTP endpoints, pure helper functions, and the cron tick logic (KV and D1 are in-memory mocks; external fetch calls are stubbed). See `cloudflare-worker/CLOUDFLARE.md` → Testing for details.
