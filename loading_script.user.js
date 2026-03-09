@@ -1865,9 +1865,9 @@
                 const endMinute = parseInt(match[5], 10);
                 const endMeridiem = match[6].toUpperCase();
 
-                const endHour24 = timePartsTo24Hour(endHour12, endMinute, endMeridiem);
+                const endHour24 = timePartsTo24Hour(endHour12, endMeridiem);
                 const startHour24 = startMeridiem
-                    ? timePartsTo24Hour(startHour12, startMinute, startMeridiem)
+                    ? timePartsTo24Hour(startHour12, startMeridiem)
                     : inferStartHour24(startHour12, endHour24);
                 return {
                     startHour24,
