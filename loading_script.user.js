@@ -2187,6 +2187,37 @@
                 </div>`;
             }
 
+            // Builds a calendar data object for a pending scheduled booking so the user
+            // can add a tentative calendar entry before the booking is confirmed.
+            // Uses pacificSlotTimeMs so the timestamps are correct regardless of locale.
+            // The court name is extracted from slotLabel ("Club · Court · Time · Date").
+            function buildCalendarDataForPendingBooking(booking) {
+                const body = booking.bookingBody;
+                const dateStr = body && body.date && body.date.value;
+                if (!dateStr || body.timeFromInMinutes == null || body.timeToInMinutes == null) return null;
+                const startDate = new Date(pacificSlotTimeMs(dateStr, body.timeFromInMinutes));
+                const endDate = new Date(pacificSlotTimeMs(dateStr, body.timeToInMinutes));
+                const clubShortName = CLUB_SHORT_NAMES[body.clubId] || 'Bay Club';
+                // slotLabel format: "Club · Court · Time · Date"
+                const slotParts = (booking.slotLabel || '').split(' \u00b7 ');
+                const court = slotParts[1] || 'Court';
+                const partnerSuffix = (booking.partnerNames || []).length > 0
+                    ? ` with ${booking.partnerNames.join(', ')}`
+                    : '';
+                const openLabel = new Date(booking.fireAtMs).toLocaleString('en-US', {
+                    timeZone: 'America/Los_Angeles',
+                    weekday: 'short', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit',
+                });
+                return {
+                    title: `Possible: Pickleball at ${clubShortName}${partnerSuffix} on ${court}`,
+                    startDate,
+                    endDate,
+                    location: `${clubShortName}, ${court}`,
+                    details: `Scheduled booking — will be confirmed automatically when the booking window opens on ${openLabel} PT.`,
+                };
+            }
+
             function injectPendingBookingsSection() {
                 if (!getBookingsDomQueryService().isOnBookingsPage()) return;
 
@@ -2260,6 +2291,18 @@
                             section.remove();
                         }
                     });
+                });
+
+                // Bind calendar action buttons for each active (pending/firing) booking row.
+                activeBookings.forEach(booking => {
+                    const row = section.querySelector(`[data-bc-pending-booking="${booking.id}"]`);
+                    if (!row) return;
+                    const infoDiv = row.firstElementChild;
+                    if (!infoDiv || infoDiv.querySelector('.bc-calendar-action')) return;
+                    const calendarData = buildCalendarDataForPendingBooking(booking);
+                    if (!calendarData) return;
+                    const calendarUrl = buildGoogleCalendarUrl(calendarData);
+                    appendCalendarActions(infoDiv, calendarData, calendarUrl);
                 });
 
                 insertionPoint.parentElement.insertBefore(section, insertionPoint);
