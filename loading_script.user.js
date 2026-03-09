@@ -1844,7 +1844,9 @@
             }
 
             function parseTimeRange(timeText) {
-                const match = normalizeWhitespace(timeText).match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+                // Match both "H:MM - H:MM AM/PM" (same period) and
+                // "H:MM AM - H:MM PM" (slot crosses noon boundary).
+                const match = normalizeWhitespace(timeText).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
                 if (!match) {
                     getDebugService().log('warn', 'bookings-parse-time-range-failed', {
                         rawTimeText: timeText,
@@ -1853,12 +1855,15 @@
                 }
                 const startHour12 = parseInt(match[1], 10);
                 const startMinute = parseInt(match[2], 10);
-                const endHour12 = parseInt(match[3], 10);
-                const endMinute = parseInt(match[4], 10);
-                const endMeridiem = match[5].toUpperCase();
+                const startMeridiem = match[3] ? match[3].toUpperCase() : null;
+                const endHour12 = parseInt(match[4], 10);
+                const endMinute = parseInt(match[5], 10);
+                const endMeridiem = match[6].toUpperCase();
 
-                const endHour24 = timePartsTo24Hour(endHour12, endMeridiem);
-                const startHour24 = inferStartHour24(startHour12, endHour24);
+                const endHour24 = timePartsTo24Hour(endHour12, endMinute, endMeridiem);
+                const startHour24 = startMeridiem
+                    ? timePartsTo24Hour(startHour12, startMinute, startMeridiem)
+                    : inferStartHour24(startHour12, endHour24);
                 return {
                     startHour24,
                     startMinute,

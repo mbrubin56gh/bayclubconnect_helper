@@ -258,7 +258,7 @@ These are the main Bay Club behaviors and DOM patterns the helper depends on. Wh
     - `Today` / `Tomorrow`.
     - Month–day strings like `Feb 27`.
     - A browser-parsable date string handled by `new Date(...)`.
-  - Time ranges are formatted as `H:MM - H:MM AM/PM` (for example: `7:00 - 8:30 PM`).
+  - Time ranges are formatted as `H:MM - H:MM AM/PM` (for example: `7:00 - 8:30 PM`) when start and end are in the same period, or as `H:MM AM - H:MM PM` when the slot crosses noon (for example: `11:30 AM - 1:00 PM`).
   - When these assumptions fail, the helper logs `bookings-parse-day-label-failed` or `bookings-parse-time-range-failed` in debug mode to make format changes easier to diagnose.
 
 ## Linting
