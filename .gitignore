@@ -1,1 +1,7 @@
 node_modules/
+
+# Canary test credentials and generated auth state — never commit.
+canary-tests/.env
+canary-tests/auth-state.json
+canary-tests/test-results/
+canary-tests/playwright-report/

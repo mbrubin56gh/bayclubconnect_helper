@@ -1,0 +1,10 @@
+# Credentials — never commit.
+.env
+
+# Auth state saved by global-setup.js — contains session cookies.
+auth-state.json
+
+# Playwright artefacts.
+node_modules/
+test-results/
+playwright-report/

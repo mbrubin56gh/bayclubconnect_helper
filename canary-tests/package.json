@@ -1,0 +1,16 @@
+{
+  "name": "bayclubconnect-canary-tests",
+  "version": "1.0.0",
+  "description": "Playwright canary tests for bayclubconnect.com DOM/API contracts and injected UI behaviour.",
+  "private": true,
+  "scripts": {
+    "test": "dotenv -e .env -- playwright test",
+    "test:headed": "dotenv -e .env -- playwright test --headed",
+    "test:ui": "dotenv -e .env -- playwright test --ui",
+    "test:debug": "dotenv -e .env -- playwright test --debug"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "dotenv-cli": "^7.4.2"
+  }
+}
