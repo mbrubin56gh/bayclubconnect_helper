@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.78
+// @version      0.79
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -413,6 +413,29 @@
         const m = minutes % 60;
         const timeStr = m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`;
         return `${timeStr} ${ampm}`;
+    }
+
+    // Returns the UTC timestamp (ms) corresponding to a given time in Pacific time
+    // (America/Los_Angeles). dateStr is 'YYYY-MM-DD'; fromMinutes is minutes from
+    // Pacific midnight. Uses noon UTC as a DST-safe reference to determine the
+    // Pacific UTC offset for the given date, avoiding ambiguity at DST transitions.
+    // All four Bay Area clubs are in this timezone, so all booking window calculations
+    // use this function rather than the user's local clock timezone.
+    function pacificSlotTimeMs(dateStr, fromMinutes) {
+        const [y, mo, d] = dateStr.split('-').map(Number);
+        const noonUtc = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
+        const pacificNoonHour = parseInt(
+            new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/Los_Angeles',
+                hour: 'numeric',
+                hour12: false,
+            }).format(noonUtc),
+            10
+        );
+        // pacificNoonHour is 4 for PST (UTC−8) or 5 for PDT (UTC−7).
+        // offsetHours is the number of hours after UTC midnight that Pacific midnight falls.
+        const offsetHours = 12 - pacificNoonHour;
+        return Date.UTC(y, mo - 1, d, offsetHours, 0, 0) + fromMinutes * 60 * 1000;
     }
 
     // When we get back availability data from the server, we want to massage it into a useful structure for us
@@ -1478,11 +1501,10 @@
             }
 
             // Compute when the booking window opens for a given slot.
+            // Uses Pacific time because all clubs are in the Bay Area — using local time
+            // would give the wrong fire timestamp for users outside the Pacific timezone.
             function computeFireAtMs(date, fromMinutes) {
-                const slotDate = new Date(date + 'T00:00:00');
-                slotDate.setMinutes(slotDate.getMinutes() + fromMinutes);
-                slotDate.setDate(slotDate.getDate() - SCHEDULED_BOOKING_ADVANCE_DAYS);
-                return slotDate.getTime();
+                return pacificSlotTimeMs(date, fromMinutes) - SCHEDULED_BOOKING_ADVANCE_DAYS * 24 * 60 * 60 * 1000;
             }
 
             // Schedule a booking: build bodies and POST to Worker. Returns a promise
@@ -2830,9 +2852,8 @@
     }
 
     function computeSlotLockState(slot, fetchDate, limitDate) {
-        const slotDate = new Date(fetchDate + 'T00:00:00');
-        slotDate.setMinutes(slotDate.getMinutes() + slot.fromInMinutes);
-        const slotLocked = slotDate > limitDate;
+        const slotTimeMs = pacificSlotTimeMs(fetchDate, slot.fromInMinutes);
+        const slotLocked = slotTimeMs > limitDate.getTime();
 
         // Flip-calendar SVG returned as a bare element (no wrapper) so callers can
         // place it inside a shared flex row alongside the E/G/H badge text.
@@ -2855,13 +2876,20 @@
             : '';
 
         // "Opens Wed 3/5" label — shown inside the card below the court list.
+        // Display date in Pacific time so it matches the actual window-open moment
+        // regardless of the viewer's local timezone.
         let openDateLabel = '';
         if (slotLocked) {
-            const openDate = new Date(slotDate.getTime() - 3 * 24 * 60 * 60 * 1000);
-            const weekday = openDate.toLocaleDateString('en-US', { weekday: 'short' });
-            const month = openDate.getMonth() + 1;
-            const day = openDate.getDate();
-            openDateLabel = `Opens ${weekday} ${month}/${day}`;
+            const openDate = new Date(slotTimeMs - 3 * 24 * 60 * 60 * 1000);
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/Los_Angeles',
+                weekday: 'short',
+                month: 'numeric',
+                day: 'numeric',
+            }).formatToParts(openDate);
+            const byType = {};
+            parts.forEach(p => { byType[p.type] = p.value; });
+            openDateLabel = `Opens ${byType.weekday} ${byType.month}/${byType.day}`;
         }
 
         return { slotLocked, lockIcon: calendarIcon, disabledStyle, openDateLabel };
@@ -3666,11 +3694,19 @@
             }
 
             function renderAllClubsAvailability(transformed, anchorElement, fetchDate) {
-                const limitDate = new Date();
-                limitDate.setDate(limitDate.getDate() + BOOKING_ADVANCE_DAYS);
-                // Floor to current 30-minute window start.
-                const mins = limitDate.getMinutes();
-                limitDate.setMinutes(mins < 30 ? 0 : 30, 0, 0);
+                // Compute the booking window cutoff in Pacific time. Adding days as ms
+                // is timezone-independent; flooring to the 30-minute boundary uses
+                // Pacific minutes so the cutoff aligns with the actual window the
+                // Bay Club server enforces, regardless of the user's local timezone.
+                const candidateMs = Date.now() + BOOKING_ADVANCE_DAYS * 24 * 60 * 60 * 1000;
+                const pacificMinute = parseInt(
+                    new Intl.DateTimeFormat('en-US', {
+                        timeZone: 'America/Los_Angeles',
+                        minute: 'numeric',
+                    }).format(new Date(candidateMs)),
+                    10
+                );
+                const limitDate = new Date(candidateMs - (pacificMinute % 30) * 60 * 1000 - (candidateMs % 60000));
 
                 const lastFetchState = getBookingStateService().getLastFetchState();
                 if (!lastFetchState) return;
