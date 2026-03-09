@@ -1873,12 +1873,17 @@
                 const timeRange = parseTimeRange(timeRangeText);
                 if (!bookingDate || !timeRange) return null;
 
-                const startDate = new Date(bookingDate);
-                startDate.setHours(timeRange.startHour24, timeRange.startMinute, 0, 0);
-                const endDate = new Date(bookingDate);
-                endDate.setHours(timeRange.endHour24, timeRange.endMinute, 0, 0);
+                // All Bay Area clubs operate on Pacific time. Build the event timestamps
+                // as correct UTC moments by interpreting the day and the hour/minute values
+                // in America/Los_Angeles, not in the viewer's local timezone. en-CA locale
+                // with the Pacific timezone reliably yields a YYYY-MM-DD string.
+                const pacificDateStr = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: 'America/Los_Angeles',
+                }).format(bookingDate);
+                const startDate = new Date(pacificSlotTimeMs(pacificDateStr, timeRange.startHour24 * 60 + timeRange.startMinute));
+                const endDate = new Date(pacificSlotTimeMs(pacificDateStr, timeRange.endHour24 * 60 + timeRange.endMinute));
                 if (endDate <= startDate) {
-                    endDate.setDate(endDate.getDate() + 1);
+                    endDate.setTime(endDate.getTime() + 24 * 60 * 60 * 1000);
                 }
 
                 const shortClubName = simplifyClubName(club);
