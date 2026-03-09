@@ -2235,6 +2235,13 @@
                 };
             }
 
+            Object.assign(_bcTestExports, {
+                buildPendingBookingRowHtml,
+                buildFailedBookingRowHtml,
+                buildCalendarDataForPendingBooking,
+                SLOT_CHECK_STATUS: getScheduledBookingService().SLOT_CHECK_STATUS,
+            });
+
             function injectPendingBookingsSection() {
                 if (!getBookingsDomQueryService().isOnBookingsPage()) return;
 
@@ -4512,6 +4519,7 @@
     // pacificSlotTimeMs is at IIFE top-level scope; the rest are collected via _bcTestExports.
     if (typeof module !== 'undefined') {
         _bcTestExports.pacificSlotTimeMs = pacificSlotTimeMs;
+        _bcTestExports.transformAvailability = transformAvailability;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }
