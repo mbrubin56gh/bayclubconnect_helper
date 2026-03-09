@@ -1729,6 +1729,10 @@
                 return /^\/racquet-sports\/booking\/[0-9a-f-]+$/i.test(location.pathname);
             }
 
+            function isOnDashboardPage() {
+                return location.pathname.startsWith('/home');
+            }
+
             function getCalendarEventElements() {
                 return Array.from(document.querySelectorAll(EVENTS_LIST_SELECTOR));
             }
@@ -1752,6 +1756,7 @@
             serviceInstance = {
                 isOnBookingsPage,
                 isOnBookingDetailsPage,
+                isOnDashboardPage,
                 getCalendarEventElements,
                 findDesktopTile,
                 getBookingDetailsHeader,
@@ -2098,6 +2103,49 @@
                 appendCalendarActions(actionHost, booking, calendarUrl);
             }
 
+            function extractBookingDataFromDashboardCard(card) {
+                // Only process pickleball booking cards.
+                const title = normalizeWhitespace(card.querySelector('.dashboard-card__title')?.textContent || '');
+                if (!title.toLowerCase().includes('pickleball')) return null;
+
+                const contentEl = card.querySelector('.dashboard-card__content');
+                if (!contentEl) return null;
+
+                // The first text node contains "DayLabel, H:MM [AM/PM] - H:MM AM/PM".
+                // Locate the time range by regex so date labels with commas (e.g. "Mar 07, 2026")
+                // are handled correctly.
+                const rawText = normalizeWhitespace(contentEl.firstChild?.textContent || '');
+                const timeRangeMatch = rawText.match(/(\d{1,2}:\d{2}(?:\s*(?:AM|PM))?\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+                if (!timeRangeMatch) return null;
+                const timeRangeText = timeRangeMatch[1];
+                const dayLabel = rawText.slice(0, rawText.indexOf(timeRangeText)).replace(/[,\s]+$/, '').trim();
+
+                // The location span contains "Club Name, Court Name".
+                const locationText = normalizeWhitespace(contentEl.querySelector('span')?.textContent || '');
+                const locationCommaIdx = locationText.indexOf(',');
+                const club = locationCommaIdx !== -1 ? locationText.slice(0, locationCommaIdx).trim() : locationText;
+                const court = locationCommaIdx !== -1 ? locationText.slice(locationCommaIdx + 1).trim() : '';
+
+                const participantNames = Array.from(card.querySelectorAll('app-racquet-sports-dashboard-player'))
+                    .map(p => normalizeWhitespace(p.textContent))
+                    .filter(Boolean)
+                    .filter(name => name.toLowerCase() !== 'you');
+
+                return buildBookingDataFromFields({ dayLabel, timeRangeText, club, court, participantNames, playersLine: '' });
+            }
+
+            function injectButtonsForDashboardPage() {
+                if (!getBookingsDomQueryService().isOnDashboardPage()) return;
+                document.querySelectorAll('app-dashboard-card').forEach(card => {
+                    const body = card.querySelector('.dashboard-card__body');
+                    if (!body || body.querySelector('.bc-calendar-action')) return;
+                    const booking = extractBookingDataFromDashboardCard(card);
+                    if (!booking) return;
+                    const calendarUrl = buildGoogleCalendarUrl(booking);
+                    appendCalendarActions(body, booking, calendarUrl);
+                });
+            }
+
             function formatCountdown(fireAtMs) {
                 const diff = fireAtMs - Date.now();
                 if (diff <= 0) return 'Booking attempt in progress\u2026';
@@ -2281,6 +2329,7 @@
                     reconcileScheduled = false;
                     injectButtonsForBookingsPage();
                     injectButtonsForBookingDetailsPage();
+                    injectButtonsForDashboardPage();
                     injectPendingBookingsSection();
                     if (getScheduledBookingService().getActiveBookings().length > 0) {
                         startPendingCountdownUpdates();
