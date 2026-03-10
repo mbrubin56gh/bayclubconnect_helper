@@ -812,3 +812,316 @@ test.describe('Booking flow cleanup on navigation away', () => {
         });
     });
 });
+
+// ---------------------------------------------------------------------------
+// 8. Club preference ordering widget
+//    The widget is injected on the duration/player step (Step 1), before the
+//    user clicks NEXT to reach Hour View.  We navigate only as far as Step 1.
+// ---------------------------------------------------------------------------
+
+test.describe('Club preference ordering widget', () => {
+    let context;
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        test.setTimeout(60_000);
+        context = await createContextWithScript(browser);
+        page = await context.newPage();
+
+        // Navigate to the booking flow entry point and wait for Step 1.
+        await page.goto('/', { waitUntil: 'domcontentloaded' });
+        const bookingTile = page.locator('div.tile').filter({ hasText: /Court Booking/i }).first();
+        await bookingTile.waitFor({ timeout: 10_000 });
+        await bookingTile.click();
+        await page.locator('app-page-title').waitFor({ timeout: 15_000 });
+
+        // The club order widget is injected on the duration/player step.
+        // Wait for it to appear (the script injects it after Angular renders the
+        // duration filter container).
+        await page.locator('.bc-club-order-widget').waitFor({ timeout: 20_000 });
+    });
+
+    test.afterAll(async () => {
+        if (context) await context.close();
+    });
+
+    test('widget is present in the DOM on the duration/player step', async () => {
+        requireAuth(test);
+        await expect(page.locator('.bc-club-order-widget').first()).toBeAttached();
+    });
+
+    test('widget contains a list of four club items', async () => {
+        requireAuth(test);
+        const items = page.locator('.bc-club-order-list .bc-club-order-item');
+        await expect(items).toHaveCount(4);
+    });
+
+    test('each club item has a data-club-id attribute matching a known club UUID', async () => {
+        requireAuth(test);
+        // ADJUST: update UUIDs if Bay Club changes their club identifiers.
+        const knownClubIds = new Set([
+            '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',  // Broadway
+            '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',  // Redwood Shores
+            'ce7e7607-09e6-4d16-8197-1fffb70db776',  // South SF
+            '3bc78448-ec6b-49e1-a2ae-64abd68e646b',  // Santa Clara
+        ]);
+        const items = await page.locator('.bc-club-order-list .bc-club-order-item').all();
+        for (const item of items) {
+            const clubId = await item.getAttribute('data-club-id');
+            expect(knownClubIds.has(clubId)).toBe(true);
+        }
+    });
+
+    test('each club item is marked draggable', async () => {
+        requireAuth(test);
+        const items = await page.locator('.bc-club-order-list .bc-club-order-item').all();
+        for (const item of items) {
+            const draggable = await item.getAttribute('draggable');
+            expect(draggable).toBe('true');
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Duration and player preference auto-select
+//    The script reads bc_players and bc_duration from localStorage and
+//    automatically activates the matching button-select options on the
+//    duration/player step.  It marks processed groups with
+//    data-bc-auto-selected="true" so it does not re-fire redundantly.
+// ---------------------------------------------------------------------------
+
+test.describe('Duration and player preference auto-select', () => {
+    let context;
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        test.setTimeout(60_000);
+        context = await createContextWithScript(browser);
+        page = await context.newPage();
+
+        // Pre-seed preferences so the auto-select logic has something to apply.
+        await context.addInitScript(`
+            (function() {
+                localStorage.setItem('bc_players', 'Singles');
+                localStorage.setItem('bc_duration', '60');
+            })();
+        `);
+
+        await page.goto('/', { waitUntil: 'domcontentloaded' });
+        const bookingTile = page.locator('div.tile').filter({ hasText: /Court Booking/i }).first();
+        await bookingTile.waitFor({ timeout: 10_000 });
+        await bookingTile.click();
+        await page.locator('app-page-title').waitFor({ timeout: 15_000 });
+
+        // Wait for the auto-select marker which the script sets after processing
+        // at least one button group on Step 1.  Use .first() because both button
+        // groups (players and duration) receive the marker simultaneously.
+        await page.locator('[data-bc-auto-selected="true"]').first().waitFor({ timeout: 20_000 });
+    });
+
+    test.afterAll(async () => {
+        if (context) await context.close();
+    });
+
+    test('script marks at least one button group as auto-selected', async () => {
+        requireAuth(test);
+        const marked = page.locator('[data-bc-auto-selected="true"]');
+        await expect(marked.first()).toBeAttached();
+    });
+
+    test('a btn-selected button is active within the processed groups', async () => {
+        requireAuth(test);
+        // After auto-select runs, at least one app-button-select group should
+        // have an active selection indicated by the .btn-selected class.
+        const selected = page.locator('app-button-select .btn-selected');
+        await expect(selected.first()).toBeAttached({ timeout: 5_000 });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Grouped time slot expansion (multi-court cards)
+//     When multiple courts are available at the same time, the script renders
+//     them as a single expandable .bc-slot-card.  Clicking it expands the
+//     .bc-court-expand container to show individual court options.
+// ---------------------------------------------------------------------------
+
+test.describe('Grouped time slot expansion', () => {
+    let context;
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        test.setTimeout(120_000);
+        context = await createContextWithScript(browser);
+        page = await context.newPage();
+        await navigateToHourView(page, 1);
+    });
+
+    test.afterAll(async () => {
+        if (context) await context.close();
+    });
+
+    test('at least one multi-court group card is rendered when multiple courts share a time', async () => {
+        requireAuth(test);
+        // Multi-court groups have a .bc-court-expand child.  If no groups exist
+        // on the selected date (e.g. every slot is a single court), skip gracefully.
+        const groupCard = page.locator('.bc-slot-card').filter({ has: page.locator('.bc-court-expand') }).first();
+        const found = await groupCard.isVisible().catch(() => false);
+        if (!found) {
+            test.skip(true, 'No multi-court group cards on this date — try a date with multiple courts at the same time');
+            return;
+        }
+        await expect(groupCard).toBeVisible();
+    });
+
+    test('clicking a multi-court group card expands its court options', async () => {
+        requireAuth(test);
+        const groupCard = page.locator('.bc-slot-card').filter({ has: page.locator('.bc-court-expand') }).first();
+        const found = await groupCard.isVisible().catch(() => false);
+        if (!found) {
+            test.skip(true, 'No multi-court group cards to expand');
+            return;
+        }
+
+        // The expand container should start collapsed (hidden or zero-height).
+        const expandContainer = groupCard.locator('.bc-court-expand');
+        const initiallyVisible = await expandContainer.isVisible().catch(() => false);
+
+        await groupCard.click();
+
+        if (!initiallyVisible) {
+            // After click, individual court options should become visible.
+            await expect(expandContainer.locator('.bc-court-option').first()).toBeVisible({ timeout: 5_000 });
+        } else {
+            // Card was already expanded — clicking again collapses it, which is fine.
+            // Just assert the expand container still exists.
+            await expect(expandContainer).toBeAttached();
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Weather emoji rendering in the time range slider
+//     The script populates .bc-weather-tick elements inside hour tick marks
+//     ([data-tick-minutes]) after the weather API responds.  We wait up to
+//     30 s for at least one emoji to appear.
+// ---------------------------------------------------------------------------
+
+test.describe('Weather emoji in time range slider', () => {
+    let context;
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        test.setTimeout(120_000);
+        context = await createContextWithScript(browser);
+        page = await context.newPage();
+        await navigateToHourView(page, 1);
+    });
+
+    test.afterAll(async () => {
+        if (context) await context.close();
+    });
+
+    test('time range slider renders hour tick marks with data-tick-minutes attributes', async () => {
+        requireAuth(test);
+        // The slider is built with one tick per hour.  At least a few hour ticks
+        // must be present for the weather overlay to have anywhere to render.
+        const ticks = page.locator('[data-tick-minutes]');
+        await expect(ticks.first()).toBeAttached({ timeout: 10_000 });
+        const count = await ticks.count();
+        expect(count).toBeGreaterThan(0);
+    });
+
+    test('weather emoji elements appear inside at least one hour tick after API responds', async () => {
+        requireAuth(test);
+        // The weather service fetches from Open-Meteo and then injects .bc-weather-tick
+        // spans into each [data-tick-minutes] container.  Allow up to 30 s for the
+        // network call to complete and the DOM update to run.
+        const emojiEl = page.locator('[data-tick-minutes] .bc-weather-tick');
+        await expect(emojiEl.first()).toBeAttached({ timeout: 30_000 });
+        const emoji = await emojiEl.first().textContent();
+        // The emoji should be a non-empty string (a weather emoji or a space for clear sky).
+        expect(typeof emoji).toBe('string');
+        expect(emoji.length).toBeGreaterThan(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Edge and gated court visual indicators
+//     Courts on the edge of the court area receive an amber border and an
+//     inline "E" badge; gated courts (fenced) receive a gold border and a
+//     "G" badge.  These are derived from court names at render time.
+//     We assert that the rendering logic runs — whether any E/G courts are
+//     actually present depends on the clubs and the selected date.
+// ---------------------------------------------------------------------------
+
+test.describe('Edge and gated court indicators', () => {
+    let context;
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        test.setTimeout(120_000);
+        context = await createContextWithScript(browser);
+        page = await context.newPage();
+        await navigateToHourView(page, 1);
+        // Wait for at least one slot card to be rendered so we know the pipeline ran.
+        await page.locator('.bc-court-option').first().waitFor({ state: 'attached', timeout: 25_000 });
+    });
+
+    test.afterAll(async () => {
+        if (context) await context.close();
+    });
+
+    test('slot cards are rendered (prerequisite for badge checks)', async () => {
+        requireAuth(test);
+        const slots = page.locator('.bc-court-option');
+        await expect(slots.first()).toBeAttached();
+    });
+
+    test('gated court cards have a gold border when a gated court is present', async () => {
+        requireAuth(test);
+        // Gated court cards are rendered with `border: 2px solid rgba(255,215,0,1)` as an
+        // inline style.  Select by that style fragment directly — more reliable than filtering
+        // by badge span text which can match partial words in other elements.
+        // If no gated courts are present today, skip gracefully.
+        const gatedCard = page.locator('.bc-court-option[style*="rgba(255,215,0,1)"]').first();
+        const count = await gatedCard.count();
+        if (count === 0) {
+            test.skip(true, 'No gated courts found today — badge assertion skipped');
+            return;
+        }
+        // Verify the "G" badge span is present inside the card.
+        const badge = gatedCard.locator('span', { hasText: /^G$/ });
+        await expect(badge.first()).toBeAttached();
+    });
+
+    test('edge court cards have an amber border when an edge court is present', async () => {
+        requireAuth(test);
+        // Edge court cards have `border: 1px solid rgba(255,200,50,0.7)` as an inline style.
+        const edgeCard = page.locator('.bc-court-option[style*="rgba(255,200,50"]').first();
+        const count = await edgeCard.count();
+        if (count === 0) {
+            test.skip(true, 'No edge courts found today — badge assertion skipped');
+            return;
+        }
+        // Verify the "E" badge span is present inside the card.
+        const badge = edgeCard.locator('span', { hasText: /^E$/ });
+        await expect(badge.first()).toBeAttached();
+    });
+
+    test('legend row is visible in the injected UI explaining E and G badges', async () => {
+        requireAuth(test);
+        // The legend is rendered as part of the availability container header.
+        // It should always be present when the UI is injected regardless of whether
+        // any edge or gated courts are actually available.
+        const legend = page.locator('.all-clubs-availability').first();
+        const legendText = await legend.textContent().catch(() => '');
+        // The legend text includes these short labels.
+        expect(legendText).toMatch(/E\s*=\s*edge court/i);
+        expect(legendText).toMatch(/G\s*=\s*gated court/i);
+    });
+});
