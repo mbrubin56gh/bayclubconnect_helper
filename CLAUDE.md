@@ -228,6 +228,9 @@ Server-side component that executes scheduled bookings without requiring the bro
 - `cloudflare-worker/worker.js` — Cloudflare Worker source.
 - `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, D1 binding, cron schedule).
 - `cloudflare-worker/CLOUDFLARE.md` — Detailed setup, architecture, and dev workflow notes for the Worker, written for someone new to Cloudflare.
+- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (34 tests) run against the live site.
+- `canary-tests/playwright.config.js` — Playwright configuration (single Chromium worker, auth state, timeouts).
+- `canary-tests/global-setup.js` — Logs in with BC_EMAIL/BC_PASSWORD from `.env` and saves auth state before the suite runs.
 
 ## External Assumptions And Contracts
 
@@ -285,8 +288,26 @@ cd cloudflare-worker && npm test
 
 Tests cover all HTTP endpoints, pure helper functions, and the cron tick logic (KV and D1 are in-memory mocks; external fetch calls are stubbed). See `cloudflare-worker/CLOUDFLARE.md` → Testing for details.
 
+## Canary Tests
+
+Playwright end-to-end tests that run against the live bayclubconnect.com site with the userscript injected. They serve as both a regression guard for our own code and a canary for Bay Club DOM/API changes. Requires `.env` with `BC_EMAIL` and `BC_PASSWORD` (copied from `canary-tests/.env.example`).
+
+```bash
+cd canary-tests && npm test          # headless
+cd canary-tests && npm test -- --headed   # watch the browser
+```
+
+The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, locked slot → partner picker flow, and booking flow cleanup.
+
+**Key calibration notes**:
+- Club sections are identified by `data-club-id` UUID attributes, not by text — the API `shortName` for some clubs may differ from our display label.
+- Locked-slot tests reset `bc_time_range` and `bc_indoor_only` in localStorage before clicking a slot, then bounce the date selection to force a re-render, because the Worker preference sync may have restored narrow filter values on page load.
+- The `app-calendar-cancelled-by-me-list` test skips gracefully when the user has no cancelled bookings (the element is conditionally rendered by Angular).
+- `test.setTimeout(120_000)` must be called at the top of `beforeAll` for the locked-slot describe block — `test.describe.configure({ timeout })` does not extend `beforeAll` hook timeouts in Playwright 1.58.
+
 ## Running All Tests
 
 ```bash
-npm test   # runs test:script then test:worker
+npm test                             # runs test:script then test:worker (unit + worker)
+cd canary-tests && npm test          # end-to-end canary suite (requires live credentials)
 ```
