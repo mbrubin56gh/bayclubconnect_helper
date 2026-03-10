@@ -293,8 +293,10 @@ Tests cover all HTTP endpoints, pure helper functions, and the cron tick logic (
 Playwright end-to-end tests that run against the live bayclubconnect.com site with the userscript injected. They serve as both a regression guard for our own code and a canary for Bay Club DOM/API changes. Requires `.env` with `BC_EMAIL` and `BC_PASSWORD` (copied from `canary-tests/.env.example`).
 
 ```bash
-cd canary-tests && npm test          # headless
-cd canary-tests && npm test -- --headed   # watch the browser
+cd canary-tests && npm test                   # headless (CI mode)
+cd canary-tests && npm test -- --headed       # watch the browser run
+cd canary-tests && npm test -- --ui           # Playwright interactive UI (time-travel debugger)
+cd canary-tests && npm test -- --debug        # step through with Playwright Inspector
 ```
 
 The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, locked slot → partner picker flow, and booking flow cleanup.
