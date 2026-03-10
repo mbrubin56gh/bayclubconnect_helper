@@ -15,7 +15,7 @@ const LOGIN_URL = 'https://bayclubconnect.com/account/login/connect';
 // The booking flow URL is at a path containing 'create-booking'.  Navigate
 // to the home page first — the app will redirect to the flow from there —
 // or update this constant if Bay Club changes their routing.
-const POST_LOGIN_WAIT_FOR = url => !url.includes('/account/login');
+const POST_LOGIN_WAIT_FOR = url => !url.href.includes('/account/login');
 
 module.exports = async function globalSetup() {
     const email    = process.env.BC_EMAIL;

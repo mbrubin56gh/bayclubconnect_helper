@@ -43,6 +43,15 @@ function requireAuth(t) {
     if (!isAuthenticated) t.skip(true, 'No auth state — set BC_EMAIL and BC_PASSWORD in .env');
 }
 
+// Creates a browser context with the userscript injected as an init script so
+// it runs on every page load, exactly as Tampermonkey would install it.
+async function createContextWithScript(browser) {
+    const context = await browser.newContext({ storageState: './auth-state.json' });
+    // Path is relative to this test file.
+    await context.addInitScript({ path: path.join(__dirname, '../loading_script.user.js') });
+    return context;
+}
+
 // ---------------------------------------------------------------------------
 // Navigation helpers
 // ---------------------------------------------------------------------------
@@ -72,11 +81,12 @@ async function navigateToHourView(page, dateOffset = 1) {
     // ADJUST: if the booking entry-point URL changes, update this path.
     await page.goto('/', { waitUntil: 'domcontentloaded' });
 
-    // Click the booking flow entry point.  The link text and href may change.
-    // ADJUST: update this selector if Bay Club changes their navigation.
-    const bookingLink = page.locator('a[href*="create-booking"], a[href*="court-booking"]').first();
-    await bookingLink.waitFor({ timeout: 10_000 });
-    await bookingLink.click();
+    // Click the Court Booking tile on the home page.  It is a div.tile with a
+    // .title child containing "Court Booking" — there is no anchor or href.
+    // ADJUST: update this selector if Bay Club changes their home-page tile markup.
+    const bookingTile = page.locator('div.tile').filter({ hasText: /Court Booking/i }).first();
+    await bookingTile.waitFor({ timeout: 10_000 });
+    await bookingTile.click();
 
     // Wait for the Angular booking shell — this is one of our canary selectors.
     await page.locator('app-page-title').waitFor({ timeout: 15_000 });
@@ -90,8 +100,31 @@ async function navigateToHourView(page, dateOffset = 1) {
         await dateInput.fill(pacificDateString(pacificDateOffset(dateOffset)));
     }
 
+    // The booking flow is a two-step wizard.
+    //   Step 1: player / duration selection page — ends with a NEXT button.
+    //   Step 2: Hour View with the availability grid.
+    // Click NEXT to advance to Step 2.
+    // ADJUST: update selector if Bay Club changes the NEXT button class or text.
+    const nextButton = page.locator('button.btn-light-blue', { hasText: /next/i }).first();
+    await nextButton.waitFor({ state: 'visible', timeout: 15_000 });
+    await nextButton.click();
+
+    // On Step 2, our userscript auto-clicks "HOUR VIEW" on first render, which
+    // triggers the parallel availability fetch and injects .all-clubs-availability.
+    // We also click it explicitly here so the test does not depend on the script's
+    // auto-click timing.  Clicking an already-active toggle is harmless.
+    // ADJUST: update selector if Bay Club changes the view-toggle component or button text.
+    const hourViewButton = page.locator('app-time-slot-view-type-select .btn', { hasText: /hour view/i }).first();
+    try {
+        await hourViewButton.waitFor({ state: 'visible', timeout: 15_000 });
+        await hourViewButton.click();
+    } catch (_e) {
+        // Script already clicked it; page is advancing normally.
+    }
+
     // Wait for our injected availability UI — this also confirms the script loaded.
-    await page.locator('.all-clubs-availability').waitFor({ timeout: 20_000 });
+    // Use .first() because the script injects into both desktop and mobile containers.
+    await page.locator('.all-clubs-availability').first().waitFor({ timeout: 30_000 });
 }
 
 // ---------------------------------------------------------------------------
@@ -137,14 +170,15 @@ test.describe('Bay Club availability API contract', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(120_000);
+        const context = await createContextWithScript(browser);
         const page = await context.newPage();
 
-        // Intercept the availability response before navigating so we don't miss it.
+        // Intercept the availability response.  The response fires after NEXT is
+        // clicked on the player/duration step (~30 s into the flow), so allow 75 s.
         const responsePromise = page.waitForResponse(
             r => r.url().includes('availability') && r.status() === 200,
-            { timeout: 30_000 }
+            { timeout: 75_000 }
         );
 
         await navigateToHourView(page, 1);
@@ -208,7 +242,7 @@ test.describe('Bay Club availability API contract', () => {
 test.describe('Bay Club booking POST URL contract', () => {
     test('outgoing booking POST URL ends with courtbookings', async ({ page }) => {
         requireAuth(test);
-        test.setTimeout(60_000);
+        test.setTimeout(90_000);
 
         // We won't actually complete a booking — we just want to verify the URL
         // shape of any POST to the booking endpoint.
@@ -244,8 +278,8 @@ test.describe('Bay Club booking flow DOM', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
     });
@@ -316,8 +350,8 @@ test.describe('Injected availability UI', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
     });
@@ -390,8 +424,8 @@ test.describe('By-club / by-time view toggle', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
     });
@@ -426,8 +460,8 @@ test.describe('Indoor courts only toggle', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
     });
@@ -468,8 +502,8 @@ test.describe('Time range slider', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
     });
@@ -514,7 +548,7 @@ test.describe('Locked slot and partner picker', () => {
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
         test.setTimeout(90_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         // Navigate to a date 10 days out — beyond the 3-day booking window,
         // so all slots are locked and clickable.
@@ -530,7 +564,7 @@ test.describe('Locked slot and partner picker', () => {
 
     test('clicking a locked slot opens the inline partner picker panel', async () => {
         requireAuth(test);
-        test.setTimeout(60_000);
+        test.setTimeout(90_000);
 
         const lockedSlot = page.locator('.time-slot-locked[data-slot-locked="1"]').first();
         await lockedSlot.waitFor({ timeout: 10_000 });
@@ -591,8 +625,8 @@ test.describe('Booking flow cleanup on navigation away', () => {
 
     test.beforeAll(async ({ browser }) => {
         if (!isAuthenticated) return;
-        test.setTimeout(60_000);
-        const context = await browser.newContext({ storageState: './auth-state.json' });
+        test.setTimeout(90_000);
+        const context = await createContextWithScript(browser);
         page = await context.newPage();
         await navigateToHourView(page, 1);
         // Verify the injected UI is present before navigating away.
