@@ -5,23 +5,9 @@
 
 A Tampermonkey userscript (`loading_script.user.js`) that improves the court booking experience on bayclubconnect.com. The app natively only shows availability for a single "home" club, but Bay Club members can book at any club. This script fetches availability across all four Bay Area clubs in parallel and displays them in a unified UI.
 
-## Who I am as a developer of this application
-
-I have been a professional programmer since 1998. Read the LinkedInProfile.pdf in this same folder to learn about my programming background to get a sense of my technical level and knowledge. But also recognize that I used many of the languages and tools year ago and so am not fluent in them anymore. What I'm most fluent in is Android development and Kotlin. It's probably best to treat me as a senior, experienced developer with a lot of skills, but also one who has not programmed in Javascript or written HTML in a long time, and so is better at reading these things than writing them. Also Javascript has changed a lot since I last had mastered it.
-
 ## Working style
 
 This is a JavaScript project. Use JavaScript for all new files and modifications unless otherwise specified.
-
-Write comments as complete sentences that end in punctuation. Avoid abbreviations when reasonable so comments are easy to scan later.
-
-Prefer closures and other encapsulation techniques over free-floating global variables, and keep mutable state in the narrowest possible scope.
-
-In general, prefer Douglas Crockford "Javascript: The Good Parts" style of Javascript coding and modularization.
-
-After completing a set of changes, offer to commit and push with a descriptive commit message summarizing what changed.
-
-When resuming work from a previous session, start by reading recent git log and checking git status to understand current state.
 
 When the script is already reliable for the current friend-group scope and only minor styling or speculative edge-case ideas remain, prefer no-change unless there is a reproducible user-facing bug.
 
@@ -146,31 +132,6 @@ The script uses a booking-flow monitor with lifecycle management:
 - Debug payloads must be sanitized before persistence or console output. Sensitive keys such as authorization, session, token, and request identifiers should be redacted.
 - The `Email logs` action should attempt to open a `mailto:` draft in a new tab first, with a same-tab fallback if pop-up policies block opening a new tab.
 - Debug panel action buttons should follow the same visual style as the helper controls and should not appear sticky after click.
-
-## Code Conventions
-
-- **Prefer `data-*` attributes over structural CSS selectors** for targeting injected elements
-- **Encode state in the DOM where possible** rather than global variables (e.g. `data-bc-auto-selected`, `data-selected`, `data-bc-intercepted`)
-- **For native hide/unhide lifecycles, use explicit marker attributes** (for example, `data-bc-native-hidden`) so cleanup only reverses helper-owned DOM mutations.
-- **Prefer event-driven detection first, then add polling only as a reliability backstop** — this SPA sometimes does not emit dependable history signals, so scoped pollers are acceptable when lifecycle-managed
-- **Minimize global state** — use closures (IIFEs) to scope implementation details (e.g. `lastBookingRequestId` is scoped inside the `send` IIFE)
-  For example, drag-and-drop item reordering state is scoped inside `getClubOrderWidgetController()` rather than script scope.
-  Time-range slider drag state is similarly scoped inside `getTimeRangeSliderController()`.
-- **Prefer service-shaped modules for non-trivial logic** — when logic has internal state or lifecycle, place it behind an in-file service/controller creator rather than free-floating functions and variables.
-- **Service creators own singleton behavior** — if a service should be singleton for the page lifecycle, implement singleton ownership inside the service creator itself.
-- **Use creator-owned access consistently** — call singleton-backed creators directly at usage sites (for example: `getWeatherService().whenReady()`), rather than storing script-scope service alias variables.
-- **Avoid two-phase initialization for services** — when feasible, let creators self-initialize and keep lifecycle guards inside the creator so startup is one-step and idempotent.
-- **Use guarded installer creators for one-time setup** — for setup work like style injection or monitor wiring, prefer creator-owned one-time guards instead of free-floating initialization flags.
-- **Lower constants to feature-local scope when practical** — keep constants near their usage to reduce script-wide surface area, while preserving shared enum constants where cross-feature reuse is intentional.
-- **CSS for visual state** — selection appearance is driven by `[data-selected]` CSS rules, not inline style mutations
-- **No external dependencies** — single self-contained userscript file
-- **Centralized local storage access** — preference persistence reads and writes flow through a singleton `getLocalStorageService()` creator so parsing, serialization, and parse-failure logging behavior are consistent.
-- **Prefer explicit enum-like values over nullable/optional parameters for behavioral variation** — when a parameter controls which behavior a function performs, always pass an explicit string constant (e.g. `LABEL_MODE_TIME`, `LABEL_MODE_CLUB`) rather than a nullable or omitted argument (e.g. `labelOverride = null`). Nullable optionals hide intent at call sites and are easy to accidentally omit. Explicit constants make every call self-documenting.
-- **Define enum values as SCREAMING_SNAKE_CASE constants** — string literals used as enum-like values should be named constants (e.g. `const VIEW_MODE_BY_TIME = 'by-time'`), not bare string literals scattered across the codebase. This ensures typos are caught by linting and refactoring is safe.
-- **Prefer semantic, domain-specific names** — choose function and variable names that describe business intent and lifecycle context (for example: `resumeBookingFlowMonitoringAfterVisible`) rather than generic verbs (for example: `resumeMonitoring`).
-- **Decompose multi-step functions into named helpers** — rather than using inline comments like `// Step 1: ...`, extract each step into a function whose name describes *what* it does (e.g. `filterSlotsByTimeRange`, `collapseEmptyTimeGroups`). The sequence of calls in the top-level function then reads as self-documenting prose without needing comments.
-- **Group render orchestration in a pipeline service** — availability rendering and related filter application flow through `getAvailabilityRenderPipeline()` so UI assembly and post-render behavior stay coordinated in one module.
-- **Use monitor-scoped lifecycle helpers for watcher wiring** — booking-flow observer and poller resources are managed through monitor-local keyed helper functions so start/stop paths are centralized and teardown behavior stays consistent.
 
 ## Global State (intentional)
 
