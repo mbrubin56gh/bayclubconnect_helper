@@ -2240,7 +2240,14 @@
             function injectPendingCardsForDashboardPage() {
                 if (!getBookingsDomQueryService().isOnDashboardPage()) return;
 
-                const carousel = document.querySelector('.responsive-carousel');
+                // Prefer the carousel that contains confirmed booking cards or the
+                // "Book an Activity" tile. The dashboard has multiple .responsive-carousel
+                // elements (e.g. "What's New") and querySelector returns the first in DOM
+                // order, which may not yet be the bookings carousel on initial load.
+                const allCarousels = Array.from(document.querySelectorAll('.responsive-carousel'));
+                const carousel = allCarousels.find(el =>
+                    el.querySelector('app-dashboard-card') || el.querySelector('.book-more')
+                ) || allCarousels[0];
                 if (!carousel) return;
 
                 const currentEmail = getLocalStorageService().getString(
@@ -2570,6 +2577,9 @@
             // the pending section appears even on mobile browsers where the
             // MutationObserver DOM nudge does not reliably trigger a reconcile.
             document.addEventListener('bc-bookings-updated', () => scheduleReconcile());
+            // Also reconcile on every SPA navigation so dashboard cards are injected
+            // after navigating back to /home/dashboard without a full page reload.
+            document.addEventListener('bc-navigated', () => scheduleReconcile());
             scheduleReconcile();
         };
     })();
@@ -4272,15 +4282,18 @@
                 history.pushState = function (...args) {
                     originalPushState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
+                    document.dispatchEvent(new CustomEvent('bc-navigated'));
                 };
 
                 history.replaceState = function (...args) {
                     originalReplaceState.apply(this, args);
                     evaluateBookingFlowMonitoringState();
+                    document.dispatchEvent(new CustomEvent('bc-navigated'));
                 };
 
                 window.addEventListener('popstate', function () {
                     evaluateBookingFlowMonitoringState();
+                    document.dispatchEvent(new CustomEvent('bc-navigated'));
                 });
             }
 
