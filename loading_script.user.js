@@ -78,6 +78,7 @@
         SELF_PROFILE: 'bc_self_profile',
         POD_MEMBER_IDS: 'bc_pod_member_ids',
         COURT_VIEW_CLUB: 'bc_court_view_club',
+        BOOKING_VIEW: 'bc_booking_view',
     });
     // #endregion Core constants and club metadata.
 
@@ -731,6 +732,7 @@
             const PREF_KEYS = [
                 STORAGE_KEYS.CLUB_ORDER, STORAGE_KEYS.VIEW_MODE, STORAGE_KEYS.INDOOR_ONLY,
                 STORAGE_KEYS.TIME_RANGE, STORAGE_KEYS.PLAYERS, STORAGE_KEYS.DURATION,
+                STORAGE_KEYS.BOOKING_VIEW,
             ];
 
             let debounceTimer = null;
@@ -3003,6 +3005,19 @@
 
     const VIEW_MODE_KEY = STORAGE_KEYS.VIEW_MODE;
 
+    const BOOKING_VIEW_HOUR = 'hour-view';
+    const BOOKING_VIEW_COURT = 'court-view';
+
+    function getBookingViewPreference() {
+        const stored = getLocalStorageService().getString(STORAGE_KEYS.BOOKING_VIEW);
+        return stored === BOOKING_VIEW_COURT ? BOOKING_VIEW_COURT : BOOKING_VIEW_HOUR;
+    }
+
+    function saveBookingViewPreference(view) {
+        getLocalStorageService().setString(STORAGE_KEYS.BOOKING_VIEW, view);
+        getPreferenceSyncService().notifyPreferenceChanged();
+    }
+
     function getViewMode() {
         return getLocalStorageService().getString(VIEW_MODE_KEY) === VIEW_MODE_BY_TIME ? VIEW_MODE_BY_TIME : VIEW_MODE_BY_CLUB;
     }
@@ -3653,6 +3668,15 @@
         // constant keeps our visual treatment aligned.
         const BOOKING_ADVANCE_DAYS = 3;
         let serviceInstance = null;
+        // Cancels any in-flight bottom-bar-update loop from a previous bookFromCourtView call.
+        let cancelBarUpdate = null;
+        // Capture-phase listener wired on the Next button after a court-view slot is selected.
+        // Removed after it fires once (or when a new slot is selected).
+        let nextButtonInterceptor = null;
+        // True only while the Angular state machine hack is running (Hour View switch → native
+        // slot click → Next re-click).  Suppresses setVisible(false) and all-clubs-availability
+        // rendering so the court view overlay stays on top during that brief window.
+        let courtViewBookingInFlight = false;
 
         return function getAvailabilityRenderPipeline() {
             if (serviceInstance) return serviceInstance;
@@ -4304,70 +4328,90 @@
             }
 
             // Initiates a booking originating from the court view grid.
-            // Sets pendingSlotBooking, switches to Hour View so that native Angular
-            // slots are present, then clicks one to advance the state machine.
-            // The bottom bar is updated with the selection label once it appears.
+            // Phase 1 (this function): records the pending slot, updates the bottom bar,
+            // Selector for an available (not blocked) time slot inside the native Court View
+            // calendar.  Angular renders these inside app-booking-calendar regardless of
+            // whether that element is visible.
+            const COURT_VIEW_AVAILABLE_SLOT =
+                'app-booking-calendar div.booking-calendar-column-time-slot:not(.booking-calendar-column-time-slot-unavailable)';
+
+            // Initiates a booking originating from the court view grid.
+            // Clicks a hidden native Court View slot immediately to advance Angular's state
+            // machine (enabling Next), then updates the bottom bar label.  The real Next
+            // button click is NOT intercepted — Angular handles navigation on its own trusted
+            // click once its state is already advanced.
             function bookFromCourtView(slotInfo, slotLabel) {
+                if (cancelBarUpdate) { cancelBarUpdate(); cancelBarUpdate = null; }
+                if (nextButtonInterceptor) {
+                    document.removeEventListener('click', nextButtonInterceptor, true);
+                    nextButtonInterceptor = null;
+                }
+
                 getBookingStateService().setPendingSlotBooking(slotInfo);
 
-                function tryUpdateBottomBar() {
+                // Wire a capture-phase listener on the Next button.  When the user
+                // clicks Next (a real trusted click), we advance Angular's state machine
+                // synchronously by clicking a hidden Court View slot while still inside
+                // Angular's zone (zone.js patched addEventListener, so the capture handler
+                // runs in-zone).  We do NOT call stopPropagation or preventDefault, so the
+                // original trusted click continues through Angular's target/bubble phase
+                // and navigates normally.
+                nextButtonInterceptor = function onNextClick(event) {
+                    const btn = event.target.closest('button');
+                    if (!btn || !btn.textContent.trim().includes('NEXT')) return;
+
+                    document.removeEventListener('click', nextButtonInterceptor, true);
+                    nextButtonInterceptor = null;
+
+                    // Click a Court View slot while Angular's calendar is temporarily
+                    // visible so Angular's change detection processes the selection.
+                    const cal = document.querySelector('app-booking-calendar');
+                    const slot = document.querySelector(COURT_VIEW_AVAILABLE_SLOT);
+                    if (slot) {
+                        if (cal) {
+                            cal.style.display = '';
+                            cal.style.visibility = 'hidden';
+                            cal.style.position = 'fixed';
+                            cal.style.top = '-9999px';
+                            cal.style.left = '-9999px';
+                        }
+                        slot.click();
+                        if (cal) {
+                            cal.style.display = 'none';
+                            cal.style.visibility = '';
+                            cal.style.position = '';
+                            cal.style.top = '';
+                            cal.style.left = '';
+                        }
+                    }
+                    // Fall through — the original trusted Next click propagates to Angular.
+                };
+                document.addEventListener('click', nextButtonInterceptor, true);
+
+                // Update the bottom bar with our slot label, overriding Angular's native
+                // label (which reflects the wrong court).  Poll until the bar appears —
+                // Firefox renders it asynchronously after the slot click.
+                const barDeadline = Date.now() + 6000;
+                const barInterval = setInterval(() => {
                     const bottomBar = document.querySelector('.white-bg.p-2 .container');
-                    if (!bottomBar) return false;
+                    if (!bottomBar) { if (Date.now() > barDeadline) clearInterval(barInterval); return; }
+
                     const infoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
                     const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
                     if (nativeInfo) nativeInfo.style.display = 'none';
                     infoHolder.textContent = slotLabel;
-                    const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
-                        .find(btn => btn.textContent.trim().includes('NEXT'));
-                    if (nextButton) {
-                        nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
-                        nextButton.style.borderColor = 'rgb(0, 188, 212)';
-                        nextButton.style.opacity = '1';
-                        nextButton.style.cursor = 'pointer';
-                        nextButton.removeAttribute('disabled');
-                    }
-                    return true;
-                }
 
-                function clickNativeSlotAndUpdateBar() {
-                    const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
-                    if (nativeSlot) nativeSlot.click();
-                    if (!tryUpdateBottomBar()) {
-                        const obs = new MutationObserver(() => {
-                            if (tryUpdateBottomBar()) obs.disconnect();
-                        });
-                        obs.observe(document.body, { childList: true, subtree: true });
-                        setTimeout(() => obs.disconnect(), 5000);
-                    }
-                }
-
-                // If native hour view slots are already in the DOM (user is in Hour View),
-                // proceed immediately.  Otherwise switch to Hour View and wait for them.
-                const existingSlot = document.querySelector('app-court-time-slot-item div.time-slot');
-                if (existingSlot) {
-                    clickNativeSlotAndUpdateBar();
-                    return;
-                }
-
-                // Switch to Hour View; a one-shot MutationObserver fires once Angular
-                // renders native time slot items.
-                const observer = new MutationObserver(() => {
-                    const slot = document.querySelector('app-court-time-slot-item div.time-slot');
-                    if (!slot) return;
-                    observer.disconnect();
-                    clickNativeSlotAndUpdateBar();
-                });
-                observer.observe(document.body, { childList: true, subtree: true });
-                setTimeout(() => observer.disconnect(), 10000);
-
-                const hourViewBtn = getBookingDomQueryService().findHourViewButton();
-                if (hourViewBtn) hourViewBtn.click();
+                    clearInterval(barInterval);
+                    if (Date.now() > barDeadline) clearInterval(barInterval);
+                }, 150);
+                cancelBarUpdate = () => clearInterval(barInterval);
             }
 
             serviceInstance = {
                 applyFilters,
                 renderAllClubsAvailability,
                 bookFromCourtView,
+                isCourtViewBookingInFlight: () => courtViewBookingInFlight,
             };
             return serviceInstance;
         };
@@ -4707,6 +4751,9 @@
             // Per-club cache: { [clubId]: { date, courtSheetData, courtsData } }
             const clubDataCache = {};
             let injectedContainer = null;
+            // Tracks the selectedOverlay currently shown so it can be cleared when the
+            // user clicks a different slot (possibly in a different court column).
+            let activeSelectionOverlay = null;
 
             // --- Storage helpers ---
 
@@ -4862,19 +4909,73 @@
                 // the user's selected slot duration from the params.
                 const durationMinutes =
                     (bookingContext && CLUB_MAX_TIMESLOT[bookingContext.clubId]) ? 60 :
-                    (bookingContext && bookingContext.params.timeSlotId === TIMESLOTS.min90) ? 90 : 60;
+                    (bookingContext && bookingContext.params.timeSlotId === TIMESLOTS.min90) ? 90 :
+                    (bookingContext && bookingContext.params.timeSlotId === TIMESLOTS.min30) ? 30 : 60;
 
-                // Hover overlay: a single absolutely-positioned div that spans the hover
-                // selection window.  pointer-events:none lets mouse events pass through
-                // to the individual 30-min cell elements underneath.
-                const hoverOverlay = document.createElement('div');
-                hoverOverlay.style.cssText = [
-                    'position:absolute; left:1px; right:1px;',
-                    'pointer-events:none; box-sizing:border-box;',
-                    'background:rgba(0,176,199,0.18); border:2px solid rgb(0,176,199);',
-                    'border-radius:3px; display:none; z-index:2;',
-                ].join('');
-                col.appendChild(hoverOverlay);
+                // Two overlays per column, both pointer-events:none so clicks pass through.
+                // hoverOverlay: visible only while mouse is over the column.
+                // selectedOverlay: persists after a click until a new slot is selected.
+                function makeOverlay(zIndex) {
+                    const el = document.createElement('div');
+                    el.style.cssText = [
+                        'position:absolute; left:1px; right:1px;',
+                        'pointer-events:none; box-sizing:border-box;',
+                        'background:rgba(0,176,199,0.18); border:2px solid rgb(0,176,199);',
+                        `border-radius:3px; display:none; z-index:${zIndex};`,
+                    ].join('');
+                    col.appendChild(el);
+                    return el;
+                }
+                const selectedOverlay = makeOverlay(2);
+                const hoverOverlay    = makeOverlay(3);
+
+                // Given the 30-min band the mouse is over, compute the booking window.
+                // Extends forward from m up to durationMinutes.  If there is not enough
+                // consecutive available room forward, shifts the window start backward to
+                // fill the duration — so hovering near the end of a block still highlights
+                // the whole available slot.  Returns { windowStart, windowEnd }.
+                function computeWindow(m) {
+                    // Forward limit: first unavailable band or event start after m.
+                    let blockEnd = visibleTo;
+                    for (let t = m + 30; t <= visibleTo; t += 30) {
+                        if (!availableMinutes.has(t - 30) && t > m + 30) { blockEnd = t - 30; break; }
+                        if (t < visibleTo && !availableMinutes.has(t)) { blockEnd = t; break; }
+                    }
+                    events.forEach(ev => {
+                        if (ev.timeFromInMinutes > m && ev.timeFromInMinutes < blockEnd) {
+                            blockEnd = ev.timeFromInMinutes;
+                        }
+                    });
+                    blockEnd = Math.min(blockEnd, visibleTo);
+
+                    // Backward limit: first unavailable band or event end before/at m.
+                    let blockStart = m;
+                    for (let t = m - 30; t >= visibleFrom; t -= 30) {
+                        if (!availableMinutes.has(t)) break;
+                        blockStart = t;
+                    }
+                    events.forEach(ev => {
+                        if (ev.timeToInMinutes > blockStart && ev.timeToInMinutes <= m) {
+                            blockStart = ev.timeToInMinutes;
+                        }
+                    });
+
+                    // Prefer window starting at m; shift backward if not enough room forward.
+                    let windowStart = m;
+                    let windowEnd   = Math.min(m + durationMinutes, blockEnd);
+                    if (windowEnd - windowStart < durationMinutes) {
+                        windowStart = Math.max(blockStart, blockEnd - durationMinutes);
+                    }
+                    return { windowStart, windowEnd };
+                }
+
+                function positionOverlay(overlay, windowStart, windowEnd) {
+                    const top = Math.round(((windowStart - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                    const h   = Math.round(((windowEnd - windowStart) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                    overlay.style.top     = `${top}px`;
+                    overlay.style.height  = `${h}px`;
+                    overlay.style.display = 'block';
+                }
 
                 // Lay down one cell per 30-minute band across the full visible range.
                 // Available bands are plain (cursor:pointer); unavailable bands get stripes.
@@ -4901,34 +5002,26 @@
                     ].join('');
 
                     cell.addEventListener('mouseenter', () => {
-                        // Compute how far the booking window extends from this slot's start,
-                        // stopping at any event block or the first unavailable band.
-                        let end = m + durationMinutes;
-                        for (let t = m + 30; t < end; t += 30) {
-                            if (!availableMinutes.has(t)) { end = t; break; }
-                        }
-                        events.forEach(ev => {
-                            if (ev.timeFromInMinutes > m && ev.timeFromInMinutes < end) {
-                                end = ev.timeFromInMinutes;
-                            }
-                        });
-                        const availMins  = end - m;
-                        const overlayTop = Math.round(((m - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
-                        const overlayH   = Math.round((availMins / 30) * COURT_VIEW_ROW_HEIGHT_PX);
-                        hoverOverlay.style.top     = `${overlayTop}px`;
-                        hoverOverlay.style.height  = `${overlayH}px`;
-                        hoverOverlay.style.display = 'block';
-                        cell.dataset.bcCvBookMinutes = String(availMins);
+                        const { windowStart, windowEnd } = computeWindow(m);
+                        positionOverlay(hoverOverlay, windowStart, windowEnd);
+                        cell.dataset.bcCvWindowStart = String(windowStart);
+                        cell.dataset.bcCvWindowEnd   = String(windowEnd);
                     });
                     cell.addEventListener('mouseleave', () => {
                         hoverOverlay.style.display = 'none';
                     });
                     cell.addEventListener('click', () => {
-                        const fromMinutes   = m;
-                        const bookedMinutes = parseInt(cell.dataset.bcCvBookMinutes || String(durationMinutes), 10);
-                        const toMinutes     = fromMinutes + bookedMinutes;
+                        const fromMinutes = parseInt(cell.dataset.bcCvWindowStart || String(m), 10);
+                        const toMinutes   = parseInt(cell.dataset.bcCvWindowEnd   || String(m + durationMinutes), 10);
+                        // Clear the previous selection overlay from whichever column owns it.
+                        if (activeSelectionOverlay && activeSelectionOverlay !== selectedOverlay) {
+                            activeSelectionOverlay.style.display = 'none';
+                        }
+                        activeSelectionOverlay = selectedOverlay;
+                        positionOverlay(selectedOverlay, fromMinutes, toMinutes);
                         const clubShortName = CLUB_SHORT_NAMES[bookingContext.clubId] || 'Court';
-                        const slotLabel = `${clubShortName} \u00b7 ${court.shortName || court.name || 'Court'} @ ${minutesToHumanTime(fromMinutes)}\u2013${minutesToHumanTime(toMinutes)}`;
+                        const courtLabel = court.courtName || court.name || court.shortName || court.courtShortName || 'Court';
+                        const slotLabel = `${clubShortName} \u00b7 ${courtLabel} @ ${minutesToHumanTime(fromMinutes)}\u2013${minutesToHumanTime(toMinutes)}`;
                         getAvailabilityRenderPipeline().bookFromCourtView(
                             {
                                 clubId: bookingContext.clubId,
@@ -5202,8 +5295,10 @@
                 container.querySelectorAll('[data-bc-cv-spinner], [data-bc-cv-grid]').forEach(el => el.remove());
             }
 
-            // Finds the app-booking-calendar element and hides it using the NATIVE_HIDDEN_ATTR
-            // pattern so cleanup can reverse the mutation precisely.
+            // Finds the app-booking-calendar element and moves it off-screen using
+            // position:fixed so it is invisible to the user but remains live for Angular's
+            // change detection (display:none would detach it from Angular's rendering tree,
+            // preventing slot clicks from advancing the booking state machine).
             function hideNativeCourtCalendar() {
                 const cal = document.querySelector('app-booking-calendar');
                 if (!cal) return;
@@ -5252,6 +5347,8 @@
                 clearGridContent(container);
                 const grid = document.createElement('div');
                 grid.setAttribute('data-bc-cv-grid', '1');
+                grid.dataset.bcCvClub = clubId;
+                grid.dataset.bcCvDate = date;
                 grid.style.cssText = 'overflow-x:auto;';
                 renderCourtGrid(grid, entry.courtsData, entry.courtSheetData, entry.availabilityData, date, clubId, params);
                 container.appendChild(grid);
@@ -5294,11 +5391,41 @@
                     updateClubSelectorHighlight(container, selectedClub);
                 }
 
+                // Skip the re-render if the grid is already present for the same club and date.
+                // injectCourtView is called on every reconcile pass (MutationObserver + RAF), so
+                // without this guard the grid is torn down and rebuilt on every DOM mutation,
+                // destroying event listeners before the user can interact.
+                const existingGrid = container.querySelector('[data-bc-cv-grid]');
+                if (existingGrid &&
+                    existingGrid.dataset.bcCvClub === selectedClub &&
+                    existingGrid.dataset.bcCvDate === date) {
+                    return;
+                }
+
                 await loadAndRenderGrid(container, selectedClub, date, params);
             }
 
+            // Hides or shows the injected container.
+            // Used when the user toggles between COURT VIEW and HOUR VIEW tabs without
+            // leaving the booking flow — keeps the rendered grid alive so it doesn't need
+            // to be re-fetched when the user switches back.
+            // We do NOT touch app-booking-calendar here: Angular manages its own tab
+            // visibility and restoring its display when switching to Hour View can overlap
+            // Angular content and interfere with the booking state machine.
+            // The full native-content restore happens only in removeOurContentAndUnhideNativeContent.
+            function setVisible(visible) {
+                if (injectedContainer) {
+                    injectedContainer.style.display = visible ? '' : 'none';
+                }
+                if (visible) {
+                    // Court view becoming visible: hide the native calendar so our grid
+                    // takes its place without the two overlapping.
+                    hideNativeCourtCalendar();
+                }
+            }
+
             // Removes the injected container and reference so the next call to injectCourtView
-            // starts fresh.  Hiding the native calendar is reversed by removeOurContentAndUnhideNativeContent.
+            // starts fresh.  Called only on full booking-flow exit.
             function clearInjectedContent() {
                 if (injectedContainer) {
                     injectedContainer.remove();
@@ -5307,7 +5434,7 @@
                 document.querySelectorAll(`[${COURT_VIEW_CONTAINER_ATTR}]`).forEach(el => el.remove());
             }
 
-            serviceInstance = { injectCourtView, clearInjectedContent };
+            serviceInstance = { injectCourtView, setVisible, clearInjectedContent };
             return serviceInstance;
         };
     })();
@@ -5339,26 +5466,62 @@
 
         const hourViewBtn = bookingDomQueryService.findHourViewButton();
 
-        // On the very first render pass, always stamp the HOUR VIEW button and click it
-        // if it is not already selected.  The native app defaults to COURT VIEW with
-        // btn-selected, so we must assert our own default before respecting any tab
-        // choice.  The data-bc-auto-selected stamp prevents re-firing on subsequent passes.
+        // On the very first render pass, click whichever tab matches the stored preference
+        // (default: hour view).  The native app starts on COURT VIEW, so we must assert our
+        // own default.  The data-bc-auto-selected stamp prevents re-firing on subsequent passes.
         if (hourViewBtn && !hourViewBtn.dataset.bcAutoSelected) {
             hourViewBtn.dataset.bcAutoSelected = 'true';
-            if (!hourViewBtn.classList.contains('btn-selected')) {
-                hourViewBtn.click();
-                // Return here; Angular will re-render and the next reconcile pass will
-                // either render hour view content or detect an explicit court view selection.
-                return;
+            const preferredView = getBookingViewPreference();
+            if (preferredView === BOOKING_VIEW_COURT) {
+                // Court view is preferred — only click if it is not already active.
+                if (!bookingDomQueryService.isCourtViewActive()) {
+                    const courtViewBtn = Array.from(document.querySelectorAll('button'))
+                        .find(btn => btn.textContent.trim().startsWith('COURT VIEW'));
+                    if (courtViewBtn) { courtViewBtn.click(); return; }
+                }
+            } else {
+                // Hour view is preferred (default) — only click if not already active.
+                if (!hourViewBtn.classList.contains('btn-selected')) {
+                    hourViewBtn.click();
+                    return;
+                }
             }
         }
 
         // After the initial auto-selection, respect the user's explicit tab choice.
+        // When the active tab diverges from the stored preference, update the preference
+        // so it is remembered for the next session.
         // Court view and hour view are mutually exclusive from this point onward.
+        // Rather than destroying and rebuilding, we hide/show each view's DOM so the
+        // rendered grid survives tab toggling without a full re-fetch.
         if (bookingDomQueryService.isCourtViewActive()) {
+            // Only persist the preference for explicit user tab selections, not for
+            // programmatic switches made by the Angular state machine hack.
+            if (!getAvailabilityRenderPipeline().isCourtViewBookingInFlight() &&
+                    getBookingViewPreference() !== BOOKING_VIEW_COURT) {
+                saveBookingViewPreference(BOOKING_VIEW_COURT);
+            }
+            getCourtViewService().setVisible(true);
             getCourtViewService().injectCourtView(lastFetchState.params.date, lastFetchState.params);
             return;
         }
+
+        if (!getAvailabilityRenderPipeline().isCourtViewBookingInFlight() &&
+                getBookingViewPreference() !== BOOKING_VIEW_HOUR) {
+            saveBookingViewPreference(BOOKING_VIEW_HOUR);
+        }
+
+        // Hour view is active — hide the court view container (keeps its DOM intact),
+        // but only when no court-view booking is in progress.  If pendingSlotBooking is
+        // set the user clicked a court-view slot and bookFromCourtView switched to Hour
+        // View underneath; the court view UI should stay visible so the user never sees
+        // the tab switch and the bottom bar can update normally.
+        // While a court-view booking is in flight, bookFromCourtView has switched Hour View
+        // on underneath our still-visible court view container.  Skip both the hide and the
+        // all-clubs-availability render so no extra content appears above the court grid.
+        if (getAvailabilityRenderPipeline().isCourtViewBookingInFlight()) return;
+
+        getCourtViewService().setVisible(false);
 
         bookingDomQueryService.getTimeSlotHosts().forEach(host => {
             if (host.querySelector('.all-clubs-availability')) return;

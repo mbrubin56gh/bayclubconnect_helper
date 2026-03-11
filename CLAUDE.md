@@ -158,6 +158,7 @@ Duration/player preference auto-selection also uses an in-file closure service (
 - `bc_time_range` — `{ startMinutes, endMinutes }` — time range filter state *(synced to Worker KV)*
 - `bc_indoor_only` — boolean — indoor courts filter state *(synced to Worker KV)*
 - `bc_view_mode` — `'by-club'` | `'by-time'` — availability panel layout mode *(synced to Worker KV)*
+- `bc_booking_view` — `'hour-view'` | `'court-view'` — which booking calendar tab to auto-select on load; defaults to `'hour-view'` when absent *(synced to Worker KV)*
 - `bc_debug_enabled` — `'1'` | `'0'` — debug mode enabled state
 - `bc_debug_entries` — JSON array of debug log entries for copy/download support workflows
 - `bc_possible_players` — player list cached from the `possiblePlayers` API, populated by XHR interception during normal booking flows and used by the partner picker for locked slots
@@ -165,7 +166,7 @@ Duration/player preference auto-selection also uses an in-file closure service (
 - `bc_notification_email` — user's email address cached from `profile/api/1.0/profile`, embedded in booking records for Worker email notifications
 - `bc_self_profile` — `{ firstName, lastName }` of the logged-in user, cached from `connect20auth` or `profile/api/1.0/profile`; used to show the logged-in user as a pre-selected non-interactive card at the top of the partner picker
 
-Note: scheduled booking records are stored in Cloudflare Worker KV (`scheduled_bookings` key), not in localStorage. The extension maintains a local `cachedBookings` array populated by `GET /bookings` from the Worker. The six synced preferences (`bc_club_order`, `bc_view_mode`, `bc_indoor_only`, `bc_time_range`, `bc_players`, `bc_duration`) are also mirrored to Worker KV under `prefs:{email}` via `getPreferenceSyncService()`, which pulls on page load (server wins) and pushes on change with an 800 ms debounce.
+Note: scheduled booking records are stored in Cloudflare Worker KV (`scheduled_bookings` key), not in localStorage. The extension maintains a local `cachedBookings` array populated by `GET /bookings` from the Worker. The seven synced preferences (`bc_club_order`, `bc_view_mode`, `bc_indoor_only`, `bc_time_range`, `bc_players`, `bc_duration`, `bc_booking_view`) are also mirrored to Worker KV under `prefs:{email}` via `getPreferenceSyncService()`, which pulls on page load (server wins) and pushes on change with an 800 ms debounce.
 
 ## Cloudflare Worker (`cloudflare-worker/`)
 
