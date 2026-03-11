@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      0.801
+// @version      0.81
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1394,6 +1394,7 @@
                         firstName: m.firstName,
                         lastName: m.lastName,
                         memberIdentifier: m.memberIdentifier,
+                        email: m.email || null,
                     }));
 
                 (buddyData.buddyListItems || [])
@@ -1408,6 +1409,7 @@
                                 // Buddy list uses memberId for the same numeric member identifier.
                                 memberIdentifier: buddy.memberId,
                                 isPermanentMember: buddy.isPermanentMember,
+                                email: buddy.email || null,
                             });
                         }
                     });
@@ -1519,6 +1521,14 @@
                     ? CLUB_MAX_TIMESLOT[slotInfo.clubId]
                     : lastFetchState.params.timeSlotId;
 
+                // Look up partner emails from the cached player list by personId.
+                // Players without a cached email are silently skipped.
+                const cachedPlayers = getLocalStorageService().getJson(POSSIBLE_PLAYERS_KEY, '[bc] failed to parse cached players for partner emails') || [];
+                const emailByPersonId = new Map(
+                    cachedPlayers.filter(p => p.email).map(p => [p.personId, p.email])
+                );
+                const partnerEmails = selectedPartners.map(p => emailByPersonId.get(p.personId)).filter(Boolean);
+
                 const booking = {
                     id: crypto.randomUUID(),
                     fireAtMs: computeFireAtMs(slotInfo.date, slotInfo.fromMinutes),
@@ -1538,6 +1548,7 @@
                     },
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
+                    partnerEmails,
                     notificationEmail: await fetchNotificationEmail(),
                     userName: (() => {
                         const p = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile');

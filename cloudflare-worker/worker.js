@@ -246,23 +246,7 @@ async function fireBooking(booking, env) {
 // Sends a success or failure email via Resend. Requires RESEND_API_KEY and
 // NOTIFICATION_EMAIL secrets. Uses onboarding@resend.dev as sender until a
 // custom domain is configured (Phase 5).
-async function sendEmailNotification(booking, env) {
-    const to = booking.notificationEmail;
-    if (!env.RESEND_API_KEY || !to) return;
-
-    const succeeded = booking.status === STATUS_SUCCEEDED;
-    const subject = succeeded
-        ? `✅ Booking confirmed: ${booking.slotLabel}`
-        : `❌ Booking failed: ${booking.slotLabel}`;
-    const partners = (booking.partnerNames || []).join(', ') || 'none';
-    const html = succeeded
-        ? `<p>Your scheduled booking was placed successfully.</p>
-           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
-        : `<p>Your scheduled booking could not be placed.</p>
-           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
-           <p>Reason: ${booking.failureReason || 'Unknown error'}</p>
-           <p>You can try booking manually on <a href="https://bayclubconnect.com">bayclubconnect.com</a>.</p>`;
-
+async function sendResendEmail(env, to, subject, html) {
     const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -278,8 +262,53 @@ async function sendEmailNotification(booking, env) {
     });
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Resend sendEmailNotification failed: HTTP ${response.status} ${text}`);
+        throw new Error(`Resend email failed: HTTP ${response.status} ${text}`);
     }
+}
+
+async function sendEmailNotification(booking, env) {
+    if (!env.RESEND_API_KEY) return;
+
+    const succeeded = booking.status === STATUS_SUCCEEDED;
+    const partners = (booking.partnerNames || []).join(', ') || 'none';
+
+    // Notify the scheduler.
+    if (booking.notificationEmail) {
+        const subject = succeeded
+            ? `✅ Booking confirmed: ${booking.slotLabel}`
+            : `❌ Booking failed: ${booking.slotLabel}`;
+        const html = succeeded
+            ? `<p>Your scheduled booking was placed successfully.</p>
+               <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
+            : `<p>Your scheduled booking could not be placed.</p>
+               <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
+               <p>Reason: ${booking.failureReason || 'Unknown error'}</p>
+               <p>You can try booking manually on <a href="https://bayclubconnect.com">bayclubconnect.com</a>.</p>`;
+        await sendResendEmail(env, booking.notificationEmail, subject, html);
+    }
+
+    // Notify each partner whose email was captured at scheduling time.
+    // Partners without a stored email are silently skipped.
+    const partnerEmails = (booking.partnerEmails || []).filter(
+        e => e && e !== booking.notificationEmail
+    );
+    if (partnerEmails.length === 0) return;
+
+    // Use the scheduler's name in the subject if available, falling back to
+    // their notification email, then a generic phrase.
+    const schedulerLabel = booking.userName || booking.notificationEmail || 'Someone';
+    const partnerSubject = succeeded
+        ? `✅ ${schedulerLabel}'s pending booking succeeded: ${booking.slotLabel}`
+        : `❌ ${schedulerLabel}'s pending booking failed: ${booking.slotLabel}`;
+    const partnerHtml = succeeded
+        ? `<p>${schedulerLabel}'s scheduled booking was placed successfully — you're on the court!</p>
+           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
+        : `<p>${schedulerLabel}'s scheduled booking could not be placed.</p>
+           <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
+           <p>Reason: ${booking.failureReason || 'Unknown error'}</p>
+           <p>You may want to book manually on <a href="https://bayclubconnect.com">bayclubconnect.com</a>.</p>`;
+
+    await Promise.all(partnerEmails.map(email => sendResendEmail(env, email, partnerSubject, partnerHtml)));
 }
 
 // Sends a weekly activity summary to the admin email. Queries D1 for the

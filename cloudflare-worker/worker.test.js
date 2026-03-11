@@ -577,3 +577,184 @@ describe('runCronTick', () => {
         expect(saved.every(b => b.status === 'succeeded')).toBe(true);
     });
 });
+
+describe('partner email notifications', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    // Builds a mock fetch that succeeds through the full fire sequence
+    // (auth → booking POST → confirm PUT) and then handles any number of
+    // Resend email POSTs, returning 200 for all of them.
+    // URL-based dispatch is used because the auth call body is URL-encoded,
+    // not JSON, so parsing the body to detect it would throw.
+    function makeSuccessFetch() {
+        return vi.fn().mockImplementation((url) => {
+            if (typeof url === 'string' && url.includes('resend.com')) {
+                return Promise.resolve(new Response('{}', { status: 200 }));
+            }
+            if (typeof url === 'string' && url.includes('authentication2-api')) {
+                return Promise.resolve(new Response(
+                    JSON.stringify({ access_token: 'at', refresh_token: 'rt-new' }),
+                    { status: 200 },
+                ));
+            }
+            if (typeof url === 'string' && url.includes('confirm')) {
+                return Promise.resolve(new Response('', { status: 200 }));
+            }
+            return Promise.resolve(new Response(
+                JSON.stringify({ courtBookingId: 'cbi-123' }),
+                { status: 200 },
+            ));
+        });
+    }
+
+    it('sends a notification email to each partner email on success', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            userName: 'Mark Rubin',
+            notificationEmail: 'mark@example.com',
+            partnerEmails: ['partner1@example.com', 'partner2@example.com'],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@example.com': 'rt-initial',
+        });
+
+        const mockFetch = makeSuccessFetch();
+        vi.stubGlobal('fetch', mockFetch);
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = mockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        // Three emails: scheduler + two partners.
+        expect(resendCalls.length).toBe(3);
+
+        const partnerCalls = resendCalls.filter(([, opts]) =>
+            JSON.parse(opts.body).to !== 'mark@example.com'
+        );
+        const partnerRecipients = partnerCalls.map(([, opts]) => JSON.parse(opts.body).to);
+        expect(partnerRecipients.sort()).toEqual(['partner1@example.com', 'partner2@example.com']);
+
+        const partnerSubjects = partnerCalls.map(([, opts]) => JSON.parse(opts.body).subject);
+        partnerSubjects.forEach(s => expect(s).toMatch(/Mark Rubin/));
+        partnerSubjects.forEach(s => expect(s).toMatch(/succeeded/));
+    });
+
+    it('sends failure emails to partners when booking fails', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            userName: 'Mark Rubin',
+            notificationEmail: 'mark@example.com',
+            partnerEmails: ['partner@example.com'],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@example.com': 'rt-initial',
+        });
+
+        const failMockFetch = vi.fn()
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            .mockResolvedValueOnce(new Response('Court unavailable', { status: 409 }))
+            .mockResolvedValue(new Response('{}', { status: 200 }));
+        vi.stubGlobal('fetch', failMockFetch);
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = failMockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        const partnerCall = resendCalls.find(([, opts]) =>
+            JSON.parse(opts.body).to === 'partner@example.com'
+        );
+        expect(partnerCall).toBeDefined();
+        expect(JSON.parse(partnerCall[1].body).subject).toMatch(/failed/);
+    });
+
+    it('uses notificationEmail as fallback label when userName is absent', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            userName: '',
+            notificationEmail: 'mark@example.com',
+            partnerEmails: ['partner@example.com'],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@example.com': 'rt-initial',
+        });
+
+        const mockFetch = makeSuccessFetch();
+        vi.stubGlobal('fetch', mockFetch);
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = mockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        const partnerCall = resendCalls.find(([, opts]) =>
+            JSON.parse(opts.body).to === 'partner@example.com'
+        );
+        expect(JSON.parse(partnerCall[1].body).subject).toMatch(/mark@example\.com/);
+    });
+
+    it('skips partner email if no partnerEmails are stored', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            notificationEmail: 'mark@example.com',
+            // No partnerEmails field.
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@example.com': 'rt-initial',
+        });
+
+        const mockFetch = makeSuccessFetch();
+        vi.stubGlobal('fetch', mockFetch);
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = mockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        // Only one email: the scheduler.
+        expect(resendCalls.length).toBe(1);
+        expect(JSON.parse(resendCalls[0][1].body).to).toBe('mark@example.com');
+    });
+
+    it('does not send a duplicate email when a partner email matches the scheduler email', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            userName: 'Mark Rubin',
+            notificationEmail: 'mark@example.com',
+            // One unique partner plus a duplicate of the scheduler's address.
+            partnerEmails: ['partner@example.com', 'mark@example.com'],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@example.com': 'rt-initial',
+        });
+
+        const mockFetch = makeSuccessFetch();
+        vi.stubGlobal('fetch', mockFetch);
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = mockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        // Two emails: scheduler (once) + unique partner.
+        expect(resendCalls.length).toBe(2);
+        const recipients = resendCalls.map(([, opts]) => JSON.parse(opts.body).to);
+        expect(recipients.filter(r => r === 'mark@example.com').length).toBe(1);
+    });
+});
