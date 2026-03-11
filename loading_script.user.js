@@ -250,7 +250,10 @@
                     for (const court of (clubAvail.courts || [])) {
                         if (!seenCourtIds.has(court.courtId)) {
                             seenCourtIds.add(court.courtId);
-                            target.courts.push({ ...court, bc_clubId: clubId });
+                            // Override any clubId field on the court object to match the
+                            // home club so Angular does not filter it out when rendering
+                            // columns.  bc_clubId preserves the real club for our tagging.
+                            target.courts.push({ ...court, clubId: homeClubId, bc_clubId: clubId });
                         }
                     }
                     for (const slot of (clubAvail.availableTimeSlots || [])) {
