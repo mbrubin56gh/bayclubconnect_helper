@@ -20,7 +20,7 @@
 //   buildFailedBookingRowHtml    — failed booking → HTML row string
 //   buildCalendarDataForPendingBooking — booking record → calendar data object
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);

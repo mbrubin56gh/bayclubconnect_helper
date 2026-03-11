@@ -2157,6 +2157,125 @@
                 });
             }
 
+            // Formats a booking date string ("2026-03-12") as "Today", "Tomorrow", or
+            // a short date like "Wed Mar 12", using Pacific time for today/tomorrow
+            // comparison so the label is correct regardless of the viewer's locale.
+            function formatPendingBookingDayLabel(dateStr) {
+                const nowMs = Date.now();
+                // Use noon of the slot date to avoid DST boundary edge cases.
+                const slotNoonMs = pacificSlotTimeMs(dateStr, 12 * 60);
+                const todayPacific = new Date(nowMs)
+                    .toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+                const slotPacific = new Date(slotNoonMs)
+                    .toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+                const tomorrowPacific = new Date(nowMs + 24 * 60 * 60 * 1000)
+                    .toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+                if (slotPacific === todayPacific) return 'Today';
+                if (slotPacific === tomorrowPacific) return 'Tomorrow';
+                return new Date(slotNoonMs)
+                    .toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
+            }
+
+            Object.assign(_bcTestExports, { formatPendingBookingDayLabel });
+
+            // Builds a dashboard carousel tile element for a pending scheduled booking.
+            // Matches the native card dimensions and CSS classes so it slots naturally
+            // into the carousel alongside confirmed bookings.
+            function buildPendingDashboardCard(booking) {
+                const body = booking.bookingBody;
+                const dateStr = body && body.date && body.date.value;
+                const slotParts = (booking.slotLabel || '').split(' \u00b7 ');
+                const clubName = slotParts[0] || 'Bay Club';
+                const courtName = slotParts[1] || 'Court';
+                const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
+
+                const timeText = (dateStr && body.timeFromInMinutes != null && body.timeToInMinutes != null)
+                    ? `${minutesToHumanTime(body.timeFromInMinutes)} \u2013 ${minutesToHumanTime(body.timeToInMinutes)}`
+                    : (slotParts[2] || '');
+                const dayLabel = dateStr ? formatPendingBookingDayLabel(dateStr) : (slotParts[3] || '');
+
+                const PICKLEBALL_IMAGE = 'https://connect-assets-cdn.bayclubs.io/rwd_mobile/racquet-sports/details_pickleball.png';
+
+                const wrapper = document.createElement('div');
+                wrapper.setAttribute('data-bc-dashboard-pending', booking.id);
+                wrapper.style.cssText = 'min-width: 205px; max-width: 205px; margin-right: 12px; flex-shrink: 0;';
+
+                wrapper.innerHTML = `
+                    <div style="cursor: pointer; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; background: #1f4366;">
+                        <div style="height: 125px; background-image: url('${PICKLEBALL_IMAGE}'); background-size: cover; background-position: center; position: relative; flex-shrink: 0;">
+                            <div style="position: absolute; top: 6px; right: 8px; background: rgba(0,0,0,0.55); border-radius: 4px; padding: 2px 6px; font-size: 11px; color: #ffe082; font-weight: 700; letter-spacing: 0.03em;">\u23f3 PENDING</div>
+                        </div>
+                        <div data-bc-card-body style="padding: 8px; flex: 1; display: flex; flex-direction: column; gap: 4px; color: #fff;">
+                            <strong style="font-size: 14px; font-weight: 700; display: block;">Pickleball BOOKING</strong>
+                            <div style="font-size: 13px; opacity: 0.85; display: flex; flex-direction: column; gap: 2px;">
+                                <div>${dayLabel}, ${timeText}</div>
+                                <div>${clubName}, ${courtName}</div>
+                                <div>Partners: ${partnerList}</div>
+                            </div>
+                        </div>
+                    </div>`;
+
+                // Clicking anywhere on the card navigates to /bookings where the
+                // pending section shows the full details and cancel option.
+                wrapper.querySelector('div').addEventListener('click', () => {
+                    location.href = '/bookings';
+                });
+
+                // Append calendar export links to the card body and prevent their
+                // clicks from also triggering the card navigation.
+                const calendarData = buildCalendarDataForPendingBooking(booking);
+                if (calendarData) {
+                    const cardBody = wrapper.querySelector('[data-bc-card-body]');
+                    const calendarUrl = buildGoogleCalendarUrl(calendarData);
+                    appendCalendarActions(cardBody, calendarData, calendarUrl);
+                }
+
+                return wrapper;
+            }
+
+            // Synchronises pending scheduled booking cards in the dashboard carousel.
+            // Adds cards for newly relevant bookings and removes cards whose bookings
+            // are no longer active. Runs on every reconcile pass; the data-bc-dashboard-pending
+            // attribute prevents duplicate injection.
+            function injectPendingCardsForDashboardPage() {
+                if (!getBookingsDomQueryService().isOnDashboardPage()) return;
+
+                const carousel = document.querySelector('.responsive-carousel');
+                if (!carousel) return;
+
+                const currentEmail = getLocalStorageService().getString(
+                    STORAGE_KEYS.NOTIFICATION_EMAIL, '[bc] failed to read notification email for dashboard'
+                );
+                const relevantBookings = getScheduledBookingService().getActiveBookings()
+                    .filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+
+                // Remove cards for bookings that are no longer active or relevant.
+                const relevantIds = new Set(relevantBookings.map(b => b.id));
+                carousel.querySelectorAll('[data-bc-dashboard-pending]').forEach(card => {
+                    if (!relevantIds.has(card.dataset.bcDashboardPending)) {
+                        card.remove();
+                    }
+                });
+
+                if (relevantBookings.length === 0) return;
+
+                // Insert new cards before the "Book an Activity" tile, or append to
+                // the end of the carousel if that tile is absent.
+                const bookMoreTile = Array.from(carousel.children).find(
+                    el => el.querySelector('.book-more')
+                );
+
+                relevantBookings.forEach(booking => {
+                    if (carousel.querySelector(`[data-bc-dashboard-pending="${booking.id}"]`)) return;
+                    const card = buildPendingDashboardCard(booking);
+                    if (bookMoreTile) {
+                        carousel.insertBefore(card, bookMoreTile);
+                    } else {
+                        carousel.appendChild(card);
+                    }
+                });
+            }
+
             function formatCountdown(fireAtMs) {
                 const diff = fireAtMs - Date.now();
                 if (diff <= 0) return 'Booking attempt in progress\u2026';
@@ -2435,6 +2554,7 @@
                     injectButtonsForBookingsPage();
                     injectButtonsForBookingDetailsPage();
                     injectButtonsForDashboardPage();
+                    injectPendingCardsForDashboardPage();
                     injectPendingBookingsSection();
                     if (getScheduledBookingService().getActiveBookings().length > 0) {
                         startPendingCountdownUpdates();
