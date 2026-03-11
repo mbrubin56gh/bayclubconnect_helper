@@ -5614,12 +5614,24 @@
                         col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
                     }
                 });
+                // Diagnostic: log the expected vs actual column counts and the tag mapping
+                // so we can verify whether Angular rendered all courts or only a subset.
+                console.log('[bc] tagColumns diagnostic:', {
+                    expectedCourts: courtsOrder.length,
+                    renderedColumns: columns.length,
+                    mapping: Array.from(columns).map((col, i) => ({
+                        index: i,
+                        assignedClubId: courtsOrder[i]?.clubId,
+                        assignedCourtId: courtsOrder[i]?.courtId,
+                        headerText: col.querySelector('[class*="header"], [class*="title"], [class*="name"]')?.textContent?.trim() || '(no header found)',
+                    })),
+                });
             }
 
             // Shows columns for the given club, hides all others.  Columns without a
             // data-bc-club-id tag (not yet tagged) are left visible so the grid doesn't
             // flash empty while tagging is still in progress.
-            function applyClubFilter(clubId) {
+            function _applyClubFilter(clubId) {
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.style.display = col.getAttribute('data-bc-club-id') === clubId ? '' : 'none';
                 });
@@ -5653,7 +5665,7 @@
                         selectedClubId = clubId;
                         saveSelectedClub(clubId);
                         tagColumns();
-                        applyClubFilter(clubId);
+                        // Filtering disabled during diagnostics — show all columns.
                         updateSelectorHighlight(bar, clubId);
                     });
                     bar.appendChild(btn);
@@ -5694,13 +5706,13 @@
                 if (!columnObserver) {
                     columnObserver = new MutationObserver(() => {
                         tagColumns();
-                        applyClubFilter(selectedClubId);
+                        // Filtering disabled during diagnostics — show all columns.
                     });
                     columnObserver.observe(cal, { childList: true, subtree: true });
                 }
 
                 tagColumns();
-                applyClubFilter(selectedClubId);
+                // Filtering disabled during diagnostics — show all columns unfiltered.
             }
 
             // Removes all tagging, hides cleanup, disconnects observer.
