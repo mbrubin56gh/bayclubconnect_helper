@@ -29,6 +29,7 @@ const {
     buildPendingBookingRowHtml,
     buildFailedBookingRowHtml,
     buildCalendarDataForPendingBooking,
+    isBookingRelevantToCurrentUser,
     SLOT_CHECK_STATUS,
 } = require('./loading_script.user.js');
 
@@ -244,9 +245,24 @@ describe('buildPendingBookingRowHtml', () => {
         expect(html).toContain('No partners');
     });
 
-    it('includes a cancel button with the booking id', () => {
-        const html = buildPendingBookingRowHtml(makePendingBooking());
+    it('includes a cancel button with the booking id when the viewer is the scheduler', () => {
+        const html = buildPendingBookingRowHtml(makePendingBooking(), true);
         expect(html).toContain('data-bc-cancel-booking="booking-abc"');
+    });
+
+    it('omits the cancel button when the viewer is a partner, not the scheduler', () => {
+        const html = buildPendingBookingRowHtml(makePendingBooking(), false);
+        expect(html).not.toContain('data-bc-cancel-booking');
+    });
+
+    it('shows "Scheduled by" attribution when the viewer is a partner', () => {
+        const html = buildPendingBookingRowHtml(makePendingBooking({ userName: 'Mark Rubin' }), false);
+        expect(html).toContain('Scheduled by Mark Rubin');
+    });
+
+    it('omits "Scheduled by" attribution when the viewer is the scheduler', () => {
+        const html = buildPendingBookingRowHtml(makePendingBooking({ userName: 'Mark Rubin' }), true);
+        expect(html).not.toContain('Scheduled by');
     });
 
     it('includes a countdown element', () => {
@@ -298,17 +314,61 @@ describe('buildFailedBookingRowHtml', () => {
         expect(html).toContain('The booking attempt was unsuccessful.');
     });
 
-    it('includes a dismiss button with the booking id', () => {
-        const html = buildFailedBookingRowHtml(makeFailedBooking());
+    it('includes a dismiss button with the booking id when the viewer is the scheduler', () => {
+        const html = buildFailedBookingRowHtml(makeFailedBooking(), true);
         expect(html).toContain('data-bc-dismiss-booking="booking-xyz"');
     });
 
+    it('omits the dismiss button when the viewer is a partner, not the scheduler', () => {
+        const html = buildFailedBookingRowHtml(makeFailedBooking(), false);
+        expect(html).not.toContain('data-bc-dismiss-booking');
+    });
+
+    it('shows "Scheduled by" attribution on failed rows for partner viewers', () => {
+        const html = buildFailedBookingRowHtml(makeFailedBooking({ userName: 'Mark Rubin' }), false);
+        expect(html).toContain('Scheduled by Mark Rubin');
+    });
+
     it('uses red-tinted styling to distinguish failed rows from pending rows', () => {
-        const pendingHtml = buildPendingBookingRowHtml(makePendingBooking());
-        const failedHtml  = buildFailedBookingRowHtml(makeFailedBooking());
+        const pendingHtml = buildPendingBookingRowHtml(makePendingBooking(), true);
+        const failedHtml  = buildFailedBookingRowHtml(makeFailedBooking(), true);
         // Pending rows use a cyan tint; failed rows use a red tint.
         expect(pendingHtml).toContain('rgba(0,188,212');
         expect(failedHtml).toContain('rgba(239,83,80');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// isBookingRelevantToCurrentUser
+// ---------------------------------------------------------------------------
+
+describe('isBookingRelevantToCurrentUser', () => {
+    const booking = {
+        notificationEmail: 'scheduler@example.com',
+        partnerEmails: ['partner1@example.com', 'partner2@example.com'],
+    };
+
+    it('returns true when currentEmail matches the scheduler', () => {
+        expect(isBookingRelevantToCurrentUser(booking, 'scheduler@example.com')).toBe(true);
+    });
+
+    it('returns true when currentEmail matches a partner email', () => {
+        expect(isBookingRelevantToCurrentUser(booking, 'partner1@example.com')).toBe(true);
+        expect(isBookingRelevantToCurrentUser(booking, 'partner2@example.com')).toBe(true);
+    });
+
+    it('returns false when currentEmail is not the scheduler or any partner', () => {
+        expect(isBookingRelevantToCurrentUser(booking, 'stranger@example.com')).toBe(false);
+    });
+
+    it('returns false when partnerEmails is absent and email does not match scheduler', () => {
+        const noPartners = { notificationEmail: 'scheduler@example.com' };
+        expect(isBookingRelevantToCurrentUser(noPartners, 'stranger@example.com')).toBe(false);
+    });
+
+    it('returns false when currentEmail is null or empty', () => {
+        expect(isBookingRelevantToCurrentUser(booking, null)).toBe(false);
+        expect(isBookingRelevantToCurrentUser(booking, '')).toBe(false);
     });
 });
 

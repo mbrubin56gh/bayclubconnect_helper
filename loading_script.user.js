@@ -2188,30 +2188,40 @@
                 formatCountdown,
             });
 
-            function buildPendingBookingRowHtml(booking) {
+            function buildPendingBookingRowHtml(booking, isScheduler) {
                 const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
                 const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
                 const warningStyle = isTaken ? '' : 'display: none;';
+                const scheduledBy = isScheduler ? '' : `<div style="font-size: 12px; color: rgba(255,255,255,0.45); margin-top: 4px;">Scheduled by ${booking.userName || 'a partner'}</div>`;
+                const cancelButton = isScheduler
+                    ? `<button data-bc-cancel-booking="${booking.id}" style="background: none; border: 1px solid rgba(239,83,80,0.5); color: #ef5350; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Cancel</button>`
+                    : '';
                 return `<div data-bc-pending-booking="${booking.id}" style="background: rgba(0,188,212,0.08); border: 1px solid rgba(0,188,212,0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
                         <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 4px;">Partners: ${partnerList}</div>
+                        ${scheduledBy}
                         <div data-bc-slot-warning style="font-size: 12px; color: #ffb74d; margin-top: 4px; ${warningStyle}">\u26a0\ufe0f The court was booked by someone else</div>
                         <div data-bc-countdown style="font-size: 12px; color: rgb(0,188,212); margin-top: 4px;">${formatCountdown(booking.fireAtMs)}</div>
                     </div>
-                    <button data-bc-cancel-booking="${booking.id}" style="background: none; border: 1px solid rgba(239,83,80,0.5); color: #ef5350; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Cancel</button>
+                    ${cancelButton}
                 </div>`;
             }
 
-            function buildFailedBookingRowHtml(booking) {
+            function buildFailedBookingRowHtml(booking, isScheduler) {
                 const reason = booking.failureReason || 'The booking attempt was unsuccessful.';
+                const scheduledBy = isScheduler ? '' : `<div style="font-size: 12px; color: rgba(255,255,255,0.45); margin-top: 2px;">Scheduled by ${booking.userName || 'a partner'}</div>`;
+                const dismissButton = isScheduler
+                    ? `<button data-bc-dismiss-booking="${booking.id}" style="background: none; border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.7); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Dismiss</button>`
+                    : '';
                 return `<div data-bc-failed-booking="${booking.id}" style="background: rgba(239,83,80,0.08); border: 1px solid rgba(239,83,80,0.35); border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
                         <div style="font-size: 12px; color: #ef5350; margin-top: 4px;">Booking unsuccessful</div>
                         <div style="font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 2px;">${reason}</div>
+                        ${scheduledBy}
                     </div>
-                    <button data-bc-dismiss-booking="${booking.id}" style="background: none; border: 1px solid rgba(255,255,255,0.3); color: rgba(255,255,255,0.7); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Dismiss</button>
+                    ${dismissButton}
                 </div>`;
             }
 
@@ -2246,18 +2256,30 @@
                 };
             }
 
+            // Returns true if the current user is the scheduler or an invited partner
+            // for the given booking. Used to filter which pending bookings are shown.
+            function isBookingRelevantToCurrentUser(booking, currentEmail) {
+                if (!currentEmail) return booking.notificationEmail === undefined;
+                if (booking.notificationEmail === currentEmail) return true;
+                return Array.isArray(booking.partnerEmails) && booking.partnerEmails.includes(currentEmail);
+            }
+
             Object.assign(_bcTestExports, {
                 buildPendingBookingRowHtml,
                 buildFailedBookingRowHtml,
                 buildCalendarDataForPendingBooking,
+                isBookingRelevantToCurrentUser,
                 SLOT_CHECK_STATUS: getScheduledBookingService().SLOT_CHECK_STATUS,
             });
 
             function injectPendingBookingsSection() {
                 if (!getBookingsDomQueryService().isOnBookingsPage()) return;
 
-                const activeBookings = getScheduledBookingService().getActiveBookings();
-                const failedBookings = getScheduledBookingService().getFailedBookings();
+                const currentEmail = getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL, '[bc] failed to read notification email');
+                const allActiveBookings = getScheduledBookingService().getActiveBookings();
+                const allFailedBookings = getScheduledBookingService().getFailedBookings();
+                const activeBookings = allActiveBookings.filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+                const failedBookings = allFailedBookings.filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
                 const existingSection = document.querySelector('[data-bc-pending-section]');
 
                 if (activeBookings.length === 0 && failedBookings.length === 0) {
@@ -2296,9 +2318,20 @@
                     <div style="font-size: 16px; font-weight: 600; color: white; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                         <span>\u23f3</span> Pending Bookings
                     </div>
-                    ${activeBookings.map(buildPendingBookingRowHtml).join('')}
-                    ${failedBookings.map(buildFailedBookingRowHtml).join('')}
+                    ${activeBookings.map(b => buildPendingBookingRowHtml(b, b.notificationEmail === currentEmail)).join('')}
+                    ${failedBookings.map(b => buildFailedBookingRowHtml(b, b.notificationEmail === currentEmail)).join('')}
                 `;
+
+                // Removes the section if no relevant rows remain after a cancel or dismiss.
+                function removeSectionIfEmpty() {
+                    const remainingActive = getScheduledBookingService().getActiveBookings()
+                        .filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+                    const remainingFailed = getScheduledBookingService().getFailedBookings()
+                        .filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+                    if (remainingActive.length === 0 && remainingFailed.length === 0) {
+                        section.remove();
+                    }
+                }
 
                 // Bind cancel buttons for pending bookings.
                 section.querySelectorAll('[data-bc-cancel-booking]').forEach(btn => {
@@ -2307,10 +2340,7 @@
                         getScheduledBookingService().cancelBooking(bookingId);
                         const row = section.querySelector(`[data-bc-pending-booking="${bookingId}"]`);
                         if (row) row.remove();
-                        if (getScheduledBookingService().getActiveBookings().length === 0 &&
-                            getScheduledBookingService().getFailedBookings().length === 0) {
-                            section.remove();
-                        }
+                        removeSectionIfEmpty();
                     });
                 });
 
@@ -2321,10 +2351,7 @@
                         getScheduledBookingService().dismissBooking(bookingId);
                         const row = section.querySelector(`[data-bc-failed-booking="${bookingId}"]`);
                         if (row) row.remove();
-                        if (getScheduledBookingService().getActiveBookings().length === 0 &&
-                            getScheduledBookingService().getFailedBookings().length === 0) {
-                            section.remove();
-                        }
+                        removeSectionIfEmpty();
                     });
                 });
 
