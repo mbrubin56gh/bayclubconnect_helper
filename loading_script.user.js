@@ -94,7 +94,6 @@
             let lastFetchState = null;
             let pendingSlotBooking = null;
             let rawFetchResults = null;
-            let pendingNativePatch = null;
             let mergedCourtsOrder = null;
 
             function captureHeader(name, value) {
@@ -150,26 +149,14 @@
 
             function setRawFetchResults(results) {
                 rawFetchResults = results;
-                // If the native XHR already fired and left a pending patch waiting for
-                // our data, apply it now.
-                if (pendingNativePatch) {
-                    const patch = pendingNativePatch;
-                    pendingNativePatch = null;
-                    patch(rawFetchResults);
-                }
             }
 
             function getRawFetchResults() {
                 return rawFetchResults;
             }
 
-            function setPendingNativePatch(fn) {
-                pendingNativePatch = fn;
-            }
-
             function clearRawFetchState() {
                 rawFetchResults = null;
-                pendingNativePatch = null;
                 mergedCourtsOrder = null;
             }
 
@@ -188,7 +175,6 @@
                 getMergedCourtsOrder,
                 setRawFetchResults,
                 getRawFetchResults,
-                setPendingNativePatch,
                 clearRawFetchState,
             };
             return serviceInstance;
@@ -303,80 +289,77 @@
             Object.defineProperty(xhr, 'responseText', { get: () => json, configurable: true });
         }
 
-        function maybePatchAvailabilityResponseForAngular(xhr) {
-            // Inject a merged payload covering all clubs into the native availability XHR
-            // response so Angular's Court View renders every club's courts as native columns.
-            // We intercept here rather than replacing the XHR entirely so that Angular's own
-            // load handlers still fire — they just see our combined response instead of the
-            // single home-club response.
-            //
-            // Timing: our parallel fetches for all clubs run concurrently with the native
-            // XHR.  If our fetches finish first, rawFetchResults is already populated and we
-            // apply the merge immediately.  If the native XHR fires first, we register a
-            // pending patch and apply it once fetchAllClubs completes; at that point we
-            // dispatch a synthetic 'load' event on the XHR so Angular re-processes the data.
-            if (xhr.status < 200 || xhr.status >= 300) return;
-            if (!xhr.responseText || xhr.responseText.trim() === '') return;
-            try {
-                const data = JSON.parse(xhr.responseText);
-                if (!data.clubsAvailabilities) return;
-
-                const rawResults = getBookingStateService().getRawFetchResults();
-                if (rawResults) {
-                    // Our parallel fetches already finished — apply the merge now.
-                    const mergedData = buildMergedAvailabilityPayload(data, rawResults);
-                    applyMergedPayloadToXhr(xhr, mergedData);
-                    return;
-                }
-
-                // Parallel fetches haven't finished yet.  Patch the response with just the
-                // single-slot fallback for now so Angular can render immediately, then
-                // register a deferred patch that will rewrite the response and re-trigger
-                // Angular's Court View column rendering once our data arrives.
-                const clubAvail = data.clubsAvailabilities[0];
-                if ((clubAvail?.availableTimeSlots?.length ?? 0) === 0) {
-                    const court = clubAvail?.courts?.[0];
-                    if (court) {
-                        clubAvail.availableTimeSlots = [{
-                            timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450,
-                            courtId: court.courtId,
-                            courtsVersionsIds: [court.courtSetupVersionId || court.courtId],
-                        }];
-                    }
-                }
-                const singleClubJson = JSON.stringify(data);
-                Object.defineProperty(xhr, 'response', { get: () => singleClubJson, configurable: true });
-                Object.defineProperty(xhr, 'responseText', { get: () => singleClubJson, configurable: true });
-
-                // Register a deferred patch.  When fetchAllClubs finishes it will call
-                // setRawFetchResults(), which triggers this callback with the full results.
-                getBookingStateService().setPendingNativePatch(function (results) {
-                    try {
-                        const mergedData = buildMergedAvailabilityPayload(data, results);
-                        applyMergedPayloadToXhr(xhr, mergedData);
-                        // Dispatch a synthetic 'load' event so Angular re-reads the response
-                        // and re-renders the Court View columns with all clubs' courts.
-                        xhr.dispatchEvent(new Event('load'));
-                    } catch (e) {
-                        console.log('[bc] deferred patch error:', e);
-                    }
-                });
-            } catch (e) {
-                console.log('[bc] error:', e);
-            }
+        function maybePatchAvailabilityResponseForAngular(_xhr) {
+            // The availability XHR is now fully intercepted in send() — we never call
+            // originalXhrSend for it.  By the time this load listener fires (triggered by
+            // interceptAvailabilityXhr after all parallel fetches complete), the merged
+            // payload is already set on the XHR via applyMergedPayloadToXhr.  Nothing more
+            // needs to be done here — the response Angular reads is already correct.
+            // We keep this function as a no-op so the open() listener wiring is unchanged.
         }
 
-        function fetchAvailabilityAcrossAllClubsForRequestUrl(requestUrl) {
-            if (!requestUrl || !requestUrl.includes(AVAILABILITY_API_PATH)) return;
+        // Parses the URL query params from a native availability request URL into the
+        // shape expected by fetchAllClubs.
+        function parseAvailabilityParams(requestUrl) {
             const parsedUrl = new URL(requestUrl);
-            const params = {
+            return {
                 date: parsedUrl.searchParams.get('date'),
                 categoryCode: parsedUrl.searchParams.get('categoryCode'),
                 categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
                 timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
                 nativeClubId: parsedUrl.searchParams.get('clubId'),
             };
-            fetchAllClubs(params);
+        }
+
+        // Intercepts the native availability XHR entirely: never calls originalXhrSend.
+        // Instead, fetches all four clubs in parallel, builds the merged payload, and
+        // delivers it to Angular by populating the XHR's response properties and
+        // dispatching the standard XHR completion event sequence.  Angular's load handler
+        // fires exactly once — after all club data is ready — and sees every club's courts.
+        async function interceptAvailabilityXhr(xhr, requestUrl) {
+            const params = parseAvailabilityParams(requestUrl);
+
+            // Kick off both the parallel fetch (for our own UI) and the UI injection
+            // together.  fetchAllClubs handles abort, error banners, transform, and inject.
+            // We await it here so the merged payload is ready before we trigger Angular's
+            // load handlers on the XHR.
+            await fetchAllClubs(params);
+
+            // fetchAllClubs calls setRawFetchResults which populates getMergedCourtsOrder.
+            // Build the merged payload from the raw results and deliver it to Angular.
+            const rawResults = getBookingStateService().getRawFetchResults();
+            if (!rawResults || rawResults.length === 0) {
+                // All fetches failed — showHelperFailureBannerAndRestoreNative was already
+                // called by fetchAllClubs.  Don't fire a load event; leave Angular without
+                // a response so it falls back to its own error state.
+                return;
+            }
+
+            // Use the first successful result as the "native" base for the merge so the
+            // home-club structure (club metadata, etc.) is preserved in the merged response.
+            const baseData = rawResults[0];
+            let mergedData;
+            try {
+                mergedData = buildMergedAvailabilityPayload(baseData, rawResults);
+            } catch (e) {
+                console.log('[bc] merge error in interceptAvailabilityXhr:', e);
+                return;
+            }
+
+            // Populate the XHR response properties so Angular reads the merged payload.
+            applyMergedPayloadToXhr(xhr, mergedData);
+
+            // Simulate the standard XHR completion sequence.  Angular's load handler
+            // registered via open() will run maybePatchAvailabilityResponseForAngular
+            // (now a no-op) then Angular's own handler which reads xhr.response.
+            try {
+                Object.defineProperty(xhr, 'readyState', { get: () => 4, configurable: true });
+                Object.defineProperty(xhr, 'status', { get: () => 200, configurable: true });
+                Object.defineProperty(xhr, 'statusText', { get: () => 'OK', configurable: true });
+            } catch (_e) { /* already defined — values already set, proceed */ }
+            xhr.dispatchEvent(new ProgressEvent('readystatechange'));
+            xhr.dispatchEvent(new ProgressEvent('load'));
+            xhr.dispatchEvent(new ProgressEvent('loadend'));
         }
 
         function maybeRewriteBookingRequestToPendingSelection(xhr, requestUrl, requestMethod, originalArgs) {
@@ -535,7 +518,13 @@
             const requestUrl = requestInfo?.url;
             const requestMethod = requestInfo?.method;
 
-            fetchAvailabilityAcrossAllClubsForRequestUrl(requestUrl);
+            // For availability requests, take over the XHR entirely: fetch all clubs in
+            // parallel, deliver the merged response to Angular, then return.  Angular
+            // never sees the native single-club response, and originalXhrSend is not called.
+            if (typeof requestUrl === 'string' && requestUrl.includes(AVAILABILITY_API_PATH)) {
+                interceptAvailabilityXhr(this, requestUrl);
+                return;
+            }
 
             const rewrittenSendResult = maybeRewriteBookingRequestToPendingSelection(this, requestUrl, requestMethod, arguments);
             if (rewrittenSendResult.handled) return rewrittenSendResult.value;
