@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.00
+// @version      1.01
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -2240,14 +2240,12 @@
             function injectPendingCardsForDashboardPage() {
                 if (!getBookingsDomQueryService().isOnDashboardPage()) return;
 
-                // Prefer the carousel that contains confirmed booking cards or the
-                // "Book an Activity" tile. The dashboard has multiple .responsive-carousel
-                // elements (e.g. "What's New") and querySelector returns the first in DOM
-                // order, which may not yet be the bookings carousel on initial load.
-                const allCarousels = Array.from(document.querySelectorAll('.responsive-carousel'));
-                const carousel = allCarousels.find(el =>
-                    el.querySelector('app-dashboard-card') || el.querySelector('.book-more')
-                ) || allCarousels[0];
+                // Target the Upcoming Activities carousel specifically by scoping to
+                // app-dashboard-events. The Favorites carousel lives in app-dashboard-favorites
+                // and also contains app-dashboard-card / .book-more, so searching all
+                // .responsive-carousel elements picks the wrong one when it renders first.
+                const eventsHost = document.querySelector('app-dashboard-events');
+                const carousel = eventsHost && eventsHost.querySelector('.responsive-carousel');
                 if (!carousel) return;
 
                 const currentEmail = getLocalStorageService().getString(
@@ -2256,9 +2254,11 @@
                 const relevantBookings = getScheduledBookingService().getActiveBookings()
                     .filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
 
-                // Remove cards for bookings that are no longer active or relevant.
+                // Remove stale cards from anywhere in the document — the target
+                // carousel can shift between reconcile passes on Firefox mobile, so
+                // scoping cleanup to the current carousel would leave orphans behind.
                 const relevantIds = new Set(relevantBookings.map(b => b.id));
-                carousel.querySelectorAll('[data-bc-dashboard-pending]').forEach(card => {
+                document.querySelectorAll('[data-bc-dashboard-pending]').forEach(card => {
                     if (!relevantIds.has(card.dataset.bcDashboardPending)) {
                         card.remove();
                     }
@@ -2273,7 +2273,7 @@
                 );
 
                 relevantBookings.forEach(booking => {
-                    if (carousel.querySelector(`[data-bc-dashboard-pending="${booking.id}"]`)) return;
+                    if (document.querySelector(`[data-bc-dashboard-pending="${booking.id}"]`)) return;
                     const card = buildPendingDashboardCard(booking);
                     if (bookMoreTile) {
                         carousel.insertBefore(card, bookMoreTile);
