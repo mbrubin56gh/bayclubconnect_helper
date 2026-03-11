@@ -19,6 +19,8 @@
 //   buildPendingBookingRowHtml   — pending booking → HTML row string
 //   buildFailedBookingRowHtml    — failed booking → HTML row string
 //   buildCalendarDataForPendingBooking — booking record → calendar data object
+//   isBookingRelevantToCurrentUser — scheduler/partner email matching
+//   formatPendingBookingDayLabel — Today/Tomorrow/short date label in Pacific time
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
@@ -30,6 +32,7 @@ const {
     buildFailedBookingRowHtml,
     buildCalendarDataForPendingBooking,
     isBookingRelevantToCurrentUser,
+    formatPendingBookingDayLabel,
     SLOT_CHECK_STATUS,
 } = require('./loading_script.user.js');
 
@@ -433,5 +436,60 @@ describe('buildCalendarDataForPendingBooking', () => {
         const data = buildCalendarDataForPendingBooking(booking);
         expect(data.title).toContain('Bay Club');
         expect(data.location).toContain('Bay Club');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// formatPendingBookingDayLabel
+// ---------------------------------------------------------------------------
+
+describe('formatPendingBookingDayLabel', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    // Pin Date.now() to a known Pacific time: 2026-03-10 at noon PT (UTC-7 in March).
+    // 2026-03-10T19:00:00Z = 2026-03-10T12:00:00 PT.
+    const MARCH_10_NOON_PT_MS = Date.UTC(2026, 2, 10, 19, 0, 0);
+
+    it('returns "Today" when the date string matches today in Pacific time', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(MARCH_10_NOON_PT_MS);
+        expect(formatPendingBookingDayLabel('2026-03-10')).toBe('Today');
+    });
+
+    it('returns "Tomorrow" when the date string is one day ahead in Pacific time', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(MARCH_10_NOON_PT_MS);
+        expect(formatPendingBookingDayLabel('2026-03-11')).toBe('Tomorrow');
+    });
+
+    it('returns a short date label for dates beyond tomorrow', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(MARCH_10_NOON_PT_MS);
+        const label = formatPendingBookingDayLabel('2026-03-15');
+        expect(label).not.toBe('Today');
+        expect(label).not.toBe('Tomorrow');
+        // Should contain the day-of-week and day number.
+        expect(label).toMatch(/Sun/);
+        expect(label).toMatch(/15/);
+    });
+
+    it('returns "Today" for a date that is today even when called late in the evening PT', () => {
+        // 2026-03-10T06:55:00Z = 2026-03-09T23:55:00 PT — technically yesterday in PT,
+        // but 2026-03-10T05:00:00Z = 2026-03-10T00:00:00 PT (midnight).
+        // Use 2026-03-10T23:55:00 PT = 2026-03-11T06:55:00Z.
+        const MARCH_10_LATE_NIGHT_PT_MS = Date.UTC(2026, 2, 11, 6, 55, 0);
+        vi.useFakeTimers();
+        vi.setSystemTime(MARCH_10_LATE_NIGHT_PT_MS);
+        expect(formatPendingBookingDayLabel('2026-03-10')).toBe('Today');
+    });
+
+    it('handles a date in the past without throwing', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(MARCH_10_NOON_PT_MS);
+        const label = formatPendingBookingDayLabel('2026-03-01');
+        expect(typeof label).toBe('string');
+        expect(label.length).toBeGreaterThan(0);
     });
 });
