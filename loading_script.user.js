@@ -280,6 +280,27 @@
                 target.courts.map(c => ({ courtId: c.courtId, clubId: c.bc_clubId }))
             );
 
+            // Diagnostic: compare field shapes across home club courts vs merged courts
+            // and slots, to check for fields that Angular might be filtering by
+            // (e.g. a clubId field on court objects that points to the wrong club).
+            const homeCourtSample = target.courts.find(c => c.bc_clubId === homeClubId);
+            const otherCourtSamples = Object.values(CLUBS)
+                .filter(id => id !== homeClubId)
+                .map(id => ({
+                    clubId: id,
+                    court: target.courts.find(c => c.bc_clubId === id),
+                    slot: target.availableTimeSlots.find(s => s.bc_clubId === id),
+                }));
+            console.log('[bc] buildMergedAvailabilityPayload diagnostic:', {
+                totalCourts: target.courts.length,
+                totalSlots: target.availableTimeSlots.length,
+                homeClubId,
+                homeCourtFields: homeCourtSample ? Object.keys(homeCourtSample) : '(none)',
+                homeCourtSample,
+                homeSlotSample: target.availableTimeSlots.find(s => s.bc_clubId === homeClubId),
+                otherClubs: otherCourtSamples,
+            });
+
             return merged;
         }
 
