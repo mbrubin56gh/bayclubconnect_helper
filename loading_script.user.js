@@ -283,25 +283,33 @@
                 target.courts.map(c => ({ courtId: c.courtId, clubId: c.bc_clubId }))
             );
 
-            // Diagnostic: compare field shapes across home club courts vs merged courts
-            // and slots, to check for fields that Angular might be filtering by
-            // (e.g. a clubId field on court objects that points to the wrong club).
-            const homeCourtSample = target.courts.find(c => c.bc_clubId === homeClubId);
-            const otherCourtSamples = Object.values(CLUBS)
-                .filter(id => id !== homeClubId)
-                .map(id => ({
+            // Diagnostic: per-club breakdown of courts and slots actually merged in.
+            // This shows whether each club contributed data and how much, so we can
+            // see whether the merge is incomplete or the fetch results are missing data.
+            const perClub = Object.entries(CLUBS).map(([name, id]) => {
+                const courts = target.courts.filter(c => c.bc_clubId === id);
+                const slots = target.availableTimeSlots.filter(s => s.bc_clubId === id);
+                const sampleCourt = courts[0];
+                const sampleSlot = slots[0];
+                return {
+                    name,
                     clubId: id,
-                    court: target.courts.find(c => c.bc_clubId === id),
-                    slot: target.availableTimeSlots.find(s => s.bc_clubId === id),
-                }));
+                    isHomeClub: id === homeClubId,
+                    courtCount: courts.length,
+                    slotCount: slots.length,
+                    courtFields: sampleCourt ? Object.keys(sampleCourt) : '(no courts)',
+                    slotFields: sampleSlot ? Object.keys(sampleSlot) : '(no slots)',
+                    sampleCourtId: sampleCourt?.courtId,
+                    sampleSlotCourtId: sampleSlot?.courtId,
+                    sampleSlotVersionIds: sampleSlot?.courtsVersionsIds,
+                };
+            });
             console.log('[bc] buildMergedAvailabilityPayload diagnostic:', {
                 totalCourts: target.courts.length,
                 totalSlots: target.availableTimeSlots.length,
                 homeClubId,
-                homeCourtFields: homeCourtSample ? Object.keys(homeCourtSample) : '(none)',
-                homeCourtSample,
-                homeSlotSample: target.availableTimeSlots.find(s => s.bc_clubId === homeClubId),
-                otherClubs: otherCourtSamples,
+                rawResultsLength: rawResults.length,
+                perClub,
             });
 
             return merged;
@@ -493,6 +501,16 @@
             if (typeof url === 'string' && url.includes(AVAILABILITY_API_PATH)) {
                 this.addEventListener('load', function () {
                     maybePatchAvailabilityResponseForAngular(this);
+                });
+            }
+            // Diagnostic: log any courtsheet requests Angular makes so we know whether
+            // Court View uses a second endpoint (in addition to availability) for its data.
+            if (typeof url === 'string' && url.includes('courtsheet')) {
+                const capturedUrl = url;
+                this.addEventListener('load', function () {
+                    console.log('[bc] courtsheet XHR fired:', capturedUrl,
+                        '| status:', this.status,
+                        '| responseLength:', this.responseText?.length);
                 });
             }
             if (typeof url === 'string' && url.includes('possiblePlayers')) {
