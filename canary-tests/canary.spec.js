@@ -1125,3 +1125,62 @@ test.describe('Edge and gated court indicators', () => {
         expect(legendText).toMatch(/G\s*=\s*gated court/i);
     });
 });
+
+// ---------------------------------------------------------------------------
+// 13. Dashboard page DOM structure
+// ---------------------------------------------------------------------------
+
+test.describe('Bay Club /home/dashboard DOM structure', () => {
+    // These tests verify the Angular component structure the helper depends on
+    // when injecting pending booking cards into the Upcoming Activities carousel.
+    // They do not schedule or interact with any bookings.
+
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        requireAuth(test);
+        page = await browser.newPage();
+        await page.goto('/home/dashboard', { waitUntil: 'networkidle' });
+    });
+
+    test.afterAll(async () => {
+        await page.close();
+    });
+
+    test('app-dashboard-events is present on the dashboard', async () => {
+        // ADJUST: if Bay Club renames this component, update the selector and the
+        // carousel lookup in injectPendingCardsForDashboardPage.
+        await expect(page.locator('app-dashboard-events')).toBeAttached({ timeout: 10_000 });
+    });
+
+    test('app-dashboard-events contains a .responsive-carousel', async () => {
+        // The helper scopes its carousel lookup to app-dashboard-events to avoid
+        // targeting the Favorites carousel.  If Bay Club restructures this component,
+        // pending booking cards will land in the wrong carousel.
+        await expect(
+            page.locator('app-dashboard-events .responsive-carousel')
+        ).toBeAttached({ timeout: 10_000 });
+    });
+
+    test('app-dashboard-favorites is present and separate from app-dashboard-events', async () => {
+        // Both components contain .responsive-carousel elements.  Confirming both
+        // exist validates why we must scope to app-dashboard-events rather than
+        // using a document-wide carousel search.
+        // ADJUST: if Bay Club merges or renames these components, revisit the
+        // carousel targeting logic in injectPendingCardsForDashboardPage.
+        await expect(page.locator('app-dashboard-favorites')).toBeAttached({ timeout: 10_000 });
+        await expect(
+            page.locator('app-dashboard-favorites .responsive-carousel')
+        ).toBeAttached({ timeout: 10_000 });
+    });
+
+    test('app-dashboard-events contains the Upcoming Activities label', async () => {
+        // Confirms this is the correct carousel section for injecting booking cards.
+        // ADJUST: if the label text changes, update this assertion.
+        const labelText = await page
+            .locator('app-dashboard-events')
+            .textContent({ timeout: 10_000 })
+            .catch(() => '');
+        expect(labelText).toMatch(/upcoming activities/i);
+    });
+});
