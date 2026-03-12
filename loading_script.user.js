@@ -6038,19 +6038,34 @@
         return function getNativeCourtColumnsService() {
             if (serviceInstance) return serviceInstance;
 
-            // Tags each app-booking-calendar-column with data-bc-club-id using the
-            // merged courts order recorded when the XHR payload was built.  Angular
-            // renders columns in the same order courts appear in the response, so
-            // index-based mapping is reliable.  No filtering or UI injection is done
-            // here — columns are purely annotated for future use.
+            // Tags each app-booking-calendar-column with data-bc-club-id and
+            // data-bc-court-id using the merged courts order recorded when the XHR
+            // payload was built.  Angular renders columns in the same order courts
+            // appear in the response, so index-based mapping is reliable.
+            // Also stamps data-bc-pod-conflict on columns belonging to a club where
+            // a pod member has an existing reservation, so CSS can dim those columns.
             function tagColumns() {
                 const courtsOrder = getBookingStateService().getMergedCourtsOrder();
                 if (!courtsOrder || courtsOrder.length === 0) return;
                 const columns = document.querySelectorAll('app-booking-calendar-column');
+
+                // Derive pod conflicts once per tag pass so we don't repeat the work
+                // per column.  Returns {} when no pod members are configured.
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                const podConflicts = lastFetchState
+                    ? computePodConflicts(lastFetchState.params.date, lastFetchState)
+                    : {};
+
                 columns.forEach((col, i) => {
                     if (i >= courtsOrder.length) return;
-                    col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
+                    const clubId = courtsOrder[i].clubId;
+                    col.setAttribute('data-bc-club-id', clubId);
                     col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
+                    if (podConflicts[clubId]) {
+                        col.setAttribute('data-bc-pod-conflict', podConflicts[clubId].type);
+                    } else {
+                        col.removeAttribute('data-bc-pod-conflict');
+                    }
                 });
             }
 
@@ -6147,6 +6162,13 @@
                 // outer slots, suppressing interior horizontal lines between 30-min
                 // sub-slots.  Inset shadows stay inside each element's bounds and are
                 // not clipped by ancestor overflow:hidden.
+                // Columns for a club where a pod member already has a reservation are
+                // dimmed so the user can see at a glance that the slot is "claimed"
+                // within the pod.  Slots remain clickable — the conflict is a visual
+                // cue only.  opacity affects the entire column including the color band.
+                const podConflictRule =
+                    'app-booking-calendar-column[data-bc-pod-conflict]{opacity:0.45;}';
+
                 const T = 'rgb(0,188,212)';
                 const LR = 'inset 3px 0 0 ' + T + ',inset -3px 0 0 ' + T;
                 const TOP = 'inset 0 3px 0 ' + T;
@@ -6162,7 +6184,7 @@
 
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
-                style.textContent = rules + lockedHoverRule;
+                style.textContent = rules + podConflictRule + lockedHoverRule;
                 document.head.appendChild(style);
             }
 
@@ -6303,6 +6325,7 @@
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
                     col.removeAttribute('data-bc-court-id');
+                    col.removeAttribute('data-bc-pod-conflict');
                 });
             }
 
