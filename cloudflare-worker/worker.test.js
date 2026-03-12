@@ -495,7 +495,7 @@ describe('runCronTick', () => {
         expect(kv._store.get('refresh_token:user@example.com')).toBe('rt-new');
     });
 
-    it('marks a booking failed when the booking POST returns an error', async () => {
+    it('marks a booking failed when the booking POST returns an error and there are no fallbacks', async () => {
         const booking = makeBooking({ status: 'pending', fireAtMs: Date.now() - 1000 });
         const kv = makeMockKv({
             scheduled_bookings: JSON.stringify([booking]),
@@ -515,6 +515,111 @@ describe('runCronTick', () => {
         const saved = JSON.parse(kv._store.get('scheduled_bookings'));
         expect(saved[0].status).toBe('failed');
         expect(saved[0].failureReason).toMatch(/409/);
+    });
+
+    it('falls back to the next court and succeeds when the primary court POST fails', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            originalCourtName: 'Court 1',
+            fallbackCourts: [{ courtId: 'court-2', courtName: 'Court 2' }],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+
+        // Sequence: auth → primary court POST (409) → fallback court POST (200) → confirm PUT (200).
+        vi.stubGlobal('fetch', vi.fn()
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            .mockResolvedValueOnce(new Response('Court already booked', { status: 409 }))
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ courtBookingId: 'cbi-fallback' }),
+                { status: 200 },
+            ))
+            .mockResolvedValueOnce(new Response('', { status: 200 })),
+        );
+
+        await runCronTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].status).toBe('succeeded');
+        expect(saved[0].bookedCourtId).toBe('court-2');
+        expect(saved[0].bookedCourtName).toBe('Court 2');
+        expect(saved[0].usedFallback).toBe(true);
+    });
+
+    it('marks failed when all fallback courts are also unavailable', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            originalCourtName: 'Court 1',
+            fallbackCourts: [
+                { courtId: 'court-2', courtName: 'Court 2' },
+                { courtId: 'court-3', courtName: 'Court 3' },
+            ],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+
+        // Auth succeeds; all three court POSTs fail.
+        vi.stubGlobal('fetch', vi.fn()
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            .mockResolvedValue(new Response('Court already booked', { status: 409 })),
+        );
+
+        await runCronTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].status).toBe('failed');
+        expect(saved[0].failureReason).toMatch(/409/);
+        expect(saved[0].failureReason).toMatch(/2 fallback court/);
+    });
+
+    it('notes the fallback substitution in the success email when a fallback court was used', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            originalCourtName: 'Court 1',
+            fallbackCourts: [{ courtId: 'court-2', courtName: 'Court 2' }],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+
+        // Auth → primary 409 → fallback 200 → confirm 200 → Resend POST.
+        const sentEmailBodies = [];
+        vi.stubGlobal('fetch', vi.fn()
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            .mockResolvedValueOnce(new Response('Court already booked', { status: 409 }))
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ courtBookingId: 'cbi-fallback' }),
+                { status: 200 },
+            ))
+            .mockResolvedValueOnce(new Response('', { status: 200 }))
+            .mockImplementationOnce(async (url, opts) => {
+                sentEmailBodies.push(JSON.parse(opts.body));
+                return new Response('{}', { status: 200 });
+            }),
+        );
+
+        await runCronTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        expect(sentEmailBodies).toHaveLength(1);
+        expect(sentEmailBodies[0].html).toMatch(/Court 1 was unavailable/);
+        expect(sentEmailBodies[0].html).toMatch(/Court 2 instead/);
     });
 
     it('marks a booking failed when no refresh token is stored in KV', async () => {

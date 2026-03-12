@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.02
+// @version      1.03
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1557,6 +1557,14 @@
                         isVisibleToBuddies: isVisibleToBuddies !== false,
                     },
                     slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
+                    // The original court name is stored separately so the Worker can mention
+                    // it in the email if a fallback court is used instead.
+                    originalCourtName: slotInfo.courtName || null,
+                    // Courts sorted by preference (gated > edge > neither), excluding the
+                    // primary. The Worker tries them in order if the primary POST fails.
+                    fallbackCourts: (slotInfo.allCourts || [])
+                        .filter(c => c.courtId !== slotInfo.courtId)
+                        .map(c => ({ courtId: c.courtId, courtName: c.courtName || null })),
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
                     partnerEmails,
                     notificationEmail: await fetchNotificationEmail(),
@@ -3993,19 +4001,50 @@
                 }
 
                 const lastFetchState = getBookingStateService().getLastFetchState();
+                const fromMinutes = parseInt(el.dataset.fromMinutes);
+                const toMinutes = parseInt(el.dataset.toMinutes);
+                const slotClubId = el.dataset.clubId;
+
+                // Build an ordered fallback court list (gated > edge > neither, then by
+                // courtOrder within each tier) so the Worker can retry on other courts if
+                // the primary court is snagged first.
+                const allCourts = (() => {
+                    const transformed = lastFetchState && lastFetchState.transformed;
+                    if (!transformed) return [];
+                    for (const todSlots of Object.values(transformed)) {
+                        for (const clubEntry of todSlots) {
+                            if (clubEntry.clubId !== slotClubId) continue;
+                            for (const slot of (clubEntry.availabilities || [])) {
+                                if (slot.fromInMinutes === fromMinutes && slot.toInMinutes === toMinutes) {
+                                    return slot.courts.slice().sort((a, b) => {
+                                        const score = c => {
+                                            if ((GATED_COURTS[slotClubId] || []).includes(c.courtName)) return 0;
+                                            if ((EDGE_COURTS[slotClubId] || []).includes(c.courtName)) return 1;
+                                            return 2;
+                                        };
+                                        return score(a) - score(b) || a.courtOrder - b.courtOrder;
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    return [];
+                })();
+
                 const slotInfo = {
-                    clubId: el.dataset.clubId,
+                    clubId: slotClubId,
                     courtId: el.dataset.courtId,
                     courtName: el.dataset.court,
                     clubName: el.dataset.clubName,
                     date: lastFetchState?.params?.date,
-                    fromMinutes: parseInt(el.dataset.fromMinutes),
-                    toMinutes: parseInt(el.dataset.toMinutes),
+                    fromMinutes,
+                    toMinutes,
                     fromTime: el.dataset.from,
                     toTime: el.dataset.to,
                     dateLabel: lastFetchState?.params?.date
                         ? new Date(lastFetchState.params.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
                         : '',
+                    allCourts,
                 };
 
                 // Hide all availability grids (both desktop and mobile injection hosts) so

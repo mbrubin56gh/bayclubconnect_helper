@@ -175,14 +175,18 @@ async function savePrefs(env, userId, prefs) {
 // INSERT OR IGNORE so a dismiss (DELETE) arriving after the cron tick has
 // already written the row is silently a no-op. Failures are swallowed so
 // D1 unavailability can never affect the booking outcome itself.
-async function appendToHistory(env, booking, status, failureReason, completedAtMs) {
+// bookedCourtName: null when the primary court was used; the fallback court name
+// when the Worker substituted a different court.  Stored in the new
+// booked_court_name column (added via: ALTER TABLE booking_history ADD COLUMN
+// booked_court_name TEXT DEFAULT NULL).
+async function appendToHistory(env, booking, status, failureReason, completedAtMs, bookedCourtName) {
     if (!env.DB) return;
     try {
         await env.DB.prepare(
             'INSERT OR IGNORE INTO booking_history' +
             ' (id, user_email, user_name, slot_label, partner_names, status, failure_reason,' +
-            '  scheduled_at_ms, fire_at_ms, completed_at_ms)' +
-            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            '  scheduled_at_ms, fire_at_ms, completed_at_ms, booked_court_name)' +
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         ).bind(
             booking.id,
             booking.notificationEmail || '',
@@ -194,6 +198,7 @@ async function appendToHistory(env, booking, status, failureReason, completedAtM
             booking.createdAtMs || 0,
             booking.fireAtMs || 0,
             completedAtMs,
+            bookedCourtName || null,
         ).run();
     } catch (_e) {
         // Non-critical: history write failure must not affect booking outcome.
@@ -207,15 +212,13 @@ async function appendToHistory(env, booking, status, failureReason, completedAtM
 // Fires a single booking: refreshes the token for the booking's owner, POSTs
 // courtbookings, then PUTs confirm. Throws on any failure so the cron tick can
 // mark the booking failed.
-async function fireBooking(booking, env) {
-    const accessToken = await refreshAccessToken(env, booking.notificationEmail);
-    const headers = buildApiHeaders(accessToken, crypto.randomUUID());
-
-    // Step 1: POST courtbookings.
+// Attempts to POST a single court booking and PUT confirm. Throws on failure.
+// Returns the courtBookingId on success.
+async function attemptCourtBooking(bookingBody, confirmBody, headers) {
     const bookingResponse = await fetch(`${BOOKING_API_BASE}/courtbookings`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(booking.bookingBody),
+        body: JSON.stringify(bookingBody),
     });
     if (!bookingResponse.ok) {
         const text = await bookingResponse.text().catch(() => '');
@@ -227,16 +230,49 @@ async function fireBooking(booking, env) {
         throw new Error('Booking POST did not return a courtBookingId.');
     }
 
-    // Step 2: PUT confirm with partner invitations.
     const confirmResponse = await fetch(`${BOOKING_API_BASE}/courtbookings/${courtBookingId}/confirm`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify(booking.confirmBody),
+        body: JSON.stringify(confirmBody),
     });
     if (!confirmResponse.ok) {
         const text = await confirmResponse.text().catch(() => '');
         throw new Error(`Confirm PUT failed: HTTP ${confirmResponse.status} ${text}`);
     }
+    return courtBookingId;
+}
+
+// Fires a single booking: refreshes the token, then tries the primary court followed
+// by each fallback court (in preference order, as sorted by the extension at scheduling
+// time: gated > edge > neither).  Returns { bookedCourtId, bookedCourtName } on success;
+// throws if every court attempt fails.
+async function fireBooking(booking, env) {
+    const accessToken = await refreshAccessToken(env, booking.notificationEmail);
+    const headers = buildApiHeaders(accessToken, crypto.randomUUID());
+
+    // Build the ordered list of courts to try: primary first, then fallbacks.
+    const primaryCourt = {
+        courtId: booking.bookingBody.courtId,
+        courtName: booking.originalCourtName || null,
+    };
+    const courts = [primaryCourt, ...(booking.fallbackCourts || [])];
+
+    let lastError;
+    for (const court of courts) {
+        const bodyForCourt = Object.assign({}, booking.bookingBody, { courtId: court.courtId });
+        try {
+            await attemptCourtBooking(bodyForCourt, booking.confirmBody, headers);
+            return { bookedCourtId: court.courtId, bookedCourtName: court.courtName };
+        } catch (err) {
+            lastError = err;
+            // Continue to the next fallback court.
+        }
+    }
+
+    // All courts exhausted — throw with a summary that includes the original error.
+    const fallbackCount = (booking.fallbackCourts || []).length;
+    const extra = fallbackCount > 0 ? ` (tried ${fallbackCount} fallback court${fallbackCount === 1 ? '' : 's'})` : '';
+    throw new Error((lastError && lastError.message ? lastError.message : String(lastError)) + extra);
 }
 
 // #endregion Booking execution.
@@ -272,6 +308,12 @@ async function sendEmailNotification(booking, env) {
     const succeeded = booking.status === STATUS_SUCCEEDED;
     const partners = (booking.partnerNames || []).join(', ') || 'none';
 
+    // Build a substitution note shown when the Worker booked a fallback court instead
+    // of the originally scheduled one (e.g. primary court was snagged first).
+    const substitutionNote = (succeeded && booking.usedFallback && booking.originalCourtName && booking.bookedCourtName)
+        ? `<p style="color:#b45309;"><strong>Note:</strong> ${booking.originalCourtName} was unavailable — you were booked on ${booking.bookedCourtName} instead.</p>`
+        : '';
+
     // Notify the scheduler.
     if (booking.notificationEmail) {
         const subject = succeeded
@@ -279,6 +321,7 @@ async function sendEmailNotification(booking, env) {
             : `❌ Booking failed: ${booking.slotLabel}`;
         const html = succeeded
             ? `<p>Your scheduled booking was placed successfully.</p>
+               ${substitutionNote}
                <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
             : `<p>Your scheduled booking could not be placed.</p>
                <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
@@ -302,6 +345,7 @@ async function sendEmailNotification(booking, env) {
         : `❌ ${schedulerLabel}'s pending booking failed: ${booking.slotLabel}`;
     const partnerHtml = succeeded
         ? `<p>${schedulerLabel}'s scheduled booking was placed successfully — you're on the court!</p>
+           ${substitutionNote}
            <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>`
         : `<p>${schedulerLabel}'s scheduled booking could not be placed.</p>
            <p><strong>${booking.slotLabel}</strong><br>Partners: ${partners}</p>
@@ -472,13 +516,18 @@ async function runCronTick(env) {
     // Fire each booking and record the result.
     for (const booking of due) {
         try {
-            await fireBooking(booking, env);
+            const { bookedCourtId, bookedCourtName } = await fireBooking(booking, env);
             booking.status = STATUS_SUCCEEDED;
-            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now());
+            // Track which court was actually booked so the email can mention a substitution.
+            booking.bookedCourtId = bookedCourtId;
+            booking.bookedCourtName = bookedCourtName;
+            booking.usedFallback = bookedCourtId !== booking.bookingBody.courtId;
+            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now(),
+                booking.usedFallback ? bookedCourtName : null);
         } catch (error) {
             booking.status = STATUS_FAILED;
             booking.failureReason = error.message || String(error);
-            await appendToHistory(env, booking, STATUS_FAILED, booking.failureReason, Date.now());
+            await appendToHistory(env, booking, STATUS_FAILED, booking.failureReason, Date.now(), null);
         }
     }
 
@@ -754,6 +803,10 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
     } else {
         const rows = active.map(b => {
             const partners = (b.partnerNames || []).join(', ') || '—';
+            const fallbackNames = (b.fallbackCourts || []).map(c => escHtml(c.courtName || c.courtId)).filter(Boolean);
+            const fallbackCell = fallbackNames.length > 0
+                ? `<td style="font-size:12px;color:#555;">${fallbackNames.join(', ')}</td>`
+                : `<td style="color:#bbb;font-size:12px;">—</td>`;
             // Only pending bookings can be cancelled — firing means the API call is already in-flight.
             const cancelCell = b.status === STATUS_PENDING
                 ? `<td id="cancel-cell-${escHtml(b.id)}"><button onclick="cancelBooking('${escHtml(b.id)}')" style="background:#c62828;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;">Cancel</button></td>`
@@ -765,11 +818,12 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
                 <td>${escHtml(partners)}</td>
                 <td>${ptTime(b.fireAtMs)}</td>
                 <td>${countdown(b.fireAtMs)}</td>
+                ${fallbackCell}
                 ${cancelCell}
             </tr>`;
         }).join('');
         activeHtml = `<table><thead><tr>
-            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Opens At (PT)</th><th>In</th><th></th>
+            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Opens At (PT)</th><th>In</th><th>Fallbacks</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
@@ -808,12 +862,17 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
             const reasonCell = r.failure_reason
                 ? `<td style="color:#c62828;font-size:12px;">${escHtml(r.failure_reason)}</td>`
                 : '<td style="color:#999;">—</td>';
+            // booked_court_name is non-null only when the Worker used a fallback court.
+            const courtCell = r.booked_court_name
+                ? `<td style="font-size:12px;color:#b45309;" title="Original court was unavailable">↩ ${escHtml(r.booked_court_name)}</td>`
+                : `<td style="color:#bbb;font-size:12px;">—</td>`;
             return `<tr>
                 <td>${badge(r.status)}</td>
                 <td>${escHtml(r.slot_label || '—')}</td>
                 <td>${escHtml(r.user_name || r.user_email || '—')}</td>
                 <td>${escHtml(partners)}</td>
                 <td style="white-space:nowrap;">${ptTime(r.completed_at_ms)}</td>
+                ${courtCell}
                 ${reasonCell}
             </tr>`;
         }).join('');
@@ -829,7 +888,7 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
             ${nextLink}
         </div>`;
         historyHtml = `<table><thead><tr>
-            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Completed (PT)</th><th>Reason</th>
+            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Completed (PT)</th><th>Fallback Used</th><th>Reason</th>
         </tr></thead><tbody>${rows}</tbody></table>${paginationHtml}`;
     }
 
