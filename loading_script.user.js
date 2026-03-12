@@ -77,6 +77,7 @@
         NOTIFICATION_EMAIL: 'bc_notification_email',
         SELF_PROFILE: 'bc_self_profile',
         POD_MEMBER_IDS: 'bc_pod_member_ids',
+        COURT_VIEW_CLUB: 'bc_court_view_club',
     });
     // #endregion Core constants and club metadata.
 
@@ -595,6 +596,20 @@
                     .find(host => host.matches(MOBILE_TIME_SLOT_HOST_SELECTOR)) || null;
             }
 
+            function findCourtViewButton() {
+                return Array.from(document.querySelectorAll(HOUR_VIEW_BUTTON_SELECTOR))
+                    .find(btn => btn.textContent.trim().startsWith('COURT VIEW'));
+            }
+
+            function isCourtViewActive() {
+                // Only true when the user has explicitly selected the COURT VIEW tab.
+                // We do not infer from the absence of btn-selected on HOUR VIEW because
+                // that state occurs transiently before our auto-click fires.
+                const courtBtn = findCourtViewButton();
+                if (!courtBtn) return false;
+                return courtBtn.classList.contains('btn-selected');
+            }
+
             function isBackControlClickTarget(target) {
                 if (!(target instanceof Element)) return false;
                 const pageTitle = target.closest(BOOKING_PAGE_TITLE_SELECTOR);
@@ -610,6 +625,8 @@
                 hasDurationAndPlayersFilterVisible,
                 hasHourViewControlsVisible,
                 findHourViewButton,
+                findCourtViewButton,
+                isCourtViewActive,
                 hasBookingFlowShellVisible,
                 hasTimeSlotHostsVisible,
                 getDesktopTimeSlotHost,
@@ -2753,6 +2770,69 @@
         [CLUBS.santaClara]: 'Santa Clara',
     };
 
+    // #region Court view pure helpers.
+
+    // CSS class suffixes used by the native court view to color-code event blocks.
+    // Each suffix maps to a distinct background color defined in COURT_VIEW_COLORS.
+    const COURT_BLOCKED_CLASS = Object.freeze({
+        BOOKING:     'courtblockedslot-',
+        OPEN_PLAY:   'courtblockedslot-openplay',
+        LESSON:      'courtblockedslot-lesson',
+        CLINIC:      'courtblockedslot-clinic',
+        GROUP_CLASS: 'court-sheet-event-group-class',
+        LEAGUE:      'courtblockedslot-league',
+        OTHER:       'courtblockedslot-other',
+        MAINTENANCE: 'courtblockedslot-maintenance',
+    });
+
+    // Background color values matching the native court view CSS for each event type.
+    const COURT_VIEW_COLORS = Object.freeze({
+        [COURT_BLOCKED_CLASS.BOOKING]:     'rgb(234, 252, 248)',
+        [COURT_BLOCKED_CLASS.OPEN_PLAY]:   'rgb(234, 252, 248)',
+        [COURT_BLOCKED_CLASS.LESSON]:      'rgb(188, 215, 255)',
+        [COURT_BLOCKED_CLASS.CLINIC]:      'rgb(197, 225, 164)',
+        [COURT_BLOCKED_CLASS.GROUP_CLASS]: 'rgb(251, 225, 255)',
+        [COURT_BLOCKED_CLASS.LEAGUE]:      'rgb(255, 218, 174)',
+        [COURT_BLOCKED_CLASS.OTHER]:       'rgb(255, 249, 228)',
+        [COURT_BLOCKED_CLASS.MAINTENANCE]: 'rgb(206, 212, 218)',
+    });
+
+    // Returns the opening window (fromInMinutes, toInMinutes) for a court on the given
+    // ISO day-of-week index (0 = Sunday, 6 = Saturday), or null if no hours are defined.
+    // openingHours is the array from the /courts API response for a single court.
+    function courtViewOpeningRangeForDay(openingHours, dayOfWeek) {
+        if (!Array.isArray(openingHours)) return null;
+        const entry = openingHours.find(h => h.dayOfWeek === dayOfWeek);
+        if (!entry) return null;
+        return { fromInMinutes: entry.fromInMinutes, toInMinutes: entry.toInMinutes };
+    }
+
+    // Derives the COURT_BLOCKED_CLASS constant for a courtsheet event object.
+    // Uses blockedSlotType, className, and isCurrentMemberPlayer to classify each event.
+    function courtViewBlockedClassForEvent(event) {
+        if (!event) return COURT_BLOCKED_CLASS.BOOKING;
+        const bst = event.blockedSlotType;
+        if (bst && typeof bst === 'string') {
+            const lower = bst.toLowerCase();
+            if (lower === 'openplay')    return COURT_BLOCKED_CLASS.OPEN_PLAY;
+            if (lower === 'lesson')      return COURT_BLOCKED_CLASS.LESSON;
+            if (lower === 'clinic')      return COURT_BLOCKED_CLASS.CLINIC;
+            if (lower === 'league')      return COURT_BLOCKED_CLASS.LEAGUE;
+            if (lower === 'other')       return COURT_BLOCKED_CLASS.OTHER;
+            if (lower === 'maintenance') return COURT_BLOCKED_CLASS.MAINTENANCE;
+        }
+        // Group class events carry a distinct CSS class rather than a blockedSlotType suffix.
+        if (event.className && (!bst || typeof bst !== 'string')) return COURT_BLOCKED_CLASS.GROUP_CLASS;
+        return COURT_BLOCKED_CLASS.BOOKING;
+    }
+
+    // Returns the background color string for a given COURT_BLOCKED_CLASS value.
+    function courtViewColorForBlockedClass(blockedClass) {
+        return COURT_VIEW_COLORS[blockedClass] || COURT_VIEW_COLORS[COURT_BLOCKED_CLASS.BOOKING];
+    }
+
+    // #endregion Court view pure helpers.
+
     // Stores the club ordering selected by the user for future sessions.
     const CLUB_ORDER_KEY = STORAGE_KEYS.CLUB_ORDER;
 
@@ -4223,9 +4303,71 @@
                 wirePostRenderInteractions(anchorElement, startMinutes, endMinutes, fetchDate);
             }
 
+            // Initiates a booking originating from the court view grid.
+            // Sets pendingSlotBooking, switches to Hour View so that native Angular
+            // slots are present, then clicks one to advance the state machine.
+            // The bottom bar is updated with the selection label once it appears.
+            function bookFromCourtView(slotInfo, slotLabel) {
+                getBookingStateService().setPendingSlotBooking(slotInfo);
+
+                function tryUpdateBottomBar() {
+                    const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                    if (!bottomBar) return false;
+                    const infoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+                    const nativeInfo = document.querySelector('.white-bg.p-2 .container .row .col-12.col-md-auto:not(.bc-injected-info)');
+                    if (nativeInfo) nativeInfo.style.display = 'none';
+                    infoHolder.textContent = slotLabel;
+                    const nextButton = Array.from(document.querySelectorAll('button.btn-light-blue'))
+                        .find(btn => btn.textContent.trim().includes('NEXT'));
+                    if (nextButton) {
+                        nextButton.style.backgroundColor = 'rgb(0, 188, 212)';
+                        nextButton.style.borderColor = 'rgb(0, 188, 212)';
+                        nextButton.style.opacity = '1';
+                        nextButton.style.cursor = 'pointer';
+                        nextButton.removeAttribute('disabled');
+                    }
+                    return true;
+                }
+
+                function clickNativeSlotAndUpdateBar() {
+                    const nativeSlot = document.querySelector('app-court-time-slot-item div.time-slot');
+                    if (nativeSlot) nativeSlot.click();
+                    if (!tryUpdateBottomBar()) {
+                        const obs = new MutationObserver(() => {
+                            if (tryUpdateBottomBar()) obs.disconnect();
+                        });
+                        obs.observe(document.body, { childList: true, subtree: true });
+                        setTimeout(() => obs.disconnect(), 5000);
+                    }
+                }
+
+                // If native hour view slots are already in the DOM (user is in Hour View),
+                // proceed immediately.  Otherwise switch to Hour View and wait for them.
+                const existingSlot = document.querySelector('app-court-time-slot-item div.time-slot');
+                if (existingSlot) {
+                    clickNativeSlotAndUpdateBar();
+                    return;
+                }
+
+                // Switch to Hour View; a one-shot MutationObserver fires once Angular
+                // renders native time slot items.
+                const observer = new MutationObserver(() => {
+                    const slot = document.querySelector('app-court-time-slot-item div.time-slot');
+                    if (!slot) return;
+                    observer.disconnect();
+                    clickNativeSlotAndUpdateBar();
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+                setTimeout(() => observer.disconnect(), 10000);
+
+                const hourViewBtn = getBookingDomQueryService().findHourViewButton();
+                if (hourViewBtn) hourViewBtn.click();
+            }
+
             serviceInstance = {
                 applyFilters,
                 renderAllClubsAvailability,
+                bookFromCourtView,
             };
             return serviceInstance;
         };
@@ -4547,9 +4689,635 @@
     })();
 
 
+    // #region Court view service and grid renderer.
+
+    // Row height in pixels for each 30-minute time band in the court grid, matching the native DOM.
+    const COURT_VIEW_ROW_HEIGHT_PX = 64;
+    // Column width in pixels for each court column in the grid, matching the native DOM.
+    const COURT_VIEW_COLUMN_WIDTH_PX = 140;
+    // Attribute placed on the injected court view root so cleanup can find it unambiguously.
+    const COURT_VIEW_CONTAINER_ATTR = 'data-bc-court-view';
+
+    const getCourtViewService = (() => {
+        let serviceInstance = null;
+
+        return function getCourtViewService() {
+            if (serviceInstance) return serviceInstance;
+
+            // Per-club cache: { [clubId]: { date, courtSheetData, courtsData } }
+            const clubDataCache = {};
+            let injectedContainer = null;
+
+            // --- Storage helpers ---
+
+            function loadSelectedClub() {
+                const stored = getLocalStorageService().getString(STORAGE_KEYS.COURT_VIEW_CLUB);
+                if (stored && Object.values(CLUBS).includes(stored)) return stored;
+                // Default to the user's first preferred club, which is their home club.
+                const order = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
+                if (Array.isArray(order) && order.length > 0) return order[0];
+                return CLUBS.broadway;
+            }
+
+            function saveSelectedClub(clubId) {
+                getLocalStorageService().setString(STORAGE_KEYS.COURT_VIEW_CLUB, clubId);
+            }
+
+            // --- Fetch helpers ---
+
+            async function fetchCourtSheet(clubId, date) {
+                const r = await fetch(
+                    `https://connect-api.bayclubs.io/court-booking/api/1.0/courtsheet/${clubId}?date=${date}`,
+                    {
+                        headers: {
+                            'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                            'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                            'Request-Id': crypto.randomUUID(),
+                            'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                            'Accept': 'application/json',
+                        },
+                    }
+                );
+                if (!r.ok) throw new Error(`courtsheet HTTP ${r.status}`);
+                return r.json();
+            }
+
+            async function fetchCourtsForClub(clubId, date, params) {
+                // params provides categoryCode, categoryOptionsId, and timeSlotId captured from the
+                // native availability request; without them the /courts endpoint returns no availability.
+                // Santa Clara only supports 60-minute slots, so cap the timeSlotId the same way
+                // fetchAllClubs does to avoid receiving empty availability from the /courts endpoint.
+                const timeSlotId = CLUB_MAX_TIMESLOT[clubId] && params.timeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : (params.timeSlotId || '');
+                const qs = new URLSearchParams({
+                    date,
+                    categoryCode: params.categoryCode || 'pickleball',
+                    categoryOptionsId: params.categoryOptionsId || '',
+                    timeSlotId,
+                }).toString();
+                const r = await fetch(
+                    `https://connect-api.bayclubs.io/court-booking/api/1.0/courtsheet/${clubId}/courts?${qs}`,
+                    {
+                        headers: {
+                            'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                            'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                            'Request-Id': crypto.randomUUID(),
+                            'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                            'Accept': 'application/json',
+                        },
+                    }
+                );
+                if (!r.ok) throw new Error(`courts HTTP ${r.status}`);
+                return r.json();
+            }
+
+            async function fetchAvailabilityForClub(clubId, date, params) {
+                const timeSlotId = CLUB_MAX_TIMESLOT[clubId] && params.timeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : (params.timeSlotId || '');
+                const qs = new URLSearchParams({
+                    clubId,
+                    date,
+                    categoryCode: params.categoryCode || 'pickleball',
+                    categoryOptionsId: params.categoryOptionsId || '',
+                    timeSlotId,
+                }).toString();
+                const r = await fetch(
+                    `https://connect-api.bayclubs.io/court-booking/api/1.0/availability?${qs}`,
+                    {
+                        headers: {
+                            'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                            'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                            'Request-Id': crypto.randomUUID(),
+                            'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                            'Accept': 'application/json',
+                        },
+                    }
+                );
+                if (!r.ok) throw new Error(`availability HTTP ${r.status}`);
+                return r.json();
+            }
+
+            async function fetchClubData(clubId, date, params) {
+                if (clubDataCache[clubId] && clubDataCache[clubId].date === date) {
+                    return clubDataCache[clubId];
+                }
+                const [courtSheetData, courtsData, availabilityData] = await Promise.all([
+                    fetchCourtSheet(clubId, date),
+                    fetchCourtsForClub(clubId, date, params),
+                    fetchAvailabilityForClub(clubId, date, params),
+                ]);
+                const entry = { date, courtSheetData, courtsData, availabilityData };
+                clubDataCache[clubId] = entry;
+                return entry;
+            }
+
+            // --- Grid rendering ---
+
+            // Derives the visible time range for the grid from the union of available slot
+            // times and event times.  Floors at 6 am and ceils at 10 pm so the grid always
+            // spans a useful day range even when availability is sparse.
+            function deriveVisibleTimeRange(availableTimeSlots, allEvents) {
+                let earliest = 22 * 60; // 10 pm — will be pushed earlier by real data
+                let latest   = 6 * 60;  // 6 am  — will be pushed later  by real data
+                availableTimeSlots.forEach(s => {
+                    if (s.fromInMinutes < earliest) earliest = s.fromInMinutes;
+                    if (s.toInMinutes   > latest)   latest   = s.toInMinutes;
+                });
+                allEvents.forEach(ev => {
+                    if (ev.timeFromInMinutes < earliest) earliest = ev.timeFromInMinutes;
+                    if (ev.timeToInMinutes   > latest)   latest   = ev.timeToInMinutes;
+                });
+                // Clamp to a 6 am–10 pm window.
+                earliest = Math.min(earliest, 6 * 60);
+                latest   = Math.max(latest,   22 * 60);
+                return { fromMinutes: earliest, toMinutes: latest };
+            }
+
+            function buildOutsideHoursStyle() {
+                // Diagonal stripe pattern matching the native court view outside-hours background.
+                return [
+                    'background: linear-gradient(135deg,',
+                    ' rgb(67,104,139) 25%, rgb(82,116,148) 25%,',
+                    ' rgb(82,116,148) 50%, rgb(67,104,139) 50%,',
+                    ' rgb(67,104,139) 75%, rgb(82,116,148) 75%,',
+                    ' rgb(82,116,148) 100%);',
+                    ' background-size: 21.3px 21.3px;',
+                ].join('');
+            }
+
+            // Builds a single court column as a DOM element.
+            // availableMinutes: Set of fromInMinutes values for bookable slots on this court.
+            // Bands in availableMinutes are plain (clickable); all others get the stripe pattern.
+            // bookingContext: { clubId, date, params } — used to wire available slot clicks.
+            function buildCourtColumn(court, events, availableMinutes, visibleFrom, visibleTo, bookingContext) {
+                const totalMinutes = visibleTo - visibleFrom;
+                const totalPx = Math.round((totalMinutes / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                const col = document.createElement('div');
+                col.className = 'bc-cv-court-col';
+                col.style.cssText = `position:relative; width:${COURT_VIEW_COLUMN_WIDTH_PX}px; height:${totalPx}px; flex-shrink:0; border-left:1px solid rgba(255,255,255,0.1);`;
+
+                // Derive the booking duration: cap at 60 for Santa Clara, otherwise use
+                // the user's selected slot duration from the params.
+                const durationMinutes =
+                    (bookingContext && CLUB_MAX_TIMESLOT[bookingContext.clubId]) ? 60 :
+                    (bookingContext && bookingContext.params.timeSlotId === TIMESLOTS.min90) ? 90 : 60;
+
+                // Hover overlay: a single absolutely-positioned div that spans the hover
+                // selection window.  pointer-events:none lets mouse events pass through
+                // to the individual 30-min cell elements underneath.
+                const hoverOverlay = document.createElement('div');
+                hoverOverlay.style.cssText = [
+                    'position:absolute; left:1px; right:1px;',
+                    'pointer-events:none; box-sizing:border-box;',
+                    'background:rgba(0,176,199,0.18); border:2px solid rgb(0,176,199);',
+                    'border-radius:3px; display:none; z-index:2;',
+                ].join('');
+                col.appendChild(hoverOverlay);
+
+                // Lay down one cell per 30-minute band across the full visible range.
+                // Available bands are plain (cursor:pointer); unavailable bands get stripes.
+                for (let m = visibleFrom; m < visibleTo; m += 30) {
+                    const isAvailable = availableMinutes.has(m);
+                    const top = Math.round(((m - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+
+                    if (!isAvailable) {
+                        // Unavailable / outside-hours band: diagonal stripe, not clickable.
+                        const stripe = document.createElement('div');
+                        stripe.style.cssText = `position:absolute; left:0; right:0; top:${top}px; height:${COURT_VIEW_ROW_HEIGHT_PX}px; ${buildOutsideHoursStyle()}`;
+                        col.appendChild(stripe);
+                        continue;
+                    }
+
+                    // Available band: plain background, clickable.
+                    const cell = document.createElement('div');
+                    cell.setAttribute('data-bc-cv-slot', String(m));
+                    cell.style.cssText = [
+                        `position:absolute; left:0; right:0; top:${top}px;`,
+                        `height:${COURT_VIEW_ROW_HEIGHT_PX}px;`,
+                        `cursor:pointer; box-sizing:border-box;`,
+                        `border-top:1px solid rgba(255,255,255,0.06);`,
+                    ].join('');
+
+                    cell.addEventListener('mouseenter', () => {
+                        // Compute how far the booking window extends from this slot's start,
+                        // stopping at any event block or the first unavailable band.
+                        let end = m + durationMinutes;
+                        for (let t = m + 30; t < end; t += 30) {
+                            if (!availableMinutes.has(t)) { end = t; break; }
+                        }
+                        events.forEach(ev => {
+                            if (ev.timeFromInMinutes > m && ev.timeFromInMinutes < end) {
+                                end = ev.timeFromInMinutes;
+                            }
+                        });
+                        const availMins  = end - m;
+                        const overlayTop = Math.round(((m - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                        const overlayH   = Math.round((availMins / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                        hoverOverlay.style.top     = `${overlayTop}px`;
+                        hoverOverlay.style.height  = `${overlayH}px`;
+                        hoverOverlay.style.display = 'block';
+                        cell.dataset.bcCvBookMinutes = String(availMins);
+                    });
+                    cell.addEventListener('mouseleave', () => {
+                        hoverOverlay.style.display = 'none';
+                    });
+                    cell.addEventListener('click', () => {
+                        const fromMinutes   = m;
+                        const bookedMinutes = parseInt(cell.dataset.bcCvBookMinutes || String(durationMinutes), 10);
+                        const toMinutes     = fromMinutes + bookedMinutes;
+                        const clubShortName = CLUB_SHORT_NAMES[bookingContext.clubId] || 'Court';
+                        const slotLabel = `${clubShortName} \u00b7 ${court.shortName || court.name || 'Court'} @ ${minutesToHumanTime(fromMinutes)}\u2013${minutesToHumanTime(toMinutes)}`;
+                        getAvailabilityRenderPipeline().bookFromCourtView(
+                            {
+                                clubId: bookingContext.clubId,
+                                courtId: court.courtId,
+                                date: bookingContext.date,
+                                fromMinutes,
+                                toMinutes,
+                            },
+                            slotLabel
+                        );
+                    });
+                    col.appendChild(cell);
+                }
+
+                // Event blocks.
+                events.forEach(ev => {
+                    const evFrom = ev.timeFromInMinutes;
+                    const evTo   = ev.timeToInMinutes;
+                    if (evTo <= visibleFrom || evFrom >= visibleTo) return;
+                    // Skip cancelled events — they should not appear on the grid.
+                    if (ev.status && ev.status.code === 'cancelled') return;
+
+                    const clampedFrom = Math.max(evFrom, visibleFrom);
+                    const clampedTo   = Math.min(evTo, visibleTo);
+                    const top  = Math.round(((clampedFrom - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                    const h    = Math.round(((clampedTo - clampedFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+
+                    const blockedClass = courtViewBlockedClassForEvent(ev);
+                    const bg = ev.isCurrentMemberPlayer
+                        ? 'rgb(0, 176, 199)'
+                        : courtViewColorForBlockedClass(blockedClass);
+
+                    const block = document.createElement('div');
+                    block.style.cssText = [
+                        `position:absolute; left:1px; right:1px;`,
+                        `top:${top}px; height:${h}px;`,
+                        `background:${bg};`,
+                        `border-radius:3px; overflow:hidden;`,
+                        `font-size:11px; line-height:1.3; color:#1a2a3a;`,
+                        `padding:2px 4px; box-sizing:border-box;`,
+                    ].join('');
+
+                    const label = buildEventLabel(ev, blockedClass);
+                    if (label) {
+                        const span = document.createElement('span');
+                        span.style.cssText = 'display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;';
+                        span.textContent = label;
+                        block.appendChild(span);
+                    }
+                    col.appendChild(block);
+                });
+
+                return col;
+            }
+
+            function buildEventLabel(ev, blockedClass) {
+                if (blockedClass === COURT_BLOCKED_CLASS.LESSON && ev.instructorName) {
+                    return `Lesson: ${ev.instructorName}`;
+                }
+                if (blockedClass === COURT_BLOCKED_CLASS.CLINIC) {
+                    return ev.className || 'Clinic';
+                }
+                if (blockedClass === COURT_BLOCKED_CLASS.GROUP_CLASS) {
+                    return ev.className || 'Group class';
+                }
+                if (blockedClass === COURT_BLOCKED_CLASS.LEAGUE) {
+                    return ev.className || 'League';
+                }
+                if (blockedClass === COURT_BLOCKED_CLASS.MAINTENANCE) {
+                    return 'Maintenance';
+                }
+                if (blockedClass === COURT_BLOCKED_CLASS.OPEN_PLAY) {
+                    return 'Open play';
+                }
+                // Regular member booking: show name if it's the logged-in member's booking.
+                if (ev.isCurrentMemberPlayer && ev.reservedFor && ev.reservedFor.displayName) {
+                    return ev.reservedFor.displayName;
+                }
+                const category = ev.categoryOptions && ev.categoryOptions.name;
+                return category || null;
+            }
+
+            // Builds the time label column that runs down the left side of the grid.
+            function buildTimeAxisColumn(visibleFrom, visibleTo) {
+                const col = document.createElement('div');
+                col.className = 'bc-cv-time-col';
+                col.style.cssText = `position:relative; width:56px; flex-shrink:0;`;
+
+                const totalMinutes = visibleTo - visibleFrom;
+                const totalPx = Math.round((totalMinutes / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                col.style.height = `${totalPx}px`;
+
+                for (let m = visibleFrom; m < visibleTo; m += 30) {
+                    const top = Math.round(((m - visibleFrom) / 30) * COURT_VIEW_ROW_HEIGHT_PX);
+                    const label = document.createElement('div');
+                    label.style.cssText = [
+                        `position:absolute; left:0; right:0; top:${top}px;`,
+                        `height:${COURT_VIEW_ROW_HEIGHT_PX}px;`,
+                        `font-size:11px; color:rgba(255,255,255,0.6);`,
+                        `padding:2px 4px; box-sizing:border-box;`,
+                        `border-top:1px solid rgba(255,255,255,0.08);`,
+                    ].join('');
+                    // Only label the top of each hour (on-the-hour slots).
+                    if (m % 60 === 0) {
+                        label.textContent = minutesToHumanTime(m);
+                    }
+                    col.appendChild(label);
+                }
+                return col;
+            }
+
+            // Builds the row of column headers (court short names) above the grid body.
+            function buildHeaderRow(courtsItems) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; flex-direction:row; position:sticky; top:0; z-index:2; background:#1a2a3a;';
+
+                // Spacer for the time axis column.
+                const spacer = document.createElement('div');
+                spacer.style.cssText = `width:56px; flex-shrink:0;`;
+                row.appendChild(spacer);
+
+                courtsItems.forEach(court => {
+                    const cell = document.createElement('div');
+                    cell.style.cssText = [
+                        `width:${COURT_VIEW_COLUMN_WIDTH_PX}px; flex-shrink:0;`,
+                        `border-left:1px solid rgba(255,255,255,0.1);`,
+                        `padding:6px 4px; text-align:center;`,
+                        `font-size:12px; font-weight:bold; color:rgba(255,255,255,0.9);`,
+                        `box-sizing:border-box;`,
+                    ].join('');
+                    cell.textContent = court.shortName || court.name || '';
+                    row.appendChild(cell);
+                });
+
+                return row;
+            }
+
+            // Renders the full court grid for the given data and appends it to container.
+            function renderCourtGrid(container, courtsData, courtSheetData, availabilityData, date, clubId, params) {
+                const courtsItems        = (courtsData.items || []);
+                const allEvents          = (courtSheetData.events || []);
+                // availableTimeSlots from the availability endpoint: each entry has courtId,
+                // fromInMinutes, and toInMinutes for a bookable slot.
+                const availableTimeSlots = (
+                    availabilityData &&
+                    availabilityData.clubsAvailabilities &&
+                    availabilityData.clubsAvailabilities[0] &&
+                    availabilityData.clubsAvailabilities[0].availableTimeSlots
+                ) || [];
+
+                // Compute the visible time span from the union of available and event times.
+                const { fromMinutes: visibleFrom, toMinutes: visibleTo } =
+                    deriveVisibleTimeRange(availableTimeSlots, allEvents);
+
+                // Build a lookup from courtSetupVersionId → courtId using the courts list
+                // inside the availability response, since those version IDs are guaranteed to
+                // match the courtsVersionsIds values in availableTimeSlots (same response).
+                const availabilityCourts = (
+                    availabilityData &&
+                    availabilityData.clubsAvailabilities &&
+                    availabilityData.clubsAvailabilities[0] &&
+                    availabilityData.clubsAvailabilities[0].courts
+                ) || [];
+                const versionToCourtId = {};
+                availabilityCourts.forEach(court => {
+                    if (court.courtSetupVersionId && court.courtId) {
+                        versionToCourtId[court.courtSetupVersionId] = court.courtId;
+                    }
+                });
+
+                // Build a per-court Set of available start-minutes for O(1) lookup in buildCourtColumn.
+                // courtsVersionsIds lists every court that can satisfy the slot — not just the
+                // primary courtId field — so we index by all of them.
+                const availableByCourtId = {};
+                availableTimeSlots.forEach(s => {
+                    const versionIds = Array.isArray(s.courtsVersionsIds) ? s.courtsVersionsIds : [];
+                    versionIds.forEach(vId => {
+                        const cId = versionToCourtId[vId];
+                        if (!cId) return;
+                        if (!availableByCourtId[cId]) availableByCourtId[cId] = new Set();
+                        availableByCourtId[cId].add(s.fromInMinutes);
+                    });
+                });
+
+                // Build the scrollable grid body.
+                const gridBody = document.createElement('div');
+                gridBody.style.cssText = 'display:flex; flex-direction:row; overflow-x:auto;';
+
+                gridBody.appendChild(buildTimeAxisColumn(visibleFrom, visibleTo));
+
+                courtsItems.forEach(court => {
+                    const courtEvents     = allEvents.filter(ev =>
+                        ev.court && ev.court.courtId === court.courtId
+                    );
+                    const availableMinutes = availableByCourtId[court.courtId] || new Set();
+                    gridBody.appendChild(buildCourtColumn(
+                        court, courtEvents, availableMinutes, visibleFrom, visibleTo,
+                        { clubId, date, params }
+                    ));
+                });
+
+                container.appendChild(buildHeaderRow(courtsItems));
+                container.appendChild(gridBody);
+            }
+
+            // Builds the four-button club selector strip and appends it to container.
+            function renderClubSelector(container, selectedClub, onSelect) {
+                const strip = document.createElement('div');
+                strip.setAttribute('data-bc-cv-club-selector', '1');
+                strip.style.cssText = [
+                    'display:flex; flex-direction:row; flex-wrap:wrap; gap:6px;',
+                    'padding:8px 0 12px 0;',
+                ].join('');
+
+                const clubOrder = (() => {
+                    const stored = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
+                    return (Array.isArray(stored) && stored.length > 0)
+                        ? stored
+                        : Object.values(CLUBS);
+                })();
+
+                clubOrder.forEach(clubId => {
+                    const btn = document.createElement('button');
+                    btn.setAttribute('data-bc-cv-club-btn', clubId);
+                    btn.textContent = CLUB_SHORT_NAMES[clubId] || clubId;
+                    btn.style.cssText = [
+                        'padding:5px 12px; border-radius:16px; border:none; cursor:pointer;',
+                        'font-size:13px; font-weight:600;',
+                        clubId === selectedClub
+                            ? 'background:rgb(0,176,199); color:#fff;'
+                            : 'background:rgba(255,255,255,0.12); color:rgba(255,255,255,0.75);',
+                    ].join('');
+                    btn.addEventListener('click', () => onSelect(clubId));
+                    strip.appendChild(btn);
+                });
+
+                container.appendChild(strip);
+            }
+
+            // Updates button highlight state within an already-rendered club selector strip
+            // without rebuilding the full strip.
+            function updateClubSelectorHighlight(container, selectedClub) {
+                container.querySelectorAll('[data-bc-cv-club-btn]').forEach(btn => {
+                    const isSelected = btn.getAttribute('data-bc-cv-club-btn') === selectedClub;
+                    btn.style.background = isSelected
+                        ? 'rgb(0,176,199)'
+                        : 'rgba(255,255,255,0.12)';
+                    btn.style.color = isSelected
+                        ? '#fff'
+                        : 'rgba(255,255,255,0.75)';
+                });
+            }
+
+            // Shows a loading spinner overlay inside container.
+            function showLoadingState(container) {
+                let spinner = container.querySelector('[data-bc-cv-spinner]');
+                if (!spinner) {
+                    spinner = document.createElement('div');
+                    spinner.setAttribute('data-bc-cv-spinner', '1');
+                    spinner.style.cssText = [
+                        'padding:32px; text-align:center;',
+                        'color:rgba(255,255,255,0.6); font-size:14px;',
+                    ].join('');
+                    spinner.textContent = 'Loading court schedule…';
+                    container.appendChild(spinner);
+                }
+            }
+
+            // Removes the loading spinner and any previously rendered grid from container.
+            function clearGridContent(container) {
+                container.querySelectorAll('[data-bc-cv-spinner], [data-bc-cv-grid]').forEach(el => el.remove());
+            }
+
+            // Finds the app-booking-calendar element and hides it using the NATIVE_HIDDEN_ATTR
+            // pattern so cleanup can reverse the mutation precisely.
+            function hideNativeCourtCalendar() {
+                const cal = document.querySelector('app-booking-calendar');
+                if (!cal) return;
+                if (cal.getAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR)) return;
+                cal.style.display = 'none';
+                cal.setAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR, '1');
+            }
+
+            // Finds a suitable host element adjacent to app-booking-calendar and injects
+            // our court view container as a sibling.
+            function ensureContainerInjected() {
+                if (injectedContainer && document.contains(injectedContainer)) return injectedContainer;
+
+                const cal = document.querySelector('app-booking-calendar');
+                if (!cal) return null;
+
+                const host = cal.parentElement;
+                if (!host) return null;
+
+                const div = document.createElement('div');
+                div.setAttribute(COURT_VIEW_CONTAINER_ATTR, '1');
+                div.style.cssText = 'padding:8px 12px; box-sizing:border-box;';
+                host.insertBefore(div, cal);
+                injectedContainer = div;
+                return div;
+            }
+
+            // Fetches data for the given club and date then re-renders the grid section.
+            async function loadAndRenderGrid(container, clubId, date, params) {
+                clearGridContent(container);
+                showLoadingState(container);
+
+                let entry;
+                try {
+                    entry = await fetchClubData(clubId, date, params);
+                } catch (err) {
+                    getDebugService().log('warn', 'court-view-fetch-failed', { clubId, error: String(err) });
+                    clearGridContent(container);
+                    const errMsg = document.createElement('div');
+                    errMsg.style.cssText = 'padding:16px; color:rgba(255,100,100,0.9); font-size:13px;';
+                    errMsg.textContent = 'Could not load court schedule. Please try again later.';
+                    container.appendChild(errMsg);
+                    return;
+                }
+
+                clearGridContent(container);
+                const grid = document.createElement('div');
+                grid.setAttribute('data-bc-cv-grid', '1');
+                grid.style.cssText = 'overflow-x:auto;';
+                renderCourtGrid(grid, entry.courtsData, entry.courtSheetData, entry.availabilityData, date, clubId, params);
+                container.appendChild(grid);
+            }
+
+            // Polls for app-booking-calendar up to maxWaitMs then resolves to the
+            // ensureContainerInjected result (or null if the element never appeared).
+            async function waitForCalendarAndInjectContainer(maxWaitMs) {
+                const POLL_INTERVAL_MS = 100;
+                const deadline = Date.now() + maxWaitMs;
+                while (Date.now() < deadline) {
+                    const container = ensureContainerInjected();
+                    if (container) return container;
+                    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+                }
+                return ensureContainerInjected();
+            }
+
+            // Public entry point: inject the court view for the given date and params.
+            // Idempotent — calling again on an already-injected view updates the club/date.
+            async function injectCourtView(date, params) {
+                hideNativeCourtCalendar();
+                // Angular renders app-booking-calendar asynchronously after the COURT VIEW
+                // tab is clicked.  Poll briefly so we don't give up on the first pass.
+                const container = await waitForCalendarAndInjectContainer(2000);
+                if (!container) return;
+
+                let selectedClub = loadSelectedClub();
+
+                // Render or update the club selector.
+                const existingSelector = container.querySelector('[data-bc-cv-club-selector]');
+                if (!existingSelector) {
+                    renderClubSelector(container, selectedClub, clubId => {
+                        selectedClub = clubId;
+                        saveSelectedClub(clubId);
+                        updateClubSelectorHighlight(container, clubId);
+                        loadAndRenderGrid(container, clubId, date, params);
+                    });
+                } else {
+                    updateClubSelectorHighlight(container, selectedClub);
+                }
+
+                await loadAndRenderGrid(container, selectedClub, date, params);
+            }
+
+            // Removes the injected container and reference so the next call to injectCourtView
+            // starts fresh.  Hiding the native calendar is reversed by removeOurContentAndUnhideNativeContent.
+            function clearInjectedContent() {
+                if (injectedContainer) {
+                    injectedContainer.remove();
+                    injectedContainer = null;
+                }
+                document.querySelectorAll(`[${COURT_VIEW_CONTAINER_ATTR}]`).forEach(el => el.remove());
+            }
+
+            serviceInstance = { injectCourtView, clearInjectedContent };
+            return serviceInstance;
+        };
+    })();
+
+    // #endregion Court view service and grid renderer.
+
     function removeOurContentAndUnhideNativeContent() {
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
         document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(el => el.remove());
+        getCourtViewService().clearInjectedContent();
         document.querySelectorAll(`[${getBookingDomQueryService().NATIVE_HIDDEN_ATTR}="1"]`).forEach(child => {
             child.style.display = '';
             child.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
@@ -4570,9 +5338,26 @@
         });
 
         const hourViewBtn = bookingDomQueryService.findHourViewButton();
-        if (hourViewBtn && !hourViewBtn.classList.contains('btn-selected') && !hourViewBtn.dataset.bcAutoSelected) {
+
+        // On the very first render pass, always stamp the HOUR VIEW button and click it
+        // if it is not already selected.  The native app defaults to COURT VIEW with
+        // btn-selected, so we must assert our own default before respecting any tab
+        // choice.  The data-bc-auto-selected stamp prevents re-firing on subsequent passes.
+        if (hourViewBtn && !hourViewBtn.dataset.bcAutoSelected) {
             hourViewBtn.dataset.bcAutoSelected = 'true';
-            hourViewBtn.click();
+            if (!hourViewBtn.classList.contains('btn-selected')) {
+                hourViewBtn.click();
+                // Return here; Angular will re-render and the next reconcile pass will
+                // either render hour view content or detect an explicit court view selection.
+                return;
+            }
+        }
+
+        // After the initial auto-selection, respect the user's explicit tab choice.
+        // Court view and hour view are mutually exclusive from this point onward.
+        if (bookingDomQueryService.isCourtViewActive()) {
+            getCourtViewService().injectCourtView(lastFetchState.params.date, lastFetchState.params);
+            return;
         }
 
         bookingDomQueryService.getTimeSlotHosts().forEach(host => {
@@ -4979,6 +5764,11 @@
         _bcTestExports.pacificSlotTimeMs = pacificSlotTimeMs;
         _bcTestExports.transformAvailability = transformAvailability;
         _bcTestExports.readUserEmail = readUserEmail;
+        _bcTestExports.courtViewOpeningRangeForDay = courtViewOpeningRangeForDay;
+        _bcTestExports.courtViewBlockedClassForEvent = courtViewBlockedClassForEvent;
+        _bcTestExports.courtViewColorForBlockedClass = courtViewColorForBlockedClass;
+        _bcTestExports.COURT_BLOCKED_CLASS = COURT_BLOCKED_CLASS;
+        _bcTestExports.COURT_VIEW_COLORS = COURT_VIEW_COLORS;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }

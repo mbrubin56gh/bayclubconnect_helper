@@ -1184,3 +1184,67 @@ test.describe('Bay Club /home/dashboard DOM structure', () => {
         expect(labelText).toMatch(/upcoming activities/i);
     });
 });
+
+test.describe('Court view DOM structure', () => {
+    // These tests verify the native Angular components the helper depends on when
+    // injecting the multi-club court view grid.  They navigate to the court view
+    // tab but do not interact with any courts or trigger any bookings.
+    test.describe.configure({ timeout: 90_000 });
+
+    let page;
+
+    test.beforeAll(async ({ browser }) => {
+        if (!isAuthenticated) return;
+        const context = await createContextWithScript(browser);
+        page = await context.newPage();
+        // Navigate to the booking flow and advance to step 2 as normal.
+        await navigateToHourView(page, 1);
+    });
+
+    test.afterAll(async () => {
+        if (page) await page.close();
+    });
+
+    test('COURT VIEW button is present alongside HOUR VIEW button', async () => {
+        requireAuth(test);
+        // ADJUST: if Bay Club renames the view-type toggle component or button text,
+        // update the selector in getBookingDomQueryService().findCourtViewButton().
+        await expect(
+            page.locator('app-time-slot-view-type-select .btn', { hasText: /court view/i }).first()
+        ).toBeVisible({ timeout: 15_000 });
+    });
+
+    test('clicking COURT VIEW renders app-booking-calendar', async () => {
+        requireAuth(test);
+        // ADJUST: if Bay Club replaces app-booking-calendar with a different component,
+        // update the selector in getCourtViewService().hideNativeCourtCalendar() and
+        // the isCourtViewActive() check.
+        const courtViewBtn = page.locator('app-time-slot-view-type-select .btn', { hasText: /court view/i }).first();
+        await courtViewBtn.waitFor({ state: 'visible', timeout: 10_000 });
+        await courtViewBtn.click();
+        await expect(page.locator('app-booking-calendar')).toBeAttached({ timeout: 15_000 });
+    });
+
+    test('our injected court view container is present after clicking COURT VIEW', async () => {
+        requireAuth(test);
+        // Confirms the helper's injectCourtView() ran and produced the root element.
+        await expect(
+            page.locator('[data-bc-court-view]')
+        ).toBeAttached({ timeout: 20_000 });
+    });
+
+    test('injected court view contains a club selector', async () => {
+        requireAuth(test);
+        // ADJUST: if COURT_VIEW_CONTAINER_ATTR or the data-bc-cv-club-selector attribute
+        // name changes, update the attribute in getCourtViewService().renderClubSelector().
+        await expect(
+            page.locator('[data-bc-court-view] [data-bc-cv-club-selector]')
+        ).toBeAttached({ timeout: 20_000 });
+    });
+
+    test('club selector contains four club buttons', async () => {
+        requireAuth(test);
+        const buttons = page.locator('[data-bc-cv-club-btn]');
+        await expect(buttons).toHaveCount(4, { timeout: 20_000 });
+    });
+});

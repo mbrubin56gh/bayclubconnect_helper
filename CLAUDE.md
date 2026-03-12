@@ -200,7 +200,7 @@ Server-side component that executes scheduled bookings without requiring the bro
 - `cloudflare-worker/worker.js` — Cloudflare Worker source.
 - `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, D1 binding, cron schedule).
 - `cloudflare-worker/CLOUDFLARE.md` — Detailed setup, architecture, and dev workflow notes for the Worker, written for someone new to Cloudflare.
-- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (52 tests) run against the live site.
+- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (57 tests) run against the live site.
 - `canary-tests/playwright.config.js` — Playwright configuration (single Chromium worker, auth state, timeouts).
 - `canary-tests/global-setup.js` — Logs in with BC_EMAIL/BC_PASSWORD from `.env` and saves auth state before the suite runs.
 
@@ -271,7 +271,7 @@ cd canary-tests && npm test -- --ui           # Playwright interactive UI (time-
 cd canary-tests && npm test -- --debug        # step through with Playwright Inspector
 ```
 
-The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, weather emoji ticks on the slider, club preference ordering widget, grouped time slot expansion, duration/player preference auto-select, edge/gated court indicators, locked slot → partner picker flow, booking flow cleanup, and dashboard carousel DOM structure (`app-dashboard-events` / `app-dashboard-favorites` separation).
+The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, weather emoji ticks on the slider, club preference ordering widget, grouped time slot expansion, duration/player preference auto-select, edge/gated court indicators, locked slot → partner picker flow, booking flow cleanup, dashboard carousel DOM structure (`app-dashboard-events` / `app-dashboard-favorites` separation), and court view DOM structure (COURT VIEW button, `app-booking-calendar`, injected container, club selector).
 
 **Key calibration notes**:
 - Club sections are identified by `data-club-id` UUID attributes, not by text — the API `shortName` for some clubs may differ from our display label.

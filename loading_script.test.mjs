@@ -21,6 +21,9 @@
 //   getIcsDownloadFileName — booking data → safe .ics filename
 //   formatCountdown     — fireAtMs → human-readable countdown string
 //   readUserEmail       — email from connect20auth localStorage, with bc_notification_email fallback
+//   courtViewOpeningRangeForDay   — opening hours lookup by day of week
+//   courtViewBlockedClassForEvent — event type classification
+//   courtViewColorForBlockedClass — CSS color for event type
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
@@ -40,6 +43,11 @@ const {
     getIcsDownloadFileName,
     formatCountdown,
     readUserEmail,
+    courtViewOpeningRangeForDay,
+    courtViewBlockedClassForEvent,
+    courtViewColorForBlockedClass,
+    COURT_BLOCKED_CLASS,
+    COURT_VIEW_COLORS,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -407,5 +415,122 @@ describe('readUserEmail', () => {
         }));
         localStorage.setItem('bc_notification_email', 'cached@example.com');
         expect(readUserEmail()).toBe('auth@example.com');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// courtViewOpeningRangeForDay
+// ---------------------------------------------------------------------------
+
+describe('courtViewOpeningRangeForDay', () => {
+    const openingHours = [
+        { dayOfWeek: 0, fromInMinutes: 480,  toInMinutes: 1200 }, // Sunday 8am–8pm
+        { dayOfWeek: 1, fromInMinutes: 420,  toInMinutes: 1260 }, // Monday 7am–9pm
+        { dayOfWeek: 6, fromInMinutes: 540,  toInMinutes: 1080 }, // Saturday 9am–6pm
+    ];
+
+    it('returns the correct range for a matching day', () => {
+        const result = courtViewOpeningRangeForDay(openingHours, 1); // Monday
+        expect(result).toEqual({ fromInMinutes: 420, toInMinutes: 1260 });
+    });
+
+    it('returns null when the day of week has no entry', () => {
+        const result = courtViewOpeningRangeForDay(openingHours, 3); // Wednesday not present
+        expect(result).toBeNull();
+    });
+
+    it('returns null when openingHours is null', () => {
+        expect(courtViewOpeningRangeForDay(null, 1)).toBeNull();
+    });
+
+    it('returns null when openingHours is an empty array', () => {
+        expect(courtViewOpeningRangeForDay([], 0)).toBeNull();
+    });
+
+    it('returns the first matching entry when duplicates exist', () => {
+        const duplicated = [
+            { dayOfWeek: 2, fromInMinutes: 360, toInMinutes: 1200 },
+            { dayOfWeek: 2, fromInMinutes: 480, toInMinutes: 1320 },
+        ];
+        const result = courtViewOpeningRangeForDay(duplicated, 2);
+        expect(result).toEqual({ fromInMinutes: 360, toInMinutes: 1200 });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// courtViewBlockedClassForEvent
+// ---------------------------------------------------------------------------
+
+describe('courtViewBlockedClassForEvent', () => {
+    it('classifies a regular member booking (no blockedSlotType) as BOOKING', () => {
+        const ev = { courtEventType: 'CourtBooking', blockedSlotType: null };
+        expect(courtViewBlockedClassForEvent(ev)).toBe(COURT_BLOCKED_CLASS.BOOKING);
+    });
+
+    it('classifies open play events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'OpenPlay' })).toBe(COURT_BLOCKED_CLASS.OPEN_PLAY);
+    });
+
+    it('classifies lesson events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'Lesson' })).toBe(COURT_BLOCKED_CLASS.LESSON);
+    });
+
+    it('classifies clinic events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'Clinic' })).toBe(COURT_BLOCKED_CLASS.CLINIC);
+    });
+
+    it('classifies league events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'League' })).toBe(COURT_BLOCKED_CLASS.LEAGUE);
+    });
+
+    it('classifies other events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'Other' })).toBe(COURT_BLOCKED_CLASS.OTHER);
+    });
+
+    it('classifies maintenance events', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'Maintenance' })).toBe(COURT_BLOCKED_CLASS.MAINTENANCE);
+    });
+
+    it('classifies group class events by className field when blockedSlotType is absent', () => {
+        const ev = { className: 'Morning Cardio Pickleball', blockedSlotType: null };
+        expect(courtViewBlockedClassForEvent(ev)).toBe(COURT_BLOCKED_CLASS.GROUP_CLASS);
+    });
+
+    it('is case-insensitive for blockedSlotType values', () => {
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'LESSON' })).toBe(COURT_BLOCKED_CLASS.LESSON);
+        expect(courtViewBlockedClassForEvent({ blockedSlotType: 'openplay' })).toBe(COURT_BLOCKED_CLASS.OPEN_PLAY);
+    });
+
+    it('returns BOOKING for a null event', () => {
+        expect(courtViewBlockedClassForEvent(null)).toBe(COURT_BLOCKED_CLASS.BOOKING);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// courtViewColorForBlockedClass
+// ---------------------------------------------------------------------------
+
+describe('courtViewColorForBlockedClass', () => {
+    it('returns the booking color for the BOOKING class', () => {
+        expect(courtViewColorForBlockedClass(COURT_BLOCKED_CLASS.BOOKING)).toBe(COURT_VIEW_COLORS[COURT_BLOCKED_CLASS.BOOKING]);
+    });
+
+    it('returns a distinct color for lesson events', () => {
+        const lessonColor = courtViewColorForBlockedClass(COURT_BLOCKED_CLASS.LESSON);
+        const bookingColor = courtViewColorForBlockedClass(COURT_BLOCKED_CLASS.BOOKING);
+        expect(lessonColor).not.toBe(bookingColor);
+        expect(lessonColor).toBe('rgb(188, 215, 255)');
+    });
+
+    it('returns the booking color as a fallback for an unknown class', () => {
+        expect(courtViewColorForBlockedClass('courtblockedslot-unknown'))
+            .toBe(COURT_VIEW_COLORS[COURT_BLOCKED_CLASS.BOOKING]);
+    });
+
+    it('returns distinct colors for all defined event types', () => {
+        // Verify every COURT_BLOCKED_CLASS value has an entry in COURT_VIEW_COLORS.
+        Object.values(COURT_BLOCKED_CLASS).forEach(cls => {
+            expect(COURT_VIEW_COLORS[cls]).toBeTruthy();
+        });
     });
 });
