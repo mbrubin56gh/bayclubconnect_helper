@@ -51,7 +51,7 @@
     // it makes you less likely to spray balls onto another court, especially when using a pickleball machine.
     const EDGE_COURTS = {
         [CLUBS.broadway]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
-        [CLUBS.redwoodShores]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4'], // all courts equally good
+        [CLUBS.redwoodShores]: ['*'], // all courts are edge courts; '*' matches any name
         [CLUBS.southSF]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 5', 'Pickleball 6'],
         [CLUBS.santaClara]: ['Pickleball 1', 'Pickleball 2', 'Pickleball 3', 'Pickleball 4', 'Pickleball 5', 'Pickleball 6', 'Pickleball 7', 'Pickleball 8', 'Pickleball 9', 'Pickleball 10'],
     };
@@ -656,16 +656,36 @@
                     ).then(function (results) {
                         try {
                             if (!Array.isArray(nativeData.items)) nativeData.items = [];
+                            // Stamp the native club's courts with their clubId so we can
+                            // build the mergedCourtsOrder mapping below.
+                            nativeData.items.forEach(function (court) { court.bc_clubId = nativeClubId; });
                             const seenCourtIds = new Set(nativeData.items.map(c => c.courtId));
-                            results.forEach(function (r) {
+                            results.forEach(function (r, idx) {
                                 if (r.status !== 'fulfilled') return;
+                                const fetchedClubId = otherClubIds[idx];
                                 (r.value.items || []).forEach(function (court) {
                                     if (!seenCourtIds.has(court.courtId)) {
                                         seenCourtIds.add(court.courtId);
+                                        // Tag with the clubId that fetched this court so
+                                        // tagColumns() can assign data-bc-club-id correctly.
+                                        court.bc_clubId = fetchedClubId;
                                         nativeData.items.push(court);
                                     }
                                 });
                             });
+                            // Persist the ordered court→club mapping so tagColumns() can
+                            // stamp data-bc-club-id on each app-booking-calendar-column by
+                            // index position.
+                            getBookingStateService().setMergedCourtsOrder(
+                                nativeData.items.map(function (c) {
+                                    return {
+                                        courtId: c.courtId,
+                                        clubId: c.bc_clubId,
+                                        courtName: (c.courtName || c.name || '').trim(),
+                                        courtOrder: c.order != null ? c.order : 0,
+                                    };
+                                })
+                            );
                             applyMergedPayloadToXhr(capturedXhrRef, nativeData);
                         } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
@@ -3703,7 +3723,9 @@
     }
 
     function isCourtEdge(courtName, clubId) {
-        return (EDGE_COURTS[clubId] || []).includes(courtName);
+        const list = EDGE_COURTS[clubId] || [];
+        // '*' is a sentinel meaning every court at this club is an edge court.
+        return list.includes('*') || list.includes(courtName);
     }
 
     function courtHasHittingWall(courtName, clubId) {
@@ -6038,6 +6060,17 @@
         return function getNativeCourtColumnsService() {
             if (serviceInstance) return serviceInstance;
 
+            // Expands abbreviated Court View court names to their canonical form so
+            // badge lookup tables (which use full names) match correctly.
+            // Angular renders "PB1" for Santa Clara and bare "1" for Redwood Shores
+            // while the availability API and lookup tables use "Pickleball 1".
+            function normalizeCourtViewName(name) {
+                const pbMatch = name.match(/^PB(\d+)$/i);
+                if (pbMatch) return 'Pickleball ' + pbMatch[1];
+                if (/^\d+$/.test(name)) return 'Pickleball ' + name;
+                return name;
+            }
+
             // Tags each app-booking-calendar-column with data-bc-club-id and
             // data-bc-court-id using the merged courts order recorded when the XHR
             // payload was built.  Angular renders columns in the same order courts
@@ -6059,8 +6092,42 @@
                 columns.forEach((col, i) => {
                     if (i >= courtsOrder.length) return;
                     const clubId = courtsOrder[i].clubId;
+                    // Prefer the court name Angular has already rendered into the DOM;
+                    // the availability API courts often lack human-readable names.
+                    const courtName = (
+                        col.querySelector('div.court-name')?.textContent?.trim() ||
+                        courtsOrder[i].courtName || ''
+                    );
                     col.setAttribute('data-bc-club-id', clubId);
                     col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
+
+                    // Build the E/G/H badge string for this court and stamp it so CSS
+                    // can append it to the court name via ::after without touching the DOM.
+                    // Court View renders abbreviated names ("PB1", "2"), so normalize
+                    // before checking the lookup tables which use full names ("Pickleball 1").
+                    const canonicalName = normalizeCourtViewName(courtName);
+                    const badges = [];
+                    if (isCourtGated(canonicalName, clubId))      badges.push('G');
+                    if (isCourtEdge(canonicalName, clubId))       badges.push('E');
+                    if (courtHasHittingWall(canonicalName, clubId)) badges.push('H');
+                    // Stamp data-bc-badges on div.court-name itself so CSS attr() in
+                    // the ::after pseudo-element can read it — attr() resolves on the
+                    // element the pseudo-element belongs to, not on an ancestor.
+                    const courtNameEl = col.querySelector('div.court-name');
+                    if (courtNameEl) {
+                        if (badges.length > 0) {
+                            courtNameEl.setAttribute('data-bc-badges', badges.join(' '));
+                        } else {
+                            courtNameEl.removeAttribute('data-bc-badges');
+                        }
+                    }
+                    // Also stamp on the column element for CSS selectors (pod conflict, etc.).
+                    if (badges.length > 0) {
+                        col.setAttribute('data-bc-badges', badges.join(' '));
+                    } else {
+                        col.removeAttribute('data-bc-badges');
+                    }
+
                     if (podConflicts[clubId]) {
                         col.setAttribute('data-bc-pod-conflict', podConflicts[clubId].type);
                     } else {
@@ -6169,6 +6236,16 @@
                 const podConflictRule =
                     'app-booking-calendar-column[data-bc-pod-conflict]{opacity:0.45;}';
 
+                // E/G/H badges appended to the court name via ::after using the
+                // data-bc-badges attribute value set by tagColumns().  Rendered in the
+                // same gold used by Hour View badge indicators, in a slightly smaller
+                // font so it tucks neatly after the court number.
+                const badgeRule =
+                    'div.court-name[data-bc-badges]::after{' +
+                    'content:"  " attr(data-bc-badges);' +
+                    'font-size:10px;font-weight:700;color:rgba(255,210,80,0.95);' +
+                    'letter-spacing:0.04em;}';
+
                 const T = 'rgb(0,188,212)';
                 const LR = 'inset 3px 0 0 ' + T + ',inset -3px 0 0 ' + T;
                 const TOP = 'inset 0 3px 0 ' + T;
@@ -6184,7 +6261,7 @@
 
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
-                style.textContent = rules + podConflictRule + lockedHoverRule;
+                style.textContent = rules + podConflictRule + badgeRule + lockedHoverRule;
                 document.head.appendChild(style);
             }
 
@@ -6277,6 +6354,33 @@
                 }
             }
 
+            // Injects a small fixed-position legend in the bottom-left corner explaining
+            // the E/G/H court badges.  Idempotent — does nothing if already present.
+            // The legend is removed in clear() on flow exit.
+            function injectBadgeLegend() {
+                if (document.querySelector('[data-bc-badge-legend]')) return;
+                const legend = document.createElement('div');
+                legend.setAttribute('data-bc-badge-legend', '1');
+                legend.style.cssText = [
+                    'display:flex;gap:12px;align-items:center;',
+                    'background:rgba(20,40,55,0.88);border:1px solid rgba(255,255,255,0.15);',
+                    'border-radius:6px;padding:6px 12px;font-size:11px;',
+                    'color:rgba(255,255,255,0.75);margin-bottom:8px;',
+                ].join('');
+                legend.innerHTML =
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">G</span> Gated &nbsp; ' +
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">E</span> Edge &nbsp; ' +
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">H</span> Hitting wall';
+                // Inject as a static sibling immediately before the calendar so it
+                // appears at the top of the court view rather than as a floating overlay.
+                const cal = document.querySelector('app-booking-calendar');
+                if (cal && cal.parentNode) {
+                    cal.parentNode.insertBefore(legend, cal);
+                } else {
+                    document.body.appendChild(legend);
+                }
+            }
+
             // Un-hides the native calendar and wires a MutationObserver to re-tag
             // columns whenever Angular re-renders them (e.g. on date change).
             // Safe to call on every reconcile pass — the observer and click listener
@@ -6291,6 +6395,7 @@
                     cal.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
                 }
                 injectColumnColorStyles();
+                injectBadgeLegend();
                 if (!columnObserver) {
                     columnObserver = new MutationObserver(tagColumns);
                     columnObserver.observe(cal, { childList: true, subtree: true });
@@ -6321,11 +6426,15 @@
                     calendarClickTarget = null;
                 }
                 clearLockedSlotHover();
+                document.querySelectorAll('[data-bc-badge-legend]').forEach(el => el.remove());
                 document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
                     col.removeAttribute('data-bc-court-id');
                     col.removeAttribute('data-bc-pod-conflict');
+                    col.removeAttribute('data-bc-badges');
+                    const courtNameEl = col.querySelector('div.court-name');
+                    if (courtNameEl) courtNameEl.removeAttribute('data-bc-badges');
                 });
             }
 
