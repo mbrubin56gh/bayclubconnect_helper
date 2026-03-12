@@ -5867,32 +5867,7 @@
                 const columns = document.querySelectorAll('app-booking-calendar-column');
                 columns.forEach((col, i) => {
                     if (i >= courtsOrder.length) return;
-                    const clubId = courtsOrder[i].clubId;
-                    col.setAttribute('data-bc-club-id', clubId);
-                    // Inject a colored club-name strip at the top of each column header
-                    // if one isn't already there.  Angular re-renders columns on date
-                    // change, so tagColumns may run multiple times — the data-bc-strip
-                    // guard keeps this idempotent.
-                    if (!col.querySelector('[data-bc-strip]')) {
-                        const color = CLUB_COLUMN_COLORS[clubId] || '#555';
-                        const strip = document.createElement('div');
-                        strip.setAttribute('data-bc-strip', '1');
-                        strip.style.cssText = [
-                            'background:' + color,
-                            'color:#fff',
-                            'font-size:10px',
-                            'font-weight:600',
-                            'letter-spacing:0.04em',
-                            'text-align:center',
-                            'padding:2px 4px',
-                            'white-space:nowrap',
-                            'overflow:hidden',
-                            'text-overflow:ellipsis',
-                            'border-radius:2px 2px 0 0',
-                        ].join(';');
-                        strip.textContent = CLUB_SHORT_NAMES[clubId] || '';
-                        col.insertBefore(strip, col.firstChild);
-                    }
+                    col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
                 });
             }
 
@@ -5948,44 +5923,19 @@
                 cancelBarUpdate = function () { clearInterval(barInterval); };
             }
 
-            // Injects a color key above app-booking-calendar showing each club's color
-            // swatch and name, in the user's preferred club order.  Idempotent.
-            function injectColorKey(cal) {
-                if (cal.previousElementSibling &&
-                        cal.previousElementSibling.hasAttribute('data-bc-court-key')) return;
-                const clubOrder = getClubOrder();
-                const key = document.createElement('div');
-                key.setAttribute('data-bc-court-key', '1');
-                key.style.cssText = [
-                    'display:flex',
-                    'flex-wrap:wrap',
-                    'gap:6px 10px',
-                    'padding:6px 12px',
-                    'align-items:center',
-                ].join(';');
-                clubOrder.forEach(function (clubId) {
-                    const color = CLUB_COLUMN_COLORS[clubId];
-                    const name = CLUB_SHORT_NAMES[clubId];
-                    if (!color || !name) return;
-                    const item = document.createElement('div');
-                    item.style.cssText = 'display:flex;align-items:center;gap:5px;';
-                    const swatch = document.createElement('span');
-                    swatch.style.cssText = [
-                        'display:inline-block',
-                        'width:12px',
-                        'height:12px',
-                        'border-radius:2px',
-                        'background:' + color,
-                        'flex-shrink:0',
-                    ].join(';');
-                    const label = document.createElement('span');
-                    label.style.cssText = 'font-size:11px;color:rgba(255,255,255,0.85);white-space:nowrap;';
-                    label.textContent = name;
-                    item.appendChild(swatch);
-                    item.appendChild(label);
-                    key.appendChild(item);
-                });
-                cal.parentNode.insertBefore(key, cal);
+            // Injects a <style> tag with border-top rules so each club's columns get
+            // a colored top edge.  Uses data-bc-club-id attribute selectors so no DOM
+            // nodes are added inside the columns — Angular's layout is unaffected.
+            function injectColumnColorStyles() {
+                if (document.querySelector('style[data-bc-col-colors]')) return;
+                const rules = Object.entries(CLUB_COLUMN_COLORS).map(function (entry) {
+                    return 'app-booking-calendar-column[data-bc-club-id="' + entry[0] + '"]' +
+                        '{border-top:4px solid ' + entry[1] + ';}';
+                }).join('');
+                const style = document.createElement('style');
+                style.setAttribute('data-bc-col-colors', '1');
+                style.textContent = rules;
+                document.head.appendChild(style);
             }
 
             // Un-hides the native calendar and wires a MutationObserver to re-tag
@@ -6001,7 +5951,7 @@
                     cal.style.display = '';
                     cal.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
                 }
-                injectColorKey(cal);
+                injectColumnColorStyles();
                 if (!columnObserver) {
                     columnObserver = new MutationObserver(tagColumns);
                     columnObserver.observe(cal, { childList: true, subtree: true });
@@ -6013,8 +5963,8 @@
                 tagColumns();
             }
 
-            // Removes column color strips, tags, the color key, disconnects the
-            // observer, and removes the click listener.  Called on flow exit.
+            // Removes the color style tag, column tags, disconnects the observer,
+            // and removes the click listener.  Called on flow exit.
             function clear() {
                 if (cancelBarUpdate) { cancelBarUpdate(); cancelBarUpdate = null; }
                 if (columnObserver) {
@@ -6025,9 +5975,8 @@
                     calendarClickTarget.removeEventListener('click', onCalendarSlotClick);
                     calendarClickTarget = null;
                 }
-                document.querySelectorAll('[data-bc-court-key]').forEach(el => el.remove());
+                document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
-                    col.querySelector('[data-bc-strip]')?.remove();
                     col.removeAttribute('data-bc-club-id');
                 });
             }
