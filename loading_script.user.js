@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.03
+// @version      1.04
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -4882,12 +4882,28 @@
     // Has no effect in the browser — module is undefined there.
     const _bcTestExports = {};
 
-    // Checks whether the cached email is on the Worker allow-list.  Fails open on
-    // any error (network failure, worker down, email not yet cached) so infrastructure
-    // issues never lock out legitimate users.  Returns a promise resolving to boolean.
-    async function checkAllowList() {
-        const email = (getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL) || '').trim().toLowerCase();
-        if (!email) return true; // email not cached yet — first load grace period
+    // Reads the user's email address from the Angular app's persisted auth state in
+    // localStorage, falling back to the bc_notification_email cache.  Angular writes
+    // connect20auth before our script runs, so this is synchronous and reliable on
+    // every normal page load.  Returns null only if the user is not yet logged in.
+    function readUserEmail() {
+        try {
+            const raw = localStorage.getItem('connect20auth');
+            if (raw) {
+                const state = JSON.parse(raw);
+                const email = state && state.profile && state.profile.data && state.profile.data.email;
+                if (email) return email.trim().toLowerCase();
+            }
+        } catch (_e) {
+            // Ignore parse errors — fall through to cached value.
+        }
+        return (getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL) || '').trim().toLowerCase() || null;
+    }
+
+    // Checks whether the user's email is on the Worker allow-list.  Fails open on
+    // any error (network failure, worker down) so infrastructure issues never lock
+    // out legitimate users.  Returns a promise resolving to boolean.
+    async function checkAllowList(email) {
         try {
             const response = await fetch(getWorkerApiConfigService().buildUrl('/allowed'), {
                 headers: {
@@ -4907,17 +4923,23 @@
     // refresh token to the Worker, both of which are invisible and harmless.
     installXhrInterceptors();
 
-    // All visible features are gated on the allow-list check so unauthorized users
-    // see the native Bay Club site without any helper UI.
-    checkAllowList().then(allowed => {
-        if (!allowed) return;
-        createCardSelectionStyleInstaller();
-        createBookingsCalendarExportInstaller();
-        createDashboardDebugActivationMonitor();
-        createBookingFlowMonitor();
-        getScheduledBookingService().initializeOnPageLoad();
-        getPreferenceSyncService().initializeOnPageLoad();
-    });
+    // Gate all visible features on the allow-list check.  The email is read from
+    // the Angular app's own localStorage state (connect20auth), which is populated
+    // before our script runs on every authenticated page load.  If the email is not
+    // available (unauthenticated state), no features are started — the user needs
+    // to be logged in to use Bay Club anyway.
+    const userEmail = readUserEmail();
+    if (userEmail) {
+        checkAllowList(userEmail).then(allowed => {
+            if (!allowed) return;
+            createCardSelectionStyleInstaller();
+            createBookingsCalendarExportInstaller();
+            createDashboardDebugActivationMonitor();
+            createBookingFlowMonitor();
+            getScheduledBookingService().initializeOnPageLoad();
+            getPreferenceSyncService().initializeOnPageLoad();
+        });
+    }
     // #endregion Startup installers and bootstrap.
 
     // Test exports — active only in CommonJS/Node environments (Vitest), never in the browser.
@@ -4929,6 +4951,7 @@
         createBookingsCalendarExportInstaller();
         _bcTestExports.pacificSlotTimeMs = pacificSlotTimeMs;
         _bcTestExports.transformAvailability = transformAvailability;
+        _bcTestExports.readUserEmail = readUserEmail;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }

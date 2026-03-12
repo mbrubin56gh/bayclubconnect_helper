@@ -35,6 +35,9 @@ The script patches `XMLHttpRequest.prototype.open`, `send`, and `setRequestHeade
 The monkey-patch wiring is installed through an in-file `installXhrInterceptors()` function so interceptor internals (including booking dedupe state) stay closure-scoped.
 Per-request XHR metadata (method, URL, Request-Id) is tracked in a closure-scoped `WeakMap` rather than custom properties on XHR instances.
 
+### Allow-List Gating
+`installXhrInterceptors()` runs unconditionally on every page load (auth header capture and token sync are harmless for any user). All visible features are gated behind an allow-list check: `readUserEmail()` reads the user's email from `localStorage.connect20auth` (which Angular writes before our script runs) with `bc_notification_email` as fallback. If an email is found, `checkAllowList(email)` fetches `GET /allowed` from the Worker; on success it initializes all feature installers. If the email is absent (not logged in) or the check returns `allowed: false`, no features start. The check fails open on any network or HTTP error so infrastructure issues never lock out legitimate users.
+
 ## XHR Response Interception (Fake Slot Injection)
 
 Angular reads the availability response via the `response` property (not `responseText`) on the XHR object. 
@@ -184,6 +187,8 @@ Server-side component that executes scheduled bookings without requiring the bro
   - `PUT /prefs` — save synced preferences for a user (secret required); body `{ userId, prefs }`; called with 800 ms debounce after any preference change
   - `GET /history` — last 100 rows from D1 `booking_history` as JSON (secret required; header or `?secret=`)
   - `GET /dashboard` — self-refreshing HTML monitoring page with active bookings + history (secret required; header or `?secret=`)
+  - `GET /allowed` — checks whether `X-User-Id` email is on the allow-list (secret required); returns `{ allowed: true|false }`; absent/empty/malformed list returns `allowed: true` (fail open). Email comparison is case-insensitive on both ends.
+- **Allow-list**: `allowed_users` KV key holds a JSON array of lowercase email strings. Absent or empty = everyone allowed. Update via `npx wrangler kv key put --namespace-id 299d14645bed49458addc9751cc6c241 --remote "allowed_users" '["email@example.com"]'`.
 - **Token bootstrap**: if a user's KV token is ever lost, reload bayclubconnect.com — `syncRefreshTokenFromAppStorage()` pushes it automatically. For manual recovery: `wrangler kv key put --namespace-id 299d14645bed49458addc9751cc6c241 "refresh_token:email@example.com" "<token>" --remote`.
 - **Deploy**: `cd cloudflare-worker && wrangler deploy`
 

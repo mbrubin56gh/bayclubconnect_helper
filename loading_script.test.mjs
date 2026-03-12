@@ -20,8 +20,9 @@
 //   buildIcsContent     — booking data → VCALENDAR string
 //   getIcsDownloadFileName — booking data → safe .ics filename
 //   formatCountdown     — fireAtMs → human-readable countdown string
+//   readUserEmail       — email from connect20auth localStorage, with bc_notification_email fallback
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -38,6 +39,7 @@ const {
     buildIcsContent,
     getIcsDownloadFileName,
     formatCountdown,
+    readUserEmail,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -342,5 +344,68 @@ describe('formatCountdown', () => {
     it('formats multi-day countdown', () => {
         const result = formatCountdown(Date.now() + 50 * 60 * 60 * 1000); // 50 hours
         expect(result).toContain('2d');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// readUserEmail
+// ---------------------------------------------------------------------------
+
+describe('readUserEmail', () => {
+    beforeEach(() => {
+        localStorage.clear();
+    });
+
+    afterEach(() => {
+        localStorage.clear();
+    });
+
+    it('returns null when neither connect20auth nor bc_notification_email is set', () => {
+        expect(readUserEmail()).toBeNull();
+    });
+
+    it('reads email from connect20auth profile data', () => {
+        localStorage.setItem('connect20auth', JSON.stringify({
+            profile: { data: { email: 'Mark.Rubin@Gmail.com' } },
+            token: { refresh_token: 'rt' },
+        }));
+        expect(readUserEmail()).toBe('mark.rubin@gmail.com');
+    });
+
+    it('lowercases and trims the email from connect20auth', () => {
+        localStorage.setItem('connect20auth', JSON.stringify({
+            profile: { data: { email: '  USER@Example.COM  ' } },
+        }));
+        expect(readUserEmail()).toBe('user@example.com');
+    });
+
+    it('falls back to bc_notification_email when connect20auth has no email', () => {
+        localStorage.setItem('connect20auth', JSON.stringify({ token: { refresh_token: 'rt' } }));
+        localStorage.setItem('bc_notification_email', 'cached@example.com');
+        expect(readUserEmail()).toBe('cached@example.com');
+    });
+
+    it('falls back to bc_notification_email when connect20auth is absent', () => {
+        localStorage.setItem('bc_notification_email', 'cached@example.com');
+        expect(readUserEmail()).toBe('cached@example.com');
+    });
+
+    it('falls back to bc_notification_email when connect20auth is malformed JSON', () => {
+        localStorage.setItem('connect20auth', 'not-json');
+        localStorage.setItem('bc_notification_email', 'cached@example.com');
+        expect(readUserEmail()).toBe('cached@example.com');
+    });
+
+    it('returns null when connect20auth is absent and bc_notification_email is empty string', () => {
+        localStorage.setItem('bc_notification_email', '');
+        expect(readUserEmail()).toBeNull();
+    });
+
+    it('prefers connect20auth email over bc_notification_email when both are set', () => {
+        localStorage.setItem('connect20auth', JSON.stringify({
+            profile: { data: { email: 'auth@example.com' } },
+        }));
+        localStorage.setItem('bc_notification_email', 'cached@example.com');
+        expect(readUserEmail()).toBe('auth@example.com');
     });
 });
