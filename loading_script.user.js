@@ -6255,8 +6255,12 @@
                 const TOP = 'inset 0 3px 0 ' + T;
                 const BOT = 'inset 0 -3px 0 ' + T;
                 const hoverSel = 'app-booking-calendar-column[data-bc-club-id]';
+                // cursor:pointer is NOT applied globally to all unavailable slots here —
+                // it is set via JS in onCalendarMouseOver only for slots that are
+                // genuinely locked (beyond the 3-day booking window).  Applying it in
+                // CSS would incorrectly show a pointer on slots unavailable for other
+                // reasons (e.g. courts not open at that hour).
                 const lockedHoverRule =
-                    hoverSel + ' .booking-calendar-column-time-slot-unavailable{cursor:pointer;}' +
                     hoverSel + ' [data-bc-hover-highlight]' +
                         '{background:rgba(0,188,212,0.22) !important;box-shadow:' + LR + ';}' +
                     hoverSel + ' [data-bc-hover-highlight="first"]{box-shadow:' + LR + ',' + TOP + ';}' +
@@ -6280,10 +6284,15 @@
                 document.head.appendChild(style);
             }
 
-            // Clears all hover-highlight attributes set by onCalendarMouseOver.
+            // Clears all hover-highlight attributes and cursor overrides set by
+            // onCalendarMouseOver.
             function clearLockedSlotHover() {
                 document.querySelectorAll('[data-bc-hover-highlight]').forEach(function (el) {
                     el.removeAttribute('data-bc-hover-highlight');
+                });
+                document.querySelectorAll('[data-bc-locked-cursor]').forEach(function (el) {
+                    el.style.cursor = '';
+                    el.removeAttribute('data-bc-locked-cursor');
                 });
             }
 
@@ -6318,6 +6327,15 @@
                 if (hoverIndex < 0) return;
                 const lastIndex = allSlots.length - 1;
 
+                // Skip slots that are unavailable for reasons other than being outside
+                // the 3-day booking window (e.g. the court is not open at that hour).
+                // Only slots whose booking window has not yet opened are truly "locked"
+                // and should show the hover highlight and pointer cursor.
+                const slotDate = lastFetchState && lastFetchState.params && lastFetchState.params.date;
+                if (!slotDate) return;
+                const fromMinutes = COURT_VIEW_GRID_START_MINUTES + hoverIndex * 30;
+                if (Date.now() >= getScheduledBookingService().computeFireAtMs(slotDate, fromMinutes)) return;
+
                 // Build a set of slot indices that overlap a booked or blocked event.
                 const bookedIndices = new Set();
                 const clubEvents = lastFetchState && lastFetchState.courtsheetEventsByClubId &&
@@ -6333,6 +6351,12 @@
                         }
                     });
                 }
+
+                // Skip the hovered slot if it is blocked by an existing event (class,
+                // clinic, maintenance, another booking).  Such a slot is unavailable
+                // beyond the booking window but would still not be bookable when the
+                // window opens, so showing a hover highlight would be misleading.
+                if (bookedIndices.has(hoverIndex)) return;
 
                 // Phase 1: extend downward from hover until duration is filled, a booked
                 // slot is hit, or the column ends.
@@ -6367,6 +6391,13 @@
                     }
                     allSlots[i].setAttribute('data-bc-hover-highlight', position);
                 }
+
+                // Show a pointer cursor on the hovered slot only — we confirmed above
+                // that this is a genuinely locked slot, not one unavailable for another
+                // reason.  Tracked with data-bc-locked-cursor so clearLockedSlotHover
+                // can restore the default cursor on mouseout.
+                lockedSlot.style.cursor = 'pointer';
+                lockedSlot.setAttribute('data-bc-locked-cursor', '1');
             }
 
             // Injects a small fixed-position legend in the bottom-left corner explaining
