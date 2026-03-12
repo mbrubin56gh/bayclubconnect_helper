@@ -396,6 +396,34 @@
         }
 
 
+        // Fetches /courtsheet/{clubId}/courts for a single club using captured auth headers.
+        // Mirrors the params from the native request so the response shape is comparable.
+        async function fetchCourtsForOneClub(clubId, params) {
+            const timeSlotId = CLUB_MAX_TIMESLOT[clubId] && params.timeSlotId === TIMESLOTS.min90
+                ? CLUB_MAX_TIMESLOT[clubId]
+                : (params.timeSlotId || '');
+            const qs = new URLSearchParams({
+                date: params.date,
+                categoryCode: params.categoryCode || 'pickleball',
+                categoryOptionsId: params.categoryOptionsId || '',
+                timeSlotId,
+            }).toString();
+            const r = await fetch(
+                `https://connect-api.bayclubs.io/court-booking/api/1.0/courtsheet/${clubId}/courts?${qs}`,
+                {
+                    headers: {
+                        'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                        'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                        'Request-Id': crypto.randomUUID(),
+                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                        'Accept': 'application/json',
+                    },
+                }
+            );
+            if (!r.ok) throw new Error(`courts HTTP ${r.status} for ${clubId}`);
+            return r.json();
+        }
+
         function maybeRewriteBookingRequestToPendingSelection(xhr, requestUrl, requestMethod, originalArgs) {
             // Intercept the native app's booking request and replace it with our own
             // for the selected club and time slot.
@@ -505,6 +533,60 @@
                     maybePatchAvailabilityResponseForAngular(this);
                 });
             }
+            // Step 1 of methodical courts interception: register a load listener before
+            // Angular's so we fire first.  Use stopImmediatePropagation() to block Angular,
+            // then re-dispatch the native response completely unmodified.  If Angular still
+            // renders 8 RS columns normally after this, the stop+re-dispatch mechanism is
+            // confirmed safe and we can add merging in a subsequent step.
+            // Match /courtsheet/{id}/courts?... but NOT /courtsheet/{id}?...
+            // url.includes('/courts') alone also matches /courtsheet/ since it starts with that substring.
+            if (typeof url === 'string' && /\/courtsheet\/[^/]+\/courts(\?|$)/.test(url)) {
+                let passThrough = false;
+                const capturedXhrRef = this;
+                this.addEventListener('load', function (event) {
+                    if (passThrough) return;
+                    passThrough = true;
+                    event.stopImmediatePropagation();
+
+                    const nativeText = capturedXhrRef.responseText;
+                    let nativeData;
+                    try { nativeData = JSON.parse(nativeText); } catch (_e) {
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        return;
+                    }
+
+                    console.log('[bc] courts intercepted: nativeItems', nativeData.items?.length, '| url', url);
+
+                    // Step 3: fetch all other clubs in parallel and merge their full items arrays.
+                    const parsedUrl = new URL(url);
+                    const nativeClubId = /\/courtsheet\/([^/]+)\/courts/.exec(url)?.[1];
+                    const params = {
+                        date: parsedUrl.searchParams.get('date'),
+                        categoryCode: parsedUrl.searchParams.get('categoryCode'),
+                        categoryOptionsId: parsedUrl.searchParams.get('categoryOptionsId'),
+                        timeSlotId: parsedUrl.searchParams.get('timeSlotId'),
+                    };
+                    const otherClubIds = Object.values(CLUBS).filter(id => id !== nativeClubId);
+                    Promise.allSettled(
+                        otherClubIds.map(id => fetchCourtsForOneClub(id, params))
+                    ).then(function (results) {
+                        const seenCourtIds = new Set(nativeData.items.map(c => c.courtId));
+                        results.forEach(function (r) {
+                            if (r.status !== 'fulfilled') return;
+                            (r.value.items || []).forEach(function (court) {
+                                if (!seenCourtIds.has(court.courtId)) {
+                                    seenCourtIds.add(court.courtId);
+                                    nativeData.items.push(court);
+                                }
+                            });
+                        });
+                        console.log('[bc] courts merged all clubs; total items:', nativeData.items.length);
+                        applyMergedPayloadToXhr(capturedXhrRef, nativeData);
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                    });
+                });
+            }
+
             if (typeof url === 'string' && url.includes('possiblePlayers')) {
                 this.addEventListener('load', function () {
                     maybeCachePossiblePlayersResponse(this);
