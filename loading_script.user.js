@@ -2247,7 +2247,26 @@
                 // and also contains app-dashboard-card / .book-more, so searching all
                 // .responsive-carousel elements picks the wrong one when it renders first.
                 const eventsHost = document.querySelector('app-dashboard-events');
-                const carousel = eventsHost && eventsHost.querySelector('.responsive-carousel');
+                let carousel = eventsHost && eventsHost.querySelector('.responsive-carousel');
+
+                // When the user has no upcoming bookings, Angular renders a "Book an
+                // Activity" placeholder instead of app-responsive-carousel, so there is
+                // no .responsive-carousel in the DOM. In that case synthesize a flex
+                // container with the same class and insert it before the placeholder so
+                // our pending cards have somewhere to live. On subsequent reconcile passes
+                // querySelector finds the synthetic element and the rest of the function
+                // proceeds without change.
+                if (!carousel && eventsHost) {
+                    const bookMoreEl = eventsHost.querySelector('.book-more');
+                    if (bookMoreEl) {
+                        const syntheticCarousel = document.createElement('div');
+                        syntheticCarousel.className = 'd-flex flex-shrink-0 responsive-carousel rounded';
+                        syntheticCarousel.style.cssText = 'flex-wrap: wrap; gap: 0;';
+                        bookMoreEl.parentElement.insertBefore(syntheticCarousel, bookMoreEl);
+                        carousel = syntheticCarousel;
+                    }
+                }
+
                 if (!carousel) return;
 
                 const currentEmail = getLocalStorageService().getString(
