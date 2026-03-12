@@ -6407,15 +6407,12 @@
                     const color = entry[1];
                     const name = CLUB_SHORT_NAMES[clubId] || '';
                     const sel = 'app-booking-calendar-column[data-bc-club-id="' + clubId + '"]';
-                    // Colored band at the top of each column header.
-                    const bandRule = sel + ' div.booking-calendar-column-header' +
-                        '{border-top:4px solid ' + color + ' !important;}';
                     // Club name shown above the court number via ::before on div.court-name.
                     // Purely in-flow — no absolute positioning, no layout disruption.
                     const nameRule = sel + ' div.court-name::before{' +
                         'content:"' + name + '";display:block;font-size:9px;font-weight:600;' +
                         'color:' + color + ';letter-spacing:0.03em;line-height:1.2;margin-bottom:1px;}';
-                    return bandRule + nameRule;
+                    return nameRule;
                 }).join('');
                 // Locked slots in tagged columns show a pointer cursor so users know
                 // they are clickable.  Hover highlighting is driven by JS (see
