@@ -863,3 +863,66 @@ describe('partner email notifications', () => {
         expect(recipients.filter(r => r === 'mark@example.com').length).toBe(1);
     });
 });
+
+describe('GET /allowed', () => {
+    it('returns 401 when secret is missing', async () => {
+        const req = makeRequest('GET', '/allowed', { noAuth: true, userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv());
+        expect(res.status).toBe(401);
+    });
+
+    it('returns allowed:false when no X-User-Id header is provided', async () => {
+        const req = makeRequest('GET', '/allowed');
+        const res = await handleRequest(req, makeEnv());
+        const data = await res.json();
+        expect(data.allowed).toBe(false);
+    });
+
+    it('returns allowed:true when no allowed_users key exists in KV (fail open)', async () => {
+        const kv = makeMockKv({});
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(true);
+    });
+
+    it('returns allowed:true when allowed_users is an empty array', async () => {
+        const kv = makeMockKv({ allowed_users: JSON.stringify([]) });
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(true);
+    });
+
+    it('returns allowed:true when allowed_users is malformed JSON (fail open)', async () => {
+        const kv = makeMockKv({ allowed_users: 'not-json' });
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(true);
+    });
+
+    it('returns allowed:true when the email is in the allow-list', async () => {
+        const kv = makeMockKv({ allowed_users: JSON.stringify(['user@example.com', 'other@example.com']) });
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(true);
+    });
+
+    it('returns allowed:false when the email is not in the allow-list', async () => {
+        const kv = makeMockKv({ allowed_users: JSON.stringify(['other@example.com']) });
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(false);
+    });
+
+    it('performs case-insensitive email matching', async () => {
+        const kv = makeMockKv({ allowed_users: JSON.stringify(['User@Example.COM']) });
+        const req = makeRequest('GET', '/allowed', { userId: 'user@example.com' });
+        const res = await handleRequest(req, makeEnv({ kv }));
+        const data = await res.json();
+        expect(data.allowed).toBe(true);
+    });
+});

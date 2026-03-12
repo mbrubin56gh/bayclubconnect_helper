@@ -4882,19 +4882,51 @@
     // Has no effect in the browser — module is undefined there.
     const _bcTestExports = {};
 
-    // Start script services and monitoring.
+    // Checks whether the cached email is on the Worker allow-list.  Fails open on
+    // any error (network failure, worker down, email not yet cached) so infrastructure
+    // issues never lock out legitimate users.  Returns a promise resolving to boolean.
+    async function checkAllowList() {
+        const email = (getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL) || '').trim().toLowerCase();
+        if (!email) return true; // email not cached yet — first load grace period
+        try {
+            const response = await fetch(getWorkerApiConfigService().buildUrl('/allowed'), {
+                headers: {
+                    'X-Worker-Secret': getWorkerApiConfigService().getSecretHeaderValue(),
+                    'X-User-Id': email,
+                },
+            });
+            if (!response.ok) return true; // fail open on HTTP error
+            const data = await response.json();
+            return data.allowed !== false;
+        } catch (_e) {
+            return true; // fail open on network error
+        }
+    }
+
+    // XHR interceptors run unconditionally — they capture auth headers and push the
+    // refresh token to the Worker, both of which are invisible and harmless.
     installXhrInterceptors();
-    createCardSelectionStyleInstaller();
-    createBookingsCalendarExportInstaller();
-    createDashboardDebugActivationMonitor();
-    createBookingFlowMonitor();
-    getScheduledBookingService().initializeOnPageLoad();
-    getPreferenceSyncService().initializeOnPageLoad();
+
+    // All visible features are gated on the allow-list check so unauthorized users
+    // see the native Bay Club site without any helper UI.
+    checkAllowList().then(allowed => {
+        if (!allowed) return;
+        createCardSelectionStyleInstaller();
+        createBookingsCalendarExportInstaller();
+        createDashboardDebugActivationMonitor();
+        createBookingFlowMonitor();
+        getScheduledBookingService().initializeOnPageLoad();
+        getPreferenceSyncService().initializeOnPageLoad();
+    });
     // #endregion Startup installers and bootstrap.
 
     // Test exports — active only in CommonJS/Node environments (Vitest), never in the browser.
     // pacificSlotTimeMs is at IIFE top-level scope; the rest are collected via _bcTestExports.
+    // createBookingsCalendarExportInstaller is idempotent; calling it here ensures its
+    // Object.assign(_bcTestExports, ...) calls run synchronously before module.exports is set,
+    // since the normal startup path calls it inside a Promise callback which resolves too late.
     if (typeof module !== 'undefined') {
+        createBookingsCalendarExportInstaller();
         _bcTestExports.pacificSlotTimeMs = pacificSlotTimeMs;
         _bcTestExports.transformAvailability = transformAvailability;
         // eslint-disable-next-line no-undef

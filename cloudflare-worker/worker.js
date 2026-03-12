@@ -726,6 +726,22 @@ async function handleRequest(request, env) {
 
     // Returns the stored preference object for a user. The extension calls this
     // on every page load to propagate preferences across devices.
+    // Returns { allowed: true } when the email is on the allow-list, { allowed: false }
+    // otherwise.  The allow-list is a JSON array of lowercase email strings stored in KV
+    // under the key "allowed_users".  An absent or empty allow-list permits everyone so
+    // the feature degrades gracefully before the list is configured.
+    if (method === 'GET' && path === '/allowed') {
+        if (!checkSecret(request, env)) return new Response('Unauthorized', { status: 401 });
+        const email = (request.headers.get('X-User-Id') || '').trim().toLowerCase();
+        if (!email) return jsonResponse({ allowed: false });
+        const raw = await env.BC_BOOKINGS.get('allowed_users');
+        if (!raw) return jsonResponse({ allowed: true }); // no list configured — open
+        let list;
+        try { list = JSON.parse(raw); } catch (_e) { return jsonResponse({ allowed: true }); }
+        if (!Array.isArray(list) || list.length === 0) return jsonResponse({ allowed: true });
+        return jsonResponse({ allowed: list.map(e => String(e).trim().toLowerCase()).includes(email) });
+    }
+
     if (method === 'GET' && path === '/prefs') {
         const userId = request.headers.get('X-User-Id');
         if (!userId) return new Response('Bad Request', { status: 400 });
