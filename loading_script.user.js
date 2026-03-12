@@ -2261,7 +2261,7 @@
                     if (bookMoreEl) {
                         const syntheticCarousel = document.createElement('div');
                         syntheticCarousel.className = 'd-flex flex-shrink-0 responsive-carousel rounded';
-                        syntheticCarousel.style.cssText = 'flex-wrap: wrap; gap: 0;';
+                        syntheticCarousel.style.cssText = 'flex-wrap: wrap; gap: 0; margin-right: 16px;';
                         bookMoreEl.parentElement.insertBefore(syntheticCarousel, bookMoreEl);
                         carousel = syntheticCarousel;
                     }
