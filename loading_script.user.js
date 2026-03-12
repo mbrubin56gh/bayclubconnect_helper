@@ -6139,10 +6139,120 @@
                         'color:' + color + ';letter-spacing:0.03em;line-height:1.2;margin-bottom:1px;}';
                     return bandRule + nameRule;
                 }).join('');
+                // Locked slots in tagged columns show a pointer cursor so users know
+                // they are clickable.  Hover highlighting is driven by JS (see
+                // onCalendarMouseOver) to span the full booking duration as a single
+                // unified block.  Each highlighted slot is tagged with its position
+                // (first/middle/last/only) so CSS adds top/bottom edges only on the
+                // outer slots, suppressing interior horizontal lines between 30-min
+                // sub-slots.  Inset shadows stay inside each element's bounds and are
+                // not clipped by ancestor overflow:hidden.
+                const T = 'rgb(0,188,212)';
+                const LR = 'inset 3px 0 0 ' + T + ',inset -3px 0 0 ' + T;
+                const TOP = 'inset 0 3px 0 ' + T;
+                const BOT = 'inset 0 -3px 0 ' + T;
+                const hoverSel = 'app-booking-calendar-column[data-bc-club-id]';
+                const lockedHoverRule =
+                    hoverSel + ' .booking-calendar-column-time-slot-unavailable{cursor:pointer;}' +
+                    hoverSel + ' [data-bc-hover-highlight]' +
+                        '{background:rgba(0,188,212,0.22) !important;box-shadow:' + LR + ';}' +
+                    hoverSel + ' [data-bc-hover-highlight="first"]{box-shadow:' + LR + ',' + TOP + ';}' +
+                    hoverSel + ' [data-bc-hover-highlight="last"]{box-shadow:' + LR + ',' + BOT + ';}' +
+                    hoverSel + ' [data-bc-hover-highlight="only"]{box-shadow:' + LR + ',' + TOP + ',' + BOT + ';}';
+
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
-                style.textContent = rules;
+                style.textContent = rules + lockedHoverRule;
                 document.head.appendChild(style);
+            }
+
+            // Clears all hover-highlight attributes set by onCalendarMouseOver.
+            function clearLockedSlotHover() {
+                document.querySelectorAll('[data-bc-hover-highlight]').forEach(function (el) {
+                    el.removeAttribute('data-bc-hover-highlight');
+                });
+            }
+
+            // Highlights a duration-length window of locked slots around the hovered
+            // slot, respecting already-booked events as hard boundaries.
+            // Strategy: extend downward (later in time) first; if a booked slot blocks
+            // the full duration, fill the shortfall by extending upward (earlier in
+            // time) from the hover point; cap at the first booked slot in each direction
+            // and at the column bounds.
+            function onCalendarMouseOver(event) {
+                const lockedSlot = event.target.closest(
+                    '.booking-calendar-column-time-slot.booking-calendar-column-time-slot-unavailable'
+                );
+                clearLockedSlotHover();
+                if (!lockedSlot) return;
+
+                const column = lockedSlot.closest('app-booking-calendar-column[data-bc-club-id]');
+                if (!column) return;
+
+                const clubId = column.getAttribute('data-bc-club-id');
+                const courtId = column.getAttribute('data-bc-court-id');
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                const rawTimeSlotId = lastFetchState && lastFetchState.params && lastFetchState.params.timeSlotId;
+                const effectiveTimeSlotId = CLUB_MAX_TIMESLOT[clubId] && rawTimeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : rawTimeSlotId;
+                const durationMinutes = effectiveTimeSlotId === TIMESLOTS.min90 ? 90 : 60;
+                const durationSlots = durationMinutes / 30;
+
+                const allSlots = Array.from(column.querySelectorAll('.booking-calendar-column-time-slot'));
+                const hoverIndex = allSlots.indexOf(lockedSlot);
+                if (hoverIndex < 0) return;
+                const lastIndex = allSlots.length - 1;
+
+                // Build a set of slot indices that overlap a booked or blocked event.
+                const bookedIndices = new Set();
+                const clubEvents = lastFetchState && lastFetchState.courtsheetEventsByClubId &&
+                    lastFetchState.courtsheetEventsByClubId[clubId];
+                if (clubEvents && courtId) {
+                    clubEvents.forEach(function (ev) {
+                        if (!ev.court || ev.court.courtId !== courtId) return;
+                        for (let i = 0; i <= lastIndex; i++) {
+                            const slotFrom = COURT_VIEW_GRID_START_MINUTES + i * 30;
+                            if (ev.timeFromInMinutes < slotFrom + 30 && ev.timeToInMinutes > slotFrom) {
+                                bookedIndices.add(i);
+                            }
+                        }
+                    });
+                }
+
+                // Phase 1: extend downward from hover until duration is filled, a booked
+                // slot is hit, or the column ends.
+                let endIndex = hoverIndex;
+                while (
+                    endIndex < lastIndex &&
+                    endIndex - hoverIndex + 1 < durationSlots &&
+                    !bookedIndices.has(endIndex + 1)
+                ) {
+                    endIndex++;
+                }
+
+                // Phase 2: if the downward window is shorter than the full duration,
+                // extend upward to fill the shortfall.
+                let startIndex = hoverIndex;
+                const remaining = durationSlots - (endIndex - hoverIndex + 1);
+                for (let filled = 0; filled < remaining; filled++) {
+                    if (startIndex <= 0 || bookedIndices.has(startIndex - 1)) break;
+                    startIndex--;
+                }
+
+                for (let i = startIndex; i <= endIndex; i++) {
+                    let position;
+                    if (startIndex === endIndex) {
+                        position = 'only';
+                    } else if (i === startIndex) {
+                        position = 'first';
+                    } else if (i === endIndex) {
+                        position = 'last';
+                    } else {
+                        position = 'middle';
+                    }
+                    allSlots[i].setAttribute('data-bc-hover-highlight', position);
+                }
             }
 
             // Un-hides the native calendar and wires a MutationObserver to re-tag
@@ -6168,6 +6278,8 @@
                     // Use capture phase so we intercept locked-slot clicks before
                     // Angular's bubble-phase listener on the slot element can fire.
                     cal.addEventListener('click', onCalendarSlotClick, true);
+                    cal.addEventListener('mouseover', onCalendarMouseOver);
+                    cal.addEventListener('mouseleave', clearLockedSlotHover);
                 }
                 tagColumns();
             }
@@ -6182,8 +6294,11 @@
                 }
                 if (calendarClickTarget) {
                     calendarClickTarget.removeEventListener('click', onCalendarSlotClick, true);
+                    calendarClickTarget.removeEventListener('mouseover', onCalendarMouseOver);
+                    calendarClickTarget.removeEventListener('mouseleave', clearLockedSlotHover);
                     calendarClickTarget = null;
                 }
+                clearLockedSlotHover();
                 document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
