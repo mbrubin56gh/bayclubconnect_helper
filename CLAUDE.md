@@ -64,10 +64,12 @@ Both are intercepted in `XMLHttpRequest.prototype.open` using the same `stopImme
 
 **What still needs work**:
 - Club navigation UI: scroll-to-club buttons so users can jump to a club's courts by clicking its name. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting.
-- Pod reservation conflict detection in Court View: surface a warning when a pod member (household addOn) has already booked the same club/date, and disable slot clicks when there is a pending scheduled booking conflict.
-- Show names of everyone on a reservation in Court View, even if they are not in the user's buddy list.
-- Locked slot → scheduled booking flow for Court View.
-- 3-day booking window enforcement and locked slot UI in Court View.
+- Pod reservation conflict detection: surface a warning when a pod member (household addOn) has already booked the same club/date, and disable slot clicks when there is a pending scheduled booking conflict.
+- Show names of everyone on a reservation, even if they are not in the user's buddy list.
+- Locked slot → scheduled booking flow: enforce the 3-day booking window, show locked slot UI, and wire locked slot clicks through to the partner picker and scheduled booking flow.
+- Time range slider: filter visible time rows by time of day, mirroring the Hour View slider.
+- Weather: hourly emoji on the Court View time axis, mirroring the Hour View weather display.
+- Indoor/outdoor indicator: Broadway and South SF are indoor-only; surface that in the column headers.
 
 ## XHR Response Interception (Fake Slot Injection)
 
