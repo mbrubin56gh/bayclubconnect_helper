@@ -3156,10 +3156,10 @@
     // Accent colors for each club's court column headers and key, chosen to contrast
     // well against the native calendar's dark teal background and support white text.
     const CLUB_COLUMN_COLORS = {
-        [CLUBS.redwoodShores]: '#2e7dd1',
-        [CLUBS.broadway]:      '#c0682c',
-        [CLUBS.southSF]:       '#2d8a5e',
-        [CLUBS.santaClara]:    '#7c4ba0',
+        [CLUBS.redwoodShores]: '#74b8ff',
+        [CLUBS.broadway]:      '#ffaa66',
+        [CLUBS.southSF]:       '#5de8a8',
+        [CLUBS.santaClara]:    '#d99fff',
     };
 
     // #region Court view pure helpers.
@@ -5929,8 +5929,19 @@
             function injectColumnColorStyles() {
                 if (document.querySelector('style[data-bc-col-colors]')) return;
                 const rules = Object.entries(CLUB_COLUMN_COLORS).map(function (entry) {
-                    return 'app-booking-calendar-column[data-bc-club-id="' + entry[0] + '"]' +
-                        '{border-top:4px solid ' + entry[1] + ';}';
+                    const clubId = entry[0];
+                    const color = entry[1];
+                    const name = CLUB_SHORT_NAMES[clubId] || '';
+                    const sel = 'app-booking-calendar-column[data-bc-club-id="' + clubId + '"]';
+                    // Colored band at the top of each column header.
+                    const bandRule = sel + ' div.booking-calendar-column-header' +
+                        '{border-top:4px solid ' + color + ' !important;}';
+                    // Club name shown above the court number via ::before on div.court-name.
+                    // Purely in-flow — no absolute positioning, no layout disruption.
+                    const nameRule = sel + ' div.court-name::before{' +
+                        'content:"' + name + '";display:block;font-size:9px;font-weight:600;' +
+                        'color:' + color + ';letter-spacing:0.03em;line-height:1.2;margin-bottom:1px;}';
+                    return bandRule + nameRule;
                 }).join('');
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
