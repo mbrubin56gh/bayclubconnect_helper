@@ -6134,6 +6134,10 @@
                         col.removeAttribute('data-bc-pod-conflict');
                     }
                 });
+                // Inject the weather strip after columns are tagged so the fetch date
+                // is available.  Removes and re-creates on every call so date changes
+                // get a fresh strip.
+                injectWeatherStrip();
             }
 
             // When a non-home-club native slot is clicked, Angular's bottom bar will render
@@ -6261,7 +6265,18 @@
 
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
-                style.textContent = rules + podConflictRule + badgeRule + lockedHoverRule;
+                // Establish a positioning context on the calendar root so the
+                // absolutely-positioned weather strip anchors to it.  Indent the
+                // time label text 20px (box-sizing:border-box keeps column width
+                // unchanged), and shrink the span font slightly + force no-wrap so
+                // "5:00 AM" stays on one line in the narrowed column.
+                const weatherCalRule =
+                    'app-booking-calendar{position:relative;}' +
+                    'div.booking-calendar-time-slot{padding-left:20px !important;' +
+                    'box-sizing:border-box !important;}' +
+                    'div.booking-calendar-time-slot span{font-size:10px !important;' +
+                    'white-space:nowrap !important;}';
+                style.textContent = rules + podConflictRule + badgeRule + lockedHoverRule + weatherCalRule;
                 document.head.appendChild(style);
             }
 
@@ -6379,6 +6394,100 @@
                 } else {
                     document.body.appendChild(legend);
                 }
+            }
+
+            // Injects a narrow absolutely-positioned weather strip to the left of
+            // Angular's time axis column.  Each on-the-hour row gets an emoji (and
+            // rain % for rain emojis) positioned by pixel offset so the strip never
+            // participates in Angular's flex layout and is never clipped by
+            // overflow:hidden on the time slot rows.  Safe to call on every reconcile
+            // pass — removes any existing strip first so date changes re-render cleanly.
+            function injectWeatherStrip() {
+                const RAIN_EMOJIS = ['🌧️', '🌦️', '⛈️'];
+                const STRIP_WIDTH = 20; // Pixels wide for the emoji column.
+                const SLOT_HEIGHT = 64; // Angular renders each 30-minute slot at 64px.
+
+                const cal = document.querySelector('app-booking-calendar');
+                if (!cal) return;
+                const date = getBookingStateService().getLastFetchState()?.params?.date;
+                if (!date) return;
+
+                // Bail if the strip already reflects the current date — appending the
+                // strip triggers the MutationObserver, which calls tagColumns() again.
+                // Stamping the date lets us detect that re-entry and return immediately,
+                // breaking the loop.  If the date changed, remove the stale strip first.
+                const existing = cal.querySelector('[data-bc-weather-strip]');
+                if (existing) {
+                    if (existing.getAttribute('data-bc-weather-date') === date) return;
+                    existing.remove();
+                }
+
+                getWeatherService().whenReady().then(function () {
+                    // Read layout geometry after weather data resolves so Angular has
+                    // had time to finish rendering the time slot rows.
+                    const firstSlot = cal.querySelector('div.booking-calendar-time-slot');
+                    if (!firstSlot) return;
+
+                    const calRect = cal.getBoundingClientRect();
+                    const firstSlotRect = firstSlot.getBoundingClientRect();
+
+                    // Align the strip with the left edge of the time slot rows.  CSS
+                    // adds 20px padding-left to each row so the time text is indented,
+                    // leaving that space for our 20px-wide strip.
+                    const stripLeft = firstSlotRect.left - calRect.left;
+                    // Top offset of the first time slot (5 AM) within cal's layout box.
+                    const gridTop = firstSlotRect.top - calRect.top;
+
+                    const strip = document.createElement('div');
+                    strip.setAttribute('data-bc-weather-strip', '1');
+                    // Stamp the date so the idempotency guard above can detect
+                    // re-entry caused by the MutationObserver firing on our own append.
+                    strip.setAttribute('data-bc-weather-date', date);
+                    strip.style.cssText = [
+                        'position:absolute;',
+                        'left:' + stripLeft + 'px;',
+                        'top:0;bottom:0;',
+                        'width:' + STRIP_WIDTH + 'px;',
+                        'pointer-events:none;',
+                        'overflow:visible;',
+                    ].join('');
+
+                    // One emoji element per on-the-hour slot from 5 AM through 10 PM.
+                    for (let min = COURT_VIEW_GRID_START_MINUTES; min <= 22 * 60; min += 60) {
+                        const emoji = getWeatherService().emojiForHour(date, min);
+                        if (!emoji) continue;
+
+                        // Slot index from the top of the grid (each slot is 30 min).
+                        const slotIndex = (min - COURT_VIEW_GRID_START_MINUTES) / 30;
+                        // Center of the on-the-hour slot row.
+                        const topPx = gridTop + slotIndex * SLOT_HEIGHT + SLOT_HEIGHT / 2;
+
+                        const emojiEl = document.createElement('div');
+                        emojiEl.style.cssText = [
+                            'position:absolute;',
+                            'top:' + topPx + 'px;',
+                            'width:100%;',
+                            'transform:translateY(-50%);',
+                            'font-size:11px;line-height:1;',
+                            'text-align:center;',
+                        ].join('');
+                        emojiEl.textContent = emoji;
+
+                        if (RAIN_EMOJIS.includes(emoji)) {
+                            const pct = getWeatherService().rainPctForHour(date, min);
+                            if (pct !== null && pct !== undefined) {
+                                const pctEl = document.createElement('div');
+                                pctEl.style.cssText =
+                                    'font-size:9px;color:rgba(160,200,255,0.9);';
+                                pctEl.textContent = pct + '%';
+                                emojiEl.appendChild(pctEl);
+                            }
+                        }
+                        strip.appendChild(emojiEl);
+                    }
+
+                    cal.appendChild(strip);
+                });
             }
 
             // Un-hides the native calendar and wires a MutationObserver to re-tag
