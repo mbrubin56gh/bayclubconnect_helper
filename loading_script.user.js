@@ -40,6 +40,11 @@
         [CLUBS.santaClara]: TIMESLOTS.min60,
     };
 
+    // Angular's native Court View grid for Bay Club pickleball starts at 5:00 AM.
+    // Slot indices within a column are multiplied by 30 minutes and added to this
+    // base to derive the fromMinutes for a clicked slot.
+    const COURT_VIEW_GRID_START_MINUTES = 300;
+
     const TIME_OF_DAYS = ['Morning', 'Afternoon', 'Evening'];
 
     // Edge courts are preferable because you have fewer courts potentially hitting balls onto your court, and
@@ -292,7 +297,12 @@
             // assign data-bc-club-id to Angular-rendered app-booking-calendar-column
             // elements by their position in the rendered column list.
             getBookingStateService().setMergedCourtsOrder(
-                target.courts.map(c => ({ courtId: c.courtId, clubId: c.bc_clubId }))
+                target.courts.map(c => ({
+                    courtId: c.courtId,
+                    clubId: c.bc_clubId,
+                    courtName: (c.courtName || c.name || '').trim(),
+                    courtOrder: c.order ?? 0,
+                }))
             );
 
             // Diagnostic: per-club breakdown of courts and slots actually merged in.
@@ -4396,7 +4406,7 @@
                 </div>`;
             }
 
-            function bindSchedulePanelInteractions(panel, _anchorElement, slotInfo) {
+            function bindSchedulePanelInteractions(panel, _anchorElement, slotInfo, onReturnExtra) {
                 const requiredPartners = getRequiredPartnerCount();
 
                 function updatePartnerPromptAndSubmitButton() {
@@ -4454,6 +4464,9 @@
                         .find(btn => btn.textContent.trim().includes('NEXT'));
                     if (nextButton) nextButton.style.display = '';
                     initNextButton();
+                    // Court View callers pass a callback to restore any Court-View-specific
+                    // content they hid before showing the panel.
+                    if (onReturnExtra) onReturnExtra();
                 }
 
                 panel.querySelector('[data-bc-schedule-back]')?.addEventListener('click', returnToSlotGrid);
@@ -4797,10 +4810,179 @@
                 cancelBarUpdate = () => clearInterval(barInterval);
             }
 
+            // Handles a click on a locked (outside-booking-window) slot in the native
+            // Court View grid.  Derives the slot time from its DOM position, checks that
+            // no existing event occupies the slot, then shows the partner picker / schedule
+            // panel using the same panel builder and interaction wiring used by Hour View.
+            async function handleCourtViewLockedSlotClick(slot) {
+                const column = slot.closest('app-booking-calendar-column[data-bc-club-id]');
+                if (!column) return;
+
+                const clubId = column.getAttribute('data-bc-club-id');
+                const courtId = column.getAttribute('data-bc-court-id');
+                if (!clubId || !courtId) return;
+
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                if (!lastFetchState) return;
+                const slotDate = lastFetchState.params && lastFetchState.params.date;
+                if (!slotDate) return;
+
+                // Derive fromMinutes from the slot's index within the column's slot list.
+                // The grid always starts at COURT_VIEW_GRID_START_MINUTES (7:00 AM).
+                const allSlots = Array.from(
+                    column.querySelectorAll('.booking-calendar-column-time-slot')
+                );
+                const slotIndex = allSlots.indexOf(slot);
+                if (slotIndex < 0) return;
+                const fromMinutes = COURT_VIEW_GRID_START_MINUTES + slotIndex * 30;
+
+                // Skip slots that already have a booking or lesson event.
+                const clubEvents = lastFetchState.courtsheetEventsByClubId &&
+                    lastFetchState.courtsheetEventsByClubId[clubId];
+                if (clubEvents && clubEvents.some(function (ev) {
+                    return ev.court && ev.court.courtId === courtId &&
+                        ev.timeFromInMinutes < fromMinutes + 30 &&
+                        ev.timeToInMinutes > fromMinutes;
+                })) { return; }
+
+                // Derive booking duration from the current session's timeSlotId param,
+                // capping at 60 minutes for Santa Clara.
+                const rawTimeSlotId = lastFetchState.params.timeSlotId;
+                const effectiveTimeSlotId = CLUB_MAX_TIMESLOT[clubId] && rawTimeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : rawTimeSlotId;
+                const durationMinutes = effectiveTimeSlotId === TIMESLOTS.min90 ? 90 : 60;
+                const toMinutes = fromMinutes + durationMinutes;
+
+                const courtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
+                const courtEntry = courtsOrder.find(function (c) { return c.courtId === courtId; });
+                const courtName = (courtEntry && courtEntry.courtName) || 'Court';
+                const clubName = CLUB_SHORT_NAMES[clubId] || clubId;
+
+                // Build a quality-ordered fallback court list for the Worker's retry logic.
+                // Gated courts are most prized, then edge courts, then the rest.
+                const allCourts = courtsOrder
+                    .filter(function (c) { return c.clubId === clubId; })
+                    .sort(function (a, b) {
+                        const score = function (c) {
+                            if ((GATED_COURTS[clubId] || []).includes(c.courtName)) return 0;
+                            if ((EDGE_COURTS[clubId] || []).includes(c.courtName)) return 1;
+                            return 2;
+                        };
+                        return score(a) - score(b) || a.courtOrder - b.courtOrder;
+                    })
+                    .map(function (c) {
+                        return { courtId: c.courtId, courtName: c.courtName, courtOrder: c.courtOrder };
+                    });
+
+                const slotInfo = {
+                    clubId,
+                    courtId,
+                    courtName,
+                    clubName,
+                    date: slotDate,
+                    fromMinutes,
+                    toMinutes,
+                    fromTime: minutesToHumanTime(fromMinutes),
+                    toTime: minutesToHumanTime(toMinutes),
+                    dateLabel: new Date(slotDate + 'T00:00:00').toLocaleDateString('en-US', {
+                        weekday: 'short', month: 'short', day: 'numeric',
+                    }),
+                    allCourts,
+                };
+
+                let players, photosByMemberId;
+                try {
+                    ({ players, photosByMemberId } = await getScheduledBookingService().fetchPossiblePlayers());
+                } catch (error) {
+                    console.log('[bc] court view locked slot: failed to load partner picker:', error);
+                    return;
+                }
+
+                // Inject the schedule panel as a fixed full-viewport overlay on body so
+                // we never touch app-booking-calendar's display — hiding it would fire the
+                // MutationObserver reconcile and immediately clear our content.
+                const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
+                const overlay = document.createElement('div');
+                overlay.setAttribute('data-bc-cv-schedule-overlay', '1');
+                overlay.style.cssText = [
+                    'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;',
+                    'overflow-y:auto;background:#1a2f3c;box-sizing:border-box;',
+                    'padding:72px 16px 40px;',
+                ].join('');
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = panelHtml;
+                overlay.appendChild(wrapper.firstElementChild);
+                document.body.appendChild(overlay);
+
+                const hostPanel = overlay.querySelector('[data-bc-schedule-panel]');
+                if (hostPanel) {
+                    // onReturnExtra removes the overlay wrapper after the standard panel
+                    // cleanup removes the inner [data-bc-schedule-panel] node.
+                    bindSchedulePanelInteractions(hostPanel, null, slotInfo, function () {
+                        document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
+                            el.remove();
+                        });
+                    });
+                }
+
+                // Fetch any missing photos using the same post-injection logic as Hour View.
+                const selfProfileForPhoto = getLocalStorageService().getJson(
+                    STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile'
+                );
+                const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
+                const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
+                const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
+
+                let freshPhotos = null;
+                if (!hasCachedPhotosForPlayers) {
+                    const playersForPhotos = selfMemberId
+                        ? players.concat([{ memberId: selfMemberId }])
+                        : players;
+                    freshPhotos = await getScheduledBookingService().fetchPhotos(playersForPhotos);
+                } else if (selfPhotoMissing) {
+                    freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
+                }
+
+                if (freshPhotos) {
+                    document.querySelectorAll('[data-bc-schedule-panel] .bc-player-card').forEach(card => {
+                        const memberId = card.dataset.memberId;
+                        const photoInfo = freshPhotos[memberId];
+                        if (!photoInfo || !photoInfo.photoId) return;
+                        const initialsEl = card.querySelector('[data-bc-initials]');
+                        if (!initialsEl) return;
+                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(memberId, freshPhotos);
+                        const img = document.createElement('img');
+                        img.src = photoUrl;
+                        img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                        img.alt = card.dataset.firstName || '';
+                        initialsEl.replaceWith(img);
+                    });
+                    if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
+                        const selfCard = document.querySelector('[data-bc-schedule-panel] [data-bc-self-card]');
+                        if (selfCard && selfMemberId) {
+                            const photoInfo = freshPhotos[selfMemberId];
+                            const initialsEl = selfCard.querySelector('[data-bc-initials]');
+                            if (photoInfo && photoInfo.photoId && initialsEl) {
+                                const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(selfMemberId, freshPhotos);
+                                if (photoUrl) {
+                                    const img = document.createElement('img');
+                                    img.src = photoUrl;
+                                    img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                                    img.alt = (selfProfileForPhoto && selfProfileForPhoto.firstName) || '';
+                                    initialsEl.replaceWith(img);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             serviceInstance = {
                 applyFilters,
                 renderAllClubsAvailability,
                 bookFromCourtView,
+                handleCourtViewLockedSlotClick,
                 isCourtViewBookingInFlight: () => courtViewBookingInFlight,
             };
             return serviceInstance;
@@ -5868,6 +6050,7 @@
                 columns.forEach((col, i) => {
                     if (i >= courtsOrder.length) return;
                     col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
+                    col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
                 });
             }
 
@@ -5877,6 +6060,19 @@
             // club name, prepends the correct club name, and replaces the bar text.
             let cancelBarUpdate = null;
             function onCalendarSlotClick(event) {
+                // Intercept clicks on locked (outside-window) slots that have no existing
+                // event, and open the schedule panel instead of doing nothing.
+                const lockedSlot = event.target.closest(
+                    '.booking-calendar-column-time-slot.booking-calendar-column-time-slot-unavailable'
+                );
+                if (lockedSlot) {
+                    // Stop propagation in capture phase so Angular's slot-level listener
+                    // never fires and never shows its native "slot unavailable" error.
+                    event.stopPropagation();
+                    getAvailabilityRenderPipeline().handleCourtViewLockedSlotClick(lockedSlot);
+                    return;
+                }
+
                 const slot = event.target.closest(
                     '.booking-calendar-column-time-slot:not(.booking-calendar-column-time-slot-unavailable)'
                 );
@@ -5969,7 +6165,9 @@
                 }
                 if (!calendarClickTarget) {
                     calendarClickTarget = cal;
-                    cal.addEventListener('click', onCalendarSlotClick);
+                    // Use capture phase so we intercept locked-slot clicks before
+                    // Angular's bubble-phase listener on the slot element can fire.
+                    cal.addEventListener('click', onCalendarSlotClick, true);
                 }
                 tagColumns();
             }
@@ -5983,12 +6181,13 @@
                     columnObserver = null;
                 }
                 if (calendarClickTarget) {
-                    calendarClickTarget.removeEventListener('click', onCalendarSlotClick);
+                    calendarClickTarget.removeEventListener('click', onCalendarSlotClick, true);
                     calendarClickTarget = null;
                 }
                 document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
+                    col.removeAttribute('data-bc-court-id');
                 });
             }
 
