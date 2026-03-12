@@ -76,6 +76,7 @@
         PLAYER_PHOTOS: 'bc_player_photos',
         NOTIFICATION_EMAIL: 'bc_notification_email',
         SELF_PROFILE: 'bc_self_profile',
+        POD_MEMBER_IDS: 'bc_pod_member_ids',
     });
     // #endregion Core constants and club metadata.
 
@@ -1421,6 +1422,13 @@
                 const primaryMemberIdentifier = householdData.primary && householdData.primary.memberIdentifier;
                 const allMemberIdentifiers = mergedPlayers.map(p => p.memberIdentifier).filter(Boolean);
                 if (primaryMemberIdentifier) allMemberIdentifiers.push(primaryMemberIdentifier);
+
+                // Cache pod member personIds (household addOns only — not buddies) so the
+                // availability renderer can detect same-day same-club conflicts.
+                const podMemberIds = (householdData.addOns || [])
+                    .filter(m => m.status === 'Active')
+                    .map(m => String(m.personId));
+                getLocalStorageService().setJson(STORAGE_KEYS.POD_MEMBER_IDS, podMemberIds);
 
                 const fetchedPhotos = await fetchPhotos(allMemberIdentifiers);
                 cachePlayersFromXhr(mergedPlayers);
@@ -3320,19 +3328,90 @@
     </div>`;
     }
 
-    function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet) {
+    // Computes pod conflicts for the current fetch date by cross-referencing courtsheet
+    // booking events against cached pod member personIds.  Also checks active scheduled
+    // bookings (pending/firing) for pod member email conflicts.
+    // Returns a plain object keyed by clubId with shape { type: 'confirmed'|'pending', memberName }.
+    // A club is absent from the result when no conflict is detected or data is unavailable.
+    function computePodConflicts(fetchDate, lastFetchState) {
+        const podIds = getLocalStorageService().getJson(STORAGE_KEYS.POD_MEMBER_IDS, '[bc] failed to parse pod member ids') || [];
+        if (podIds.length === 0) return {};
+
+        const podIdSet = new Set(podIds.map(String));
+        const conflicts = {};
+
+        // Check confirmed/checked-in pickleball bookings from courtsheet events.
+        const eventsByClub = (lastFetchState && lastFetchState.courtsheetEventsByClubId) || {};
+        Object.entries(eventsByClub).forEach(([clubId, events]) => {
+            if (conflicts[clubId]) return;
+            const hit = events.find(ev =>
+                (ev.status && (ev.status.code === 'confirmed' || ev.status.code === 'checkedin')) &&
+                ev.court && ev.court.category && ev.court.category.code === 'pickleball' &&
+                ev.reservedFor && podIdSet.has(String(ev.reservedFor.personId))
+            );
+            if (hit) {
+                conflicts[clubId] = { type: 'confirmed', memberName: hit.reservedFor.displayName || 'A pod member' };
+            }
+        });
+
+        // Check active scheduled bookings where a pod member (matched by email) is involved.
+        const allPlayers = getLocalStorageService().getJson(STORAGE_KEYS.POSSIBLE_PLAYERS, '[bc] failed to parse cached players for pod conflict') || [];
+        const podEmails = new Set(
+            allPlayers.filter(p => podIdSet.has(String(p.personId)) && p.email).map(p => p.email.toLowerCase())
+        );
+        const selfEmail = getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL);
+        if (selfEmail) podEmails.add(selfEmail.toLowerCase());
+
+        if (podEmails.size > 0) {
+            getScheduledBookingService().getActiveBookings().forEach(booking => {
+                if (conflicts[booking.clubId]) return;
+                if (booking.date !== fetchDate) return;
+                const bookerEmail = (booking.notificationEmail || '').toLowerCase();
+                const partnerEmails = (booking.partnerEmails || []).map(e => e.toLowerCase());
+                const involved = [bookerEmail, ...partnerEmails].some(e => e && podEmails.has(e));
+                if (involved) {
+                    // Identify whose booking it is for the warning label.
+                    const schedulerName = booking.userName || booking.notificationEmail || 'A pod member';
+                    conflicts[booking.clubId] = { type: 'pending', memberName: schedulerName };
+                }
+            });
+        }
+
+        return conflicts;
+    }
+
+    function buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet, podConflict) {
         const meta = clubMeta[clubId];
         const fetchFailed = failedClubIdsSet.has(clubId);
         const hasAnySlots = TIME_OF_DAYS.some(tod => ((byClubAndTod[clubId] || {})[tod] || []).length > 0);
 
+        // A pending conflict disables slot selection so the user cannot accidentally
+        // schedule a booking that would collide with a pod member's scheduled booking
+        // when the booking window opens.
+        const pendingConflict = podConflict && podConflict.type === 'pending';
+
         let html = `
-        <div data-club-id="${clubId}" style="margin-bottom: 24px;">
+        <div data-club-id="${clubId}"${pendingConflict ? ' data-pod-pending-conflict="true"' : ''} style="margin-bottom: 24px;">
         <div style="font-size: 20px; font-weight: bold; color: white; margin-bottom: 12px; padding: 8px 0;">
             ${meta.shortName}
         </div>
         <div class="row bc-filter-message" style="display: none;">
             <div class="col text-center" style="color: rgba(255,255,255,0.4); font-size: 12px; padding: 8px 0;">There are available slots at this location, but none match your time range filter.</div>
         </div>`;
+
+        if (podConflict) {
+            const warningText = podConflict.type === 'pending'
+                ? `${podConflict.memberName} has a scheduled booking pending for this date at this club. Booking here would conflict when the window opens.`
+                : `${podConflict.memberName} (pod) already has a pickleball booking here today. Your pod can only have one booking per club per day.`;
+            html += `
+      <div class="row">
+        <div class="col" style="padding: 0 4px 8px;">
+          <div style="padding: 8px 12px; border-radius: 4px; border: 1px solid rgba(255,200,80,0.7); background: rgba(255,200,80,0.1); color: rgba(255,225,140,0.98); font-size: 12px;">
+            ⚠️ ${warningText}
+          </div>
+        </div>
+      </div>`;
+        }
 
         if (fetchFailed) {
             html += `
@@ -3372,7 +3451,7 @@
         return html;
     }
 
-    function buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet) {
+    function buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet, podConflictsByClubId) {
         // Collect all slots across all clubs, keyed by fromInMinutes.
         // Iterating allClubIds first preserves club preference order within each time group.
         const slotsByTime = new Map();
@@ -3393,7 +3472,25 @@
             return `<div style="color: rgba(255,255,255,0.4); padding: 20px 0; text-align: center;">No courts available for this date.</div>`;
         }
 
+        // Show a summary banner for any clubs where a pod conflict exists so the user
+        // knows before scanning the time groups which locations to avoid.
+        const conflictEntries = Object.entries(podConflictsByClubId || {})
+            .filter(([clubId]) => allClubIds.includes(clubId));
         let html = '';
+        if (conflictEntries.length > 0) {
+            const items = conflictEntries.map(([clubId, conflict]) => {
+                const clubName = (clubMeta[clubId] && clubMeta[clubId].shortName) || clubId;
+                const detail = conflict.type === 'pending'
+                    ? `${conflict.memberName} has a pending scheduled booking`
+                    : `${conflict.memberName} (pod) already has a booking`;
+                return `<div style="margin-bottom: 4px;">⚠️ <strong>${clubName}</strong>: ${detail} here on this date.</div>`;
+            }).join('');
+            html += `
+        <div style="margin-bottom: 16px; padding: 8px 12px; border-radius: 4px; border: 1px solid rgba(255,200,80,0.7); background: rgba(255,200,80,0.1); color: rgba(255,225,140,0.98); font-size: 12px;">
+            ${items}
+        </div>`;
+        }
+
         for (const fromMinutes of sortedTimes) {
             const entries = slotsByTime.get(fromMinutes);
             const { fromHumanTime, toHumanTime } = entries[0].slot;
@@ -4035,6 +4132,8 @@
                 const { allClubIds, clubMeta, byClubAndTod } = buildClubIndex(transformed, failedClubIdsSet);
 
                 const { startMinutes, endMinutes } = getTimeRange();
+                const podConflictsByClubId = computePodConflicts(fetchDate, lastFetchState);
+
                 let html = `<div class="all-clubs-availability" style="margin-top: 12px; padding-bottom: 200px;">`;
                 html += buildShowIndoorCourtsOnlyToggleHtml();
                 html += buildTimeRangeSliderHtml(startMinutes, endMinutes);
@@ -4044,10 +4143,10 @@
 
                 // Render the time slots in the selected layout mode.
                 if (getViewMode() === VIEW_MODE_BY_TIME) {
-                    html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
+                    html += buildByTimeHtml(allClubIds, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet, podConflictsByClubId);
                 } else {
                     for (const clubId of allClubIds) {
-                        html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet);
+                        html += buildClubHtml(clubId, clubMeta, byClubAndTod, fetchDate, limitDate, failedClubIdsSet, podConflictsByClubId[clubId] || null);
                     }
                 }
 
@@ -4418,6 +4517,28 @@
     // #endregion Booking flow monitor and DOM injection.
 
     // #region Cross-club fetch and weather enrichment.
+    // Fetches the courtsheet booking events for one club on a given date.  Used to
+    // detect pod conflicts (same club, same date, confirmed pickleball booking by a
+    // pod member) before rendering the availability UI.  Failures are soft — a missing
+    // result just means no conflict detection for that club.
+    async function fetchCourtSheetEventsForOneClub(clubId, date, signal) {
+        const r = await fetch(
+            `https://connect-api.bayclubs.io/court-booking/api/1.0/courtsheet/${clubId}?date=${date}`,
+            {
+                signal,
+                headers: {
+                    'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                    'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                    'Request-Id': crypto.randomUUID(),
+                    'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                    'Accept': 'application/json',
+                },
+            }
+        );
+        if (!r.ok) throw new Error(`courtsheet HTTP ${r.status} for ${clubId}`);
+        return r.json();
+    }
+
     // Fetch availability info for all the clubs in parallel, and combine their results.
     async function fetchAllClubs(params) {
         getDebugService().log('info', 'cross-club-fetch-started', {
@@ -4428,30 +4549,38 @@
         const signal = getBookingStateService().beginFetch();
 
         try {
-            const settled = await Promise.all(Object.values(CLUBS).map(clubId => {
-                const timeSlotId = CLUB_MAX_TIMESLOT[clubId] &&
-                    params.timeSlotId === TIMESLOTS.min90
-                    ? CLUB_MAX_TIMESLOT[clubId]
-                    : params.timeSlotId;
-                return fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${timeSlotId}`, {
-                    signal,
-                    headers: {
-                        'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
-                        'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
-                        'Request-Id': crypto.randomUUID(),
-                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
-                        'Accept': 'application/json',
-                    }
-                }).then(async r => {
-                    if (!r.ok) {
-                        throw new Error(`HTTP ${r.status}`);
-                    }
-                    return { clubId, data: await r.json() };
-                }).catch(error => {
-                    if (error?.name === 'AbortError') throw error;
-                    return { clubId, error };
-                });
-            }));
+            const [settled, courtsheetSettled] = await Promise.all([
+                Promise.all(Object.values(CLUBS).map(clubId => {
+                    const timeSlotId = CLUB_MAX_TIMESLOT[clubId] &&
+                        params.timeSlotId === TIMESLOTS.min90
+                        ? CLUB_MAX_TIMESLOT[clubId]
+                        : params.timeSlotId;
+                    return fetch(`https://connect-api.bayclubs.io/court-booking/api/1.0/availability?clubId=${clubId}&date=${params.date}&categoryCode=${params.categoryCode}&categoryOptionsId=${params.categoryOptionsId}&timeSlotId=${timeSlotId}`, {
+                        signal,
+                        headers: {
+                            'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                            'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                            'Request-Id': crypto.randomUUID(),
+                            'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                            'Accept': 'application/json',
+                        }
+                    }).then(async r => {
+                        if (!r.ok) {
+                            throw new Error(`HTTP ${r.status}`);
+                        }
+                        return { clubId, data: await r.json() };
+                    }).catch(error => {
+                        if (error?.name === 'AbortError') throw error;
+                        return { clubId, error };
+                    });
+                })),
+                // Courtsheet events are fetched in parallel as a soft-fail batch.  Failures
+                // are silently ignored — they only affect pod conflict detection, not core UI.
+                Promise.allSettled(Object.values(CLUBS).map(clubId =>
+                    fetchCourtSheetEventsForOneClub(clubId, params.date, signal)
+                        .then(data => ({ clubId, events: data.events || [] }))
+                )),
+            ]);
 
             const successfulResults = [];
             const failedClubIds = [];
@@ -4507,7 +4636,13 @@
                 return;
             }
 
-            getBookingStateService().setLastFetchState({ transformed, params, failedClubIds });
+            const courtsheetEventsByClubId = {};
+            courtsheetSettled.forEach(r => {
+                if (r.status === 'fulfilled') {
+                    courtsheetEventsByClubId[r.value.clubId] = r.value.events;
+                }
+            });
+            getBookingStateService().setLastFetchState({ transformed, params, failedClubIds, courtsheetEventsByClubId });
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
@@ -4691,6 +4826,11 @@
     @media (max-width: 768px) {
         .bc-tick-colon-zero { display: none; }
         .bc-tick-ampm { display: none; }
+    }
+    /* Disable slot clicks in clubs where a pod member has a pending scheduled booking. */
+    [data-pod-pending-conflict="true"] [data-slot-wrapper] {
+        pointer-events: none;
+        opacity: 0.45;
     }
 `;
             document.head.appendChild(style);
