@@ -60,9 +60,12 @@ Both are intercepted in `XMLHttpRequest.prototype.open` using the same `stopImme
 
 **Bottom bar label** — `getNativeCourtColumnsService` installs a delegated `click` listener on `app-booking-calendar`. When a non-home-club slot is clicked, a polling interval waits for Angular's bottom bar, reads Angular's native label text (which has the correct court name and time but wrong club name), strips the home club short name, and prepends the correct club short name via `buildCourtViewBarLabel()`. The listener and interval are torn down in `clear()` on flow exit.
 
+**Column color coding** — `CLUB_COLUMN_COLORS` maps each club UUID to an accent color chosen to contrast against the teal calendar background with white text. `tagColumns()` injects a `[data-bc-strip]` colored div as the first child of each `app-booking-calendar-column`. `injectColorKey()` inserts a `[data-bc-court-key]` legend div above `app-booking-calendar` showing each club's swatch and name in preference order. Both are cleaned up in `clear()`.
+
 **What still needs work**:
-- Club navigation UI: scroll-to-club buttons and floating club label pills. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting.
-- Court column ordering should respect the user's club preference order (currently Angular renders columns in the order courts appear in the merged availability response).
+- Club navigation UI: scroll-to-club buttons so users can jump to a club's courts by clicking its name. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting.
+- Pod reservation conflict detection in Court View: surface a warning when a pod member (household addOn) has already booked the same club/date, and disable slot clicks when there is a pending scheduled booking conflict.
+- Show names of everyone on a reservation in Court View, even if they are not in the user's buddy list.
 - Locked slot → scheduled booking flow for Court View.
 - 3-day booking window enforcement and locked slot UI in Court View.
 
