@@ -48,6 +48,7 @@ const {
     courtViewColorForBlockedClass,
     COURT_BLOCKED_CLASS,
     COURT_VIEW_COLORS,
+    buildCourtViewBarLabel,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -532,5 +533,48 @@ describe('courtViewColorForBlockedClass', () => {
         Object.values(COURT_BLOCKED_CLASS).forEach(cls => {
             expect(COURT_VIEW_COLORS[cls]).toBeTruthy();
         });
+    });
+});
+
+describe('buildCourtViewBarLabel', () => {
+
+    it('strips the home club name and prepends the correct club name', () => {
+        expect(buildCourtViewBarLabel('Redwood Shores Court 5 7:00 - 8:30 AM', 'Redwood Shores', 'Santa Clara'))
+            .toBe('Santa Clara · Court 5 7:00 - 8:30 AM');
+    });
+
+    it('handles a separator character after the home club name', () => {
+        expect(buildCourtViewBarLabel('Redwood Shores · Court 5 7:00 AM', 'Redwood Shores', 'Broadway'))
+            .toBe('Broadway · Court 5 7:00 AM');
+    });
+
+    it('is case-insensitive when stripping the home club name', () => {
+        expect(buildCourtViewBarLabel('redwood shores Court 3 8:00 AM', 'Redwood Shores', 'South SF'))
+            .toBe('South SF · Court 3 8:00 AM');
+    });
+
+    it('returns just the correct club name when nativeText is empty', () => {
+        expect(buildCourtViewBarLabel('', 'Redwood Shores', 'Santa Clara'))
+            .toBe('Santa Clara');
+    });
+
+    it('returns just the correct club name when nativeText is null', () => {
+        expect(buildCourtViewBarLabel(null, 'Redwood Shores', 'Santa Clara'))
+            .toBe('Santa Clara');
+    });
+
+    it('uses the full native text when homeClubShortName is empty string', () => {
+        expect(buildCourtViewBarLabel('Court 5 7:00 AM', '', 'Broadway'))
+            .toBe('Broadway · Court 5 7:00 AM');
+    });
+
+    it('uses the full native text when homeClubShortName is null', () => {
+        expect(buildCourtViewBarLabel('Court 5 7:00 AM', null, 'Broadway'))
+            .toBe('Broadway · Court 5 7:00 AM');
+    });
+
+    it('leaves the label unchanged when the home club name does not appear in the text', () => {
+        expect(buildCourtViewBarLabel('Court 5 7:00 AM', 'Redwood Shores', 'Santa Clara'))
+            .toBe('Santa Clara · Court 5 7:00 AM');
     });
 });

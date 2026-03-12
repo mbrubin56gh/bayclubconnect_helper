@@ -485,6 +485,50 @@
             return { handled: true, value: originalXhrSend.call(xhr, ourBody) };
         }
 
+        // Rewrites a courtbookings POST that originated from a native Court View column click.
+        // Angular assembles the POST body using the merged availability payload we injected, so
+        // courtId, date, and time fields are already correct.  The only wrong field is clubId,
+        // which Angular always sets to the home club.  We look up the correct clubId from
+        // mergedCourtsOrder and replace it.  Also applies the Santa Clara 60-minute cap the
+        // same way the Hour View path does.  Returns { handled: false } when mergedCourtsOrder
+        // is absent, the courtId is unrecognised, or the clubId is already correct (home club
+        // court — no rewrite needed).
+        function maybeRewriteCourtViewBooking(xhr, requestUrl, requestMethod, originalArgs) {
+            if (!requestUrl || !requestUrl.match(/courtbookings$/) || requestMethod !== 'POST') {
+                return { handled: false };
+            }
+            const mergedCourtsOrder = getBookingStateService().getMergedCourtsOrder();
+            if (!mergedCourtsOrder || mergedCourtsOrder.length === 0) {
+                return { handled: false };
+            }
+            let nativeBody;
+            try { nativeBody = JSON.parse(originalArgs[0]); } catch (_e) { return { handled: false }; }
+            if (!nativeBody || !nativeBody.courtId) { return { handled: false }; }
+
+            const courtEntry = mergedCourtsOrder.find(function (c) { return c.courtId === nativeBody.courtId; });
+            if (!courtEntry || courtEntry.clubId === nativeBody.clubId) {
+                return { handled: false };
+            }
+
+            const requestId = getRequestId(xhr);
+            if (requestId && requestId === lastBookingRequestId) {
+                return { handled: true, value: undefined };
+            }
+            if (requestId) { lastBookingRequestId = requestId; }
+
+            const lastFetchState = getBookingStateService().getLastFetchState();
+            const timeSlotId = lastFetchState && CLUB_MAX_TIMESLOT[courtEntry.clubId] &&
+                lastFetchState.params.timeSlotId === TIMESLOTS.min90
+                ? CLUB_MAX_TIMESLOT[courtEntry.clubId]
+                : (nativeBody.timeSlotId || (lastFetchState && lastFetchState.params.timeSlotId));
+
+            const rewrittenBody = JSON.stringify(Object.assign({}, nativeBody, {
+                clubId: courtEntry.clubId,
+                timeSlotId: timeSlotId,
+            }));
+            return { handled: true, value: originalXhrSend.call(xhr, rewrittenBody) };
+        }
+
         XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
             // Capture these so we can authenticate our own requests to the Bay Club's APIs.
             if (name === 'Authorization' || name === 'X-SessionId') {
@@ -721,6 +765,9 @@
 
             const rewrittenSendResult = maybeRewriteBookingRequestToPendingSelection(this, requestUrl, requestMethod, arguments);
             if (rewrittenSendResult.handled) return rewrittenSendResult.value;
+
+            const courtViewRewriteResult = maybeRewriteCourtViewBooking(this, requestUrl, requestMethod, arguments);
+            if (courtViewRewriteResult.handled) return courtViewRewriteResult.value;
 
             return originalXhrSend.apply(this, arguments);
         };
@@ -5772,6 +5819,17 @@
     // tag each rendered column with data-bc-club-id and show/hide by selected club.
     // Because users click real Angular-rendered slots, the Next button routing works
     // without any state machine hacking.
+
+    // Builds the corrected bottom bar label for a native Court View slot click.
+    // Angular's native label has the correct court and time but wrong club name.
+    // We strip the home club's short name (if present) and prepend the correct one.
+    function buildCourtViewBarLabel(nativeText, homeClubShortName, correctClubShortName) {
+        const stripped = homeClubShortName
+            ? (nativeText || '').replace(new RegExp(homeClubShortName + '[\\s·•,]*', 'i'), '').trim()
+            : (nativeText || '').trim();
+        return stripped ? correctClubShortName + ' · ' + stripped : correctClubShortName;
+    }
+
     const getNativeCourtColumnsService = (() => {
         let serviceInstance = null;
 
@@ -5794,10 +5852,64 @@
                 });
             }
 
+            // When a non-home-club native slot is clicked, Angular's bottom bar will render
+            // with the home club's name.  This listener detects the click, waits for the bar,
+            // reads Angular's native text (which has correct court and time), strips the home
+            // club name, prepends the correct club name, and replaces the bar text.
+            let cancelBarUpdate = null;
+            function onCalendarSlotClick(event) {
+                const slot = event.target.closest(
+                    '.booking-calendar-column-time-slot:not(.booking-calendar-column-time-slot-unavailable)'
+                );
+                if (!slot) return;
+
+                const col = slot.closest('app-booking-calendar-column[data-bc-club-id]');
+                if (!col) return;
+
+                const clubId = col.getAttribute('data-bc-club-id');
+                const clubShortName = CLUB_SHORT_NAMES[clubId];
+                if (!clubShortName) return;
+
+                // Determine the home club name so we can strip it from Angular's label.
+                const lastFetchState = getBookingStateService().getLastFetchState();
+                const homeClubId = lastFetchState && lastFetchState.params && lastFetchState.params.nativeClubId;
+                const homeClubShortName = (homeClubId && CLUB_SHORT_NAMES[homeClubId]) || '';
+
+                if (cancelBarUpdate) { cancelBarUpdate(); cancelBarUpdate = null; }
+                const barDeadline = Date.now() + 6000;
+                const barInterval = setInterval(function () {
+                    const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                    if (!bottomBar) {
+                        if (Date.now() > barDeadline) { clearInterval(barInterval); }
+                        return;
+                    }
+                    const nativeInfo = bottomBar.querySelector('.row .col-12.col-md-auto:not(.bc-injected-info)');
+                    if (!nativeInfo) {
+                        if (Date.now() > barDeadline) { clearInterval(barInterval); }
+                        return;
+                    }
+
+                    // Read Angular's native label text, strip the home club name, and
+                    // prepend the correct club name so users see the right club.
+                    const correctedLabel = buildCourtViewBarLabel(
+                        nativeInfo.textContent, homeClubShortName, clubShortName
+                    );
+
+                    nativeInfo.style.display = 'none';
+                    const infoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+                    infoHolder.textContent = correctedLabel;
+
+                    clearInterval(barInterval);
+                }, 150);
+                cancelBarUpdate = function () { clearInterval(barInterval); };
+            }
+
             // Un-hides the native calendar and wires a MutationObserver to re-tag
             // columns whenever Angular re-renders them (e.g. on date change).
-            // Safe to call on every reconcile pass — the observer is only wired once.
+            // Safe to call on every reconcile pass — the observer and click listener
+            // are only wired once.
             let columnObserver = null;
+            let calendarClickTarget = null;
             function install() {
                 const cal = document.querySelector('app-booking-calendar');
                 if (!cal) return;
@@ -5809,14 +5921,24 @@
                     columnObserver = new MutationObserver(tagColumns);
                     columnObserver.observe(cal, { childList: true, subtree: true });
                 }
+                if (!calendarClickTarget) {
+                    calendarClickTarget = cal;
+                    cal.addEventListener('click', onCalendarSlotClick);
+                }
                 tagColumns();
             }
 
-            // Removes column tags and disconnects the observer.  Called on flow exit.
+            // Removes column tags, disconnects the observer, and removes the click
+            // listener.  Called on flow exit.
             function clear() {
+                if (cancelBarUpdate) { cancelBarUpdate(); cancelBarUpdate = null; }
                 if (columnObserver) {
                     columnObserver.disconnect();
                     columnObserver = null;
+                }
+                if (calendarClickTarget) {
+                    calendarClickTarget.removeEventListener('click', onCalendarSlotClick);
+                    calendarClickTarget = null;
                 }
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
@@ -6335,6 +6457,7 @@
         _bcTestExports.courtViewColorForBlockedClass = courtViewColorForBlockedClass;
         _bcTestExports.COURT_BLOCKED_CLASS = COURT_BLOCKED_CLASS;
         _bcTestExports.COURT_VIEW_COLORS = COURT_VIEW_COLORS;
+        _bcTestExports.buildCourtViewBarLabel = buildCourtViewBarLabel;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }

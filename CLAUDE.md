@@ -56,9 +56,15 @@ Both are intercepted in `XMLHttpRequest.prototype.open` using the same `stopImme
 
 **`getMergedCourtsOrder()`** on `getBookingStateService()` stores the `[{courtId, clubId}]` array built during courts merging. `getNativeCourtColumnsService` uses this to tag each rendered `app-booking-calendar-column` with `data-bc-club-id` by index position, since Angular renders columns in the same order courts appear in the response.
 
-**What still needs work** (see `COURT_VIEW_PLAN.md`):
-- Booking POST rewrite: when a non-RS court slot is clicked, Angular POSTs `courtbookings` with the home club ID. This must be rewritten to the correct club.
-- Club navigation UI: scroll-to-club buttons and floating club label pills. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting. See the plan for debugging steps.
+**Booking POST rewrite** — when the user clicks a native Court View slot, Angular POSTs `courtbookings` with the home club ID. `maybeRewriteCourtViewBooking()` intercepts this POST, looks up the correct `clubId` from `mergedCourtsOrder` using the `courtId` in Angular's POST body (which is the real UUID from our merged response), and replaces just the `clubId`. The Santa Clara 60-minute cap is also applied. `pendingSlotBooking` is not involved — no click interception is needed.
+
+**Bottom bar label** — `getNativeCourtColumnsService` installs a delegated `click` listener on `app-booking-calendar`. When a non-home-club slot is clicked, a polling interval waits for Angular's bottom bar, reads Angular's native label text (which has the correct court name and time but wrong club name), strips the home club short name, and prepends the correct club short name via `buildCourtViewBarLabel()`. The listener and interval are torn down in `clear()` on flow exit.
+
+**What still needs work**:
+- Club navigation UI: scroll-to-club buttons and floating club label pills. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting.
+- Court column ordering should respect the user's club preference order (currently Angular renders columns in the order courts appear in the merged availability response).
+- Locked slot → scheduled booking flow for Court View.
+- 3-day booking window enforcement and locked slot UI in Court View.
 
 ## XHR Response Interception (Fake Slot Injection)
 
