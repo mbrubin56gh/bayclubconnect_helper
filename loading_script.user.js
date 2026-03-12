@@ -277,6 +277,17 @@
                 });
             }
 
+            // Sort merged courts by the user's preferred club order, then by courtOrder
+            // within each club, so Angular renders columns in preference order.
+            const clubOrderPreference = getClubOrder();
+            target.courts.sort(function (a, b) {
+                const aClubRank = clubOrderPreference.indexOf(a.bc_clubId);
+                const bClubRank = clubOrderPreference.indexOf(b.bc_clubId);
+                const clubDiff = (aClubRank === -1 ? 999 : aClubRank) - (bClubRank === -1 ? 999 : bClubRank);
+                if (clubDiff !== 0) return clubDiff;
+                return (a.order ?? 999) - (b.order ?? 999);
+            });
+
             // Capture the ordered court→club mapping so the native column tagger can
             // assign data-bc-club-id to Angular-rendered app-booking-calendar-column
             // elements by their position in the rendered column list.
