@@ -38,6 +38,28 @@ Per-request XHR metadata (method, URL, Request-Id) is tracked in a closure-scope
 ### Allow-List Gating
 `installXhrInterceptors()` runs unconditionally on every page load (auth header capture and token sync are harmless for any user). All visible features are gated behind an allow-list check: `readUserEmail()` reads the user's email from `localStorage.connect20auth` (which Angular writes before our script runs) with `bc_notification_email` as fallback. If an email is found, `checkAllowList(email)` fetches `GET /allowed` from the Worker; on success it initializes all feature installers. If the email is absent (not logged in) or the check returns `allowed: false`, no features start. The check fails open on any network or HTTP error so infrastructure issues never lock out legitimate users.
 
+### Court View Multi-Club Columns
+
+Angular's native Court View only shows courts for the home club. We extend it to show all four clubs by intercepting **two** courtsheet XHR endpoints and merging data from all other clubs into the native response before Angular reads it.
+
+**Two-endpoint pattern** — Angular makes these two requests in sequence when entering Court View:
+1. `GET /courtsheet/{clubId}/courts?date=...&categoryCode=...&categoryOptionsId=...&timeSlotId=...` — returns `{ items: [...courts] }`, the list of court columns to render.
+2. `GET /courtsheet/{clubId}?date=...` — returns `{ events: [...] }`, the booking events that fill each column's availability blocks.
+
+Both are intercepted in `XMLHttpRequest.prototype.open` using the same `stopImmediatePropagation` + re-dispatch pattern:
+- Attach a `load` listener before Angular's.
+- Call `event.stopImmediatePropagation()` to block Angular.
+- Parse the native response, fetch the same endpoint for all other clubs in parallel via `Promise.allSettled`, merge the results, call `applyMergedPayloadToXhr`, then `dispatchEvent(new ProgressEvent('load'))` to let Angular proceed with the merged payload.
+- The entire `.then()` body is wrapped in `try/catch` with the `dispatchEvent` call **outside** the try/catch, so Angular is never left hanging even if merging throws.
+
+**Regex guards**: The courts endpoint uses `/\/courtsheet\/[^/]+\/courts(\?|$)/`. The events endpoint uses `/\/courtsheet\/[^/]+(\?|$)/` combined with `!/\/courtsheet\/[^/]+\//` to exclude `/courts` and any other sub-paths — the two interceptors do not overlap.
+
+**`getMergedCourtsOrder()`** on `getBookingStateService()` stores the `[{courtId, clubId}]` array built during courts merging. `getNativeCourtColumnsService` uses this to tag each rendered `app-booking-calendar-column` with `data-bc-club-id` by index position, since Angular renders columns in the same order courts appear in the response.
+
+**What still needs work** (see `COURT_VIEW_PLAN.md`):
+- Booking POST rewrite: when a non-RS court slot is clicked, Angular POSTs `courtbookings` with the home club ID. This must be rewritten to the correct club.
+- Club navigation UI: scroll-to-club buttons and floating club label pills. DOM manipulation inside the calendar column area has repeatedly broken slot clickability and triggered Angular re-render loops. Requires careful DevTools investigation of the actual scroll container before re-attempting. See the plan for debugging steps.
+
 ## XHR Response Interception (Fake Slot Injection)
 
 Angular reads the availability response via the `response` property (not `responseText`) on the XHR object. 

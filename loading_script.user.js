@@ -396,6 +396,25 @@
         }
 
 
+        // Fetches /courtsheet/{clubId} (booking events) for a single club.
+        // Used to populate the availability blocks Angular renders in Court View columns.
+        async function fetchCourtSheetEventsForOneClub(clubId, date) {
+            const r = await fetch(
+                `https://connect-api.bayclubs.io/court-booking/api/1.0/courtsheet/${clubId}?date=${date}`,
+                {
+                    headers: {
+                        'Authorization': getBookingStateService().getCapturedHeader('Authorization'),
+                        'X-SessionId': getBookingStateService().getCapturedHeader('X-SessionId'),
+                        'Request-Id': crypto.randomUUID(),
+                        'Ocp-Apim-Subscription-Key': 'bac44a2d04b04413b6aea6d4e3aad294',
+                        'Accept': 'application/json',
+                    },
+                }
+            );
+            if (!r.ok) throw new Error(`courtsheet HTTP ${r.status} for ${clubId}`);
+            return r.json();
+        }
+
         // Fetches /courtsheet/{clubId}/courts for a single club using captured auth headers.
         // Mirrors the params from the native request so the response shape is comparable.
         async function fetchCourtsForOneClub(clubId, params) {
@@ -570,18 +589,75 @@
                     Promise.allSettled(
                         otherClubIds.map(id => fetchCourtsForOneClub(id, params))
                     ).then(function (results) {
-                        const seenCourtIds = new Set(nativeData.items.map(c => c.courtId));
-                        results.forEach(function (r) {
-                            if (r.status !== 'fulfilled') return;
-                            (r.value.items || []).forEach(function (court) {
-                                if (!seenCourtIds.has(court.courtId)) {
-                                    seenCourtIds.add(court.courtId);
-                                    nativeData.items.push(court);
-                                }
+                        try {
+                            if (!Array.isArray(nativeData.items)) nativeData.items = [];
+                            const seenCourtIds = new Set(nativeData.items.map(c => c.courtId));
+                            results.forEach(function (r) {
+                                if (r.status !== 'fulfilled') return;
+                                (r.value.items || []).forEach(function (court) {
+                                    if (!seenCourtIds.has(court.courtId)) {
+                                        seenCourtIds.add(court.courtId);
+                                        nativeData.items.push(court);
+                                    }
+                                });
                             });
-                        });
-                        console.log('[bc] courts merged all clubs; total items:', nativeData.items.length);
-                        applyMergedPayloadToXhr(capturedXhrRef, nativeData);
+                            applyMergedPayloadToXhr(capturedXhrRef, nativeData);
+                        } catch (_e) { /* pass through unmodified on merge error */ }
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                    });
+                });
+            }
+
+            // Intercept /courtsheet/{clubId}?date=... (booking events — no /courts suffix).
+            // Angular reads this to fill the availability blocks in each column.  We fetch
+            // the same endpoint for all other clubs and merge their events arrays so Angular
+            // sees booking data for every injected court column, not just the home club.
+            if (typeof url === 'string' && /\/courtsheet\/[^/]+(\?|$)/.test(url) &&
+                    !/\/courtsheet\/[^/]+\//.test(url)) {
+                let passThrough = false;
+                const capturedXhrRef = this;
+                this.addEventListener('load', function (event) {
+                    if (passThrough) return;
+                    passThrough = true;
+                    event.stopImmediatePropagation();
+
+                    const nativeText = capturedXhrRef.responseText;
+                    let nativeData;
+                    try { nativeData = JSON.parse(nativeText); } catch (_e) {
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        return;
+                    }
+
+                    let date;
+                    let nativeClubId;
+                    try {
+                        const parsedUrl = new URL(url);
+                        date = parsedUrl.searchParams.get('date');
+                        nativeClubId = /\/courtsheet\/([^/?]+)/.exec(url)?.[1];
+                    } catch (_e) {
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        return;
+                    }
+
+                    if (!date || !nativeClubId) {
+                        capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        return;
+                    }
+
+                    const otherClubIds = Object.values(CLUBS).filter(id => id !== nativeClubId);
+                    Promise.allSettled(
+                        otherClubIds.map(id => fetchCourtSheetEventsForOneClub(id, date))
+                    ).then(function (results) {
+                        try {
+                            if (!Array.isArray(nativeData.events)) nativeData.events = [];
+                            results.forEach(function (r) {
+                                if (r.status !== 'fulfilled') return;
+                                (r.value.events || []).forEach(function (ev) {
+                                    nativeData.events.push(ev);
+                                });
+                            });
+                            applyMergedPayloadToXhr(capturedXhrRef, nativeData);
+                        } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
                     });
                 });
@@ -5702,26 +5778,11 @@
         return function getNativeCourtColumnsService() {
             if (serviceInstance) return serviceInstance;
 
-            let columnObserver = null;
-            let selectedClubId = null;
-            const SELECTOR_ATTR = 'data-bc-native-cv-selector';
-
-            function loadSelectedClub() {
-                const stored = getLocalStorageService().getString(STORAGE_KEYS.COURT_VIEW_CLUB);
-                if (stored && Object.values(CLUBS).includes(stored)) return stored;
-                const order = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
-                if (Array.isArray(order) && order.length > 0) return order[0];
-                return CLUBS.broadway;
-            }
-
-            function saveSelectedClub(clubId) {
-                getLocalStorageService().setString(STORAGE_KEYS.COURT_VIEW_CLUB, clubId);
-            }
-
-            // Tags app-booking-calendar-column elements by their position in the merged
-            // courts order captured when the payload was built.  Angular renders columns
-            // in the same order courts appear in the response, so index-based mapping is
-            // reliable as long as the merged payload was the one Angular rendered.
+            // Tags each app-booking-calendar-column with data-bc-club-id using the
+            // merged courts order recorded when the XHR payload was built.  Angular
+            // renders columns in the same order courts appear in the response, so
+            // index-based mapping is reliable.  No filtering or UI injection is done
+            // here — columns are purely annotated for future use.
             function tagColumns() {
                 const courtsOrder = getBookingStateService().getMergedCourtsOrder();
                 if (!courtsOrder || courtsOrder.length === 0) return;
@@ -5731,109 +5792,27 @@
                         col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
                     }
                 });
-                // Diagnostic: log the expected vs actual column counts and the tag mapping
-                // so we can verify whether Angular rendered all courts or only a subset.
-                console.log('[bc] tagColumns diagnostic:', {
-                    expectedCourts: courtsOrder.length,
-                    renderedColumns: columns.length,
-                    mapping: Array.from(columns).map((col, i) => ({
-                        index: i,
-                        assignedClubId: courtsOrder[i]?.clubId,
-                        assignedCourtId: courtsOrder[i]?.courtId,
-                        headerText: col.querySelector('[class*="header"], [class*="title"], [class*="name"]')?.textContent?.trim() || '(no header found)',
-                    })),
-                });
             }
 
-            // Shows columns for the given club, hides all others.  Columns without a
-            // data-bc-club-id tag (not yet tagged) are left visible so the grid doesn't
-            // flash empty while tagging is still in progress.
-            function _applyClubFilter(clubId) {
-                document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
-                    col.style.display = col.getAttribute('data-bc-club-id') === clubId ? '' : 'none';
-                });
-            }
-
-            function injectClubSelector(calendarEl) {
-                if (calendarEl.querySelector(`[${SELECTOR_ATTR}]`)) return;
-
-                const clubOrder = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER)
-                    || Object.values(CLUBS);
-
-                const bar = document.createElement('div');
-                bar.setAttribute(SELECTOR_ATTR, '1');
-                bar.style.cssText = [
-                    'display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px;',
-                    'background:rgb(24,44,68); border-bottom:1px solid rgba(255,255,255,0.1);',
-                ].join('');
-
-                for (const clubId of clubOrder) {
-                    const name = CLUB_SHORT_NAMES[clubId];
-                    if (!name) continue;
-                    const btn = document.createElement('button');
-                    btn.textContent = name;
-                    btn.setAttribute('data-bc-ncv-club', clubId);
-                    btn.style.cssText = [
-                        'padding:4px 12px; border-radius:4px; border:1px solid rgba(255,255,255,0.3);',
-                        'background:transparent; color:#fff; font-size:13px; cursor:pointer;',
-                        'transition:background 0.15s;',
-                    ].join('');
-                    btn.addEventListener('click', () => {
-                        selectedClubId = clubId;
-                        saveSelectedClub(clubId);
-                        tagColumns();
-                        // Filtering disabled during diagnostics — show all columns.
-                        updateSelectorHighlight(bar, clubId);
-                    });
-                    bar.appendChild(btn);
-                }
-
-                // Insert before the scrollable calendar body so it stays above the columns.
-                calendarEl.insertBefore(bar, calendarEl.firstChild);
-                updateSelectorHighlight(bar, selectedClubId);
-            }
-
-            function updateSelectorHighlight(bar, clubId) {
-                bar.querySelectorAll('[data-bc-ncv-club]').forEach(btn => {
-                    const active = btn.getAttribute('data-bc-ncv-club') === clubId;
-                    btn.style.background = active ? 'rgb(0,176,199)' : 'transparent';
-                    btn.style.borderColor = active ? 'rgb(0,176,199)' : 'rgba(255,255,255,0.3)';
-                    btn.style.fontWeight  = active ? '600' : '';
-                });
-            }
-
-            // Installs the service: shows the native calendar, wires a column observer,
-            // and runs an initial tag+filter pass.  Safe to call on every reconcile pass —
-            // the observer is only wired once per install cycle.
+            // Un-hides the native calendar and wires a MutationObserver to re-tag
+            // columns whenever Angular re-renders them (e.g. on date change).
+            // Safe to call on every reconcile pass — the observer is only wired once.
+            let columnObserver = null;
             function install() {
-                selectedClubId = loadSelectedClub();
-
-                // Un-hide the native calendar if we previously hid it.
                 const cal = document.querySelector('app-booking-calendar');
                 if (!cal) return;
                 if (cal.getAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR)) {
                     cal.style.display = '';
                     cal.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
                 }
-
-                injectClubSelector(cal);
-
-                // Wire a MutationObserver so newly rendered columns (e.g. after Angular
-                // re-renders on date change) are tagged and filtered automatically.
                 if (!columnObserver) {
-                    columnObserver = new MutationObserver(() => {
-                        tagColumns();
-                        // Filtering disabled during diagnostics — show all columns.
-                    });
+                    columnObserver = new MutationObserver(tagColumns);
                     columnObserver.observe(cal, { childList: true, subtree: true });
                 }
-
                 tagColumns();
-                // Filtering disabled during diagnostics — show all columns unfiltered.
             }
 
-            // Removes all tagging, hides cleanup, disconnects observer.
-            // Called on booking flow exit.
+            // Removes column tags and disconnects the observer.  Called on flow exit.
             function clear() {
                 if (columnObserver) {
                     columnObserver.disconnect();
@@ -5841,9 +5820,7 @@
                 }
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
                     col.removeAttribute('data-bc-club-id');
-                    col.style.display = '';
                 });
-                document.querySelectorAll(`[${SELECTOR_ATTR}]`).forEach(el => el.remove());
             }
 
             serviceInstance = { install, clear };
