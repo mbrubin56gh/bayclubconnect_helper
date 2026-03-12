@@ -1522,12 +1522,14 @@
                     : lastFetchState.params.timeSlotId;
 
                 // Look up partner emails from the cached player list by personId.
+                // Coerce personId to string so the Map lookup matches card.dataset.personId,
+                // which is always a string, even when the JSON cache stores personId as a number.
                 // Players without a cached email are silently skipped.
                 const cachedPlayers = getLocalStorageService().getJson(POSSIBLE_PLAYERS_KEY, '[bc] failed to parse cached players for partner emails') || [];
                 const emailByPersonId = new Map(
-                    cachedPlayers.filter(p => p.email).map(p => [p.personId, p.email])
+                    cachedPlayers.filter(p => p.email).map(p => [String(p.personId), p.email])
                 );
-                const partnerEmails = selectedPartners.map(p => emailByPersonId.get(p.personId)).filter(Boolean);
+                const partnerEmails = selectedPartners.map(p => emailByPersonId.get(String(p.personId))).filter(Boolean);
 
                 const booking = {
                     id: crypto.randomUUID(),
@@ -2384,10 +2386,16 @@
 
             // Returns true if the current user is the scheduler or an invited partner
             // for the given booking. Used to filter which pending bookings are shown.
+            // When the current user's email is unknown we return false — showing
+            // nothing is safer than leaking another user's pending bookings.
+            // Email comparison is case-insensitive because the Bay Club API and the
+            // local cache may differ in case.
             function isBookingRelevantToCurrentUser(booking, currentEmail) {
-                if (!currentEmail) return booking.notificationEmail === undefined;
-                if (booking.notificationEmail === currentEmail) return true;
-                return Array.isArray(booking.partnerEmails) && booking.partnerEmails.includes(currentEmail);
+                if (!currentEmail) return false;
+                const normalizedCurrent = currentEmail.toLowerCase();
+                if (booking.notificationEmail && booking.notificationEmail.toLowerCase() === normalizedCurrent) return true;
+                return Array.isArray(booking.partnerEmails) &&
+                    booking.partnerEmails.some(e => e && e.toLowerCase() === normalizedCurrent);
             }
 
             Object.assign(_bcTestExports, {

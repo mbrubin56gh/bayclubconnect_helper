@@ -373,6 +373,23 @@ describe('isBookingRelevantToCurrentUser', () => {
         expect(isBookingRelevantToCurrentUser(booking, null)).toBe(false);
         expect(isBookingRelevantToCurrentUser(booking, '')).toBe(false);
     });
+
+    it('returns false when currentEmail is null even if booking has no notificationEmail', () => {
+        // Old booking records may lack notificationEmail entirely.  We must not
+        // show them to unidentified users — returning false is the safe behaviour.
+        const oldBooking = { partnerEmails: [] };
+        expect(isBookingRelevantToCurrentUser(oldBooking, null)).toBe(false);
+        expect(isBookingRelevantToCurrentUser(oldBooking, '')).toBe(false);
+    });
+
+    it('matches scheduler email case-insensitively', () => {
+        expect(isBookingRelevantToCurrentUser(booking, 'SCHEDULER@EXAMPLE.COM')).toBe(true);
+        expect(isBookingRelevantToCurrentUser(booking, 'Scheduler@Example.Com')).toBe(true);
+    });
+
+    it('matches partner email case-insensitively', () => {
+        expect(isBookingRelevantToCurrentUser(booking, 'PARTNER1@EXAMPLE.COM')).toBe(true);
+    });
 });
 
 // ---------------------------------------------------------------------------
