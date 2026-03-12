@@ -189,6 +189,7 @@
         const metadataByRequest = new WeakMap();
         let lastBookingRequestId = null;
 
+
         function getOrCreateRequestMetadata(xhr) {
             let metadata = metadataByRequest.get(xhr);
             if (!metadata) {
@@ -394,6 +395,7 @@
             xhr.dispatchEvent(new ProgressEvent('loadend'));
         }
 
+
         function maybeRewriteBookingRequestToPendingSelection(xhr, requestUrl, requestMethod, originalArgs) {
             // Intercept the native app's booking request and replace it with our own
             // for the selected club and time slot.
@@ -503,16 +505,6 @@
                     maybePatchAvailabilityResponseForAngular(this);
                 });
             }
-            // Diagnostic: log any courtsheet requests Angular makes so we know whether
-            // Court View uses a second endpoint (in addition to availability) for its data.
-            if (typeof url === 'string' && url.includes('courtsheet')) {
-                const capturedUrl = url;
-                this.addEventListener('load', function () {
-                    console.log('[bc] courtsheet XHR fired:', capturedUrl,
-                        '| status:', this.status,
-                        '| responseLength:', this.responseText?.length);
-                });
-            }
             if (typeof url === 'string' && url.includes('possiblePlayers')) {
                 this.addEventListener('load', function () {
                     maybeCachePossiblePlayersResponse(this);
@@ -567,6 +559,7 @@
                 interceptAvailabilityXhr(this, requestUrl);
                 return;
             }
+
 
             const rewrittenSendResult = maybeRewriteBookingRequestToPendingSelection(this, requestUrl, requestMethod, arguments);
             if (rewrittenSendResult.handled) return rewrittenSendResult.value;
