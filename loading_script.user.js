@@ -93,6 +93,9 @@
             const capturedHeaders = {};
             let lastFetchState = null;
             let pendingSlotBooking = null;
+            let rawFetchResults = null;
+            let pendingNativePatch = null;
+            let mergedCourtsOrder = null;
 
             function captureHeader(name, value) {
                 capturedHeaders[name] = value;
@@ -137,6 +140,39 @@
                 pendingSlotBooking = null;
             }
 
+            function setMergedCourtsOrder(order) {
+                mergedCourtsOrder = order;
+            }
+
+            function getMergedCourtsOrder() {
+                return mergedCourtsOrder;
+            }
+
+            function setRawFetchResults(results) {
+                rawFetchResults = results;
+                // If the native XHR already fired and left a pending patch waiting for
+                // our data, apply it now.
+                if (pendingNativePatch) {
+                    const patch = pendingNativePatch;
+                    pendingNativePatch = null;
+                    patch(rawFetchResults);
+                }
+            }
+
+            function getRawFetchResults() {
+                return rawFetchResults;
+            }
+
+            function setPendingNativePatch(fn) {
+                pendingNativePatch = fn;
+            }
+
+            function clearRawFetchState() {
+                rawFetchResults = null;
+                pendingNativePatch = null;
+                mergedCourtsOrder = null;
+            }
+
             serviceInstance = {
                 captureHeader,
                 getCapturedHeader,
@@ -148,6 +184,12 @@
                 setPendingSlotBooking,
                 getPendingSlotBooking,
                 clearPendingSlotBooking,
+                setMergedCourtsOrder,
+                getMergedCourtsOrder,
+                setRawFetchResults,
+                getRawFetchResults,
+                setPendingNativePatch,
+                clearRawFetchState,
             };
             return serviceInstance;
         };
@@ -190,36 +232,135 @@
             return { method: metadata.method, url: metadata.url };
         }
 
+        // Build a merged availability payload from one raw API result (the native home-club
+        // response) and our parallel-fetched raw results for all clubs.  All clubs' courts
+        // and availableTimeSlots are merged into the first clubsAvailabilities entry so Angular
+        // renders every court as a native column in the Court View.  Each court object is
+        // annotated with a bc_clubId property so we can tag the rendered DOM columns later.
+        function buildMergedAvailabilityPayload(nativeData, rawResults) {
+            // Deep-clone to avoid mutating objects Angular may still hold references to.
+            const merged = JSON.parse(JSON.stringify(nativeData));
+            const target = merged.clubsAvailabilities[0];
+
+            // Index courts and slots already present (from the native home-club response).
+            const seenCourtIds = new Set((target.courts || []).map(c => c.courtId));
+
+            // Annotate the home club's courts with their club ID.
+            const homeClubId = target.club?.id;
+            for (const court of (target.courts || [])) {
+                court.bc_clubId = homeClubId;
+            }
+            for (const slot of (target.availableTimeSlots || [])) {
+                slot.bc_clubId = homeClubId;
+            }
+
+            // Merge courts and slots from all other clubs' responses.
+            for (const result of rawResults) {
+                for (const clubAvail of (result.clubsAvailabilities || [])) {
+                    const clubId = clubAvail.club?.id;
+                    // Skip the home club — its data is already in the target entry.
+                    if (clubId === homeClubId) continue;
+
+                    for (const court of (clubAvail.courts || [])) {
+                        if (!seenCourtIds.has(court.courtId)) {
+                            seenCourtIds.add(court.courtId);
+                            target.courts.push({ ...court, bc_clubId: clubId });
+                        }
+                    }
+                    for (const slot of (clubAvail.availableTimeSlots || [])) {
+                        target.availableTimeSlots.push({ ...slot, bc_clubId: clubId });
+                    }
+                }
+            }
+
+            // Ensure at least one slot exists so Angular renders a clickable native slot
+            // for the state machine, even if all clubs have zero availability.
+            if (target.availableTimeSlots.length === 0 && target.courts.length > 0) {
+                const court = target.courts[0];
+                target.availableTimeSlots.push({
+                    timeOfDay: 'Morning',
+                    fromInMinutes: 420,
+                    toInMinutes: 450,
+                    courtId: court.courtId,
+                    courtsVersionsIds: [court.courtSetupVersionId || court.courtId],
+                    bc_clubId: court.bc_clubId,
+                });
+            }
+
+            // Capture the ordered court→club mapping so the native column tagger can
+            // assign data-bc-club-id to Angular-rendered app-booking-calendar-column
+            // elements by their position in the rendered column list.
+            getBookingStateService().setMergedCourtsOrder(
+                target.courts.map(c => ({ courtId: c.courtId, clubId: c.bc_clubId }))
+            );
+
+            return merged;
+        }
+
+        function applyMergedPayloadToXhr(xhr, mergedData) {
+            const json = JSON.stringify(mergedData);
+            Object.defineProperty(xhr, 'response', { get: () => json, configurable: true });
+            Object.defineProperty(xhr, 'responseText', { get: () => json, configurable: true });
+        }
+
         function maybePatchAvailabilityResponseForAngular(xhr) {
-            // We need Angular to think there is at least one available time slot for the native
-            // app's default selected club so Angular will render that slot in the hour view.
-            // Without that Angular rendered slot, we're not able to drive the Angular state
-            // machine forward to issue a booking request after one of our slots is selected:
-            // we fake a click on that slot, which allows the click on the Next button in the
-            // hour view to issue the booking request and render the partner selector (we make
-            // sure that the only booking requests that actually go out from the hour view are
-            // our own). So we need to make sure the request for court availabilities for the home
-            // club for a date always returns at least one slot. We do that here.
+            // Inject a merged payload covering all clubs into the native availability XHR
+            // response so Angular's Court View renders every club's courts as native columns.
+            // We intercept here rather than replacing the XHR entirely so that Angular's own
+            // load handlers still fire — they just see our combined response instead of the
+            // single home-club response.
+            //
+            // Timing: our parallel fetches for all clubs run concurrently with the native
+            // XHR.  If our fetches finish first, rawFetchResults is already populated and we
+            // apply the merge immediately.  If the native XHR fires first, we register a
+            // pending patch and apply it once fetchAllClubs completes; at that point we
+            // dispatch a synthetic 'load' event on the XHR so Angular re-processes the data.
             if (xhr.status < 200 || xhr.status >= 300) return;
             if (!xhr.responseText || xhr.responseText.trim() === '') return;
             try {
                 const data = JSON.parse(xhr.responseText);
                 if (!data.clubsAvailabilities) return;
-                // We assume the first element here is the home club whose availability the native
-                // Hour View is about to render. If Bay Club changes this to include multiple clubs
-                // or to change the ordering, we will still inject at most one synthetic slot in
-                // the first entry so we preserve the invariant that Angular has something clickable.
+
+                const rawResults = getBookingStateService().getRawFetchResults();
+                if (rawResults) {
+                    // Our parallel fetches already finished — apply the merge now.
+                    const mergedData = buildMergedAvailabilityPayload(data, rawResults);
+                    applyMergedPayloadToXhr(xhr, mergedData);
+                    return;
+                }
+
+                // Parallel fetches haven't finished yet.  Patch the response with just the
+                // single-slot fallback for now so Angular can render immediately, then
+                // register a deferred patch that will rewrite the response and re-trigger
+                // Angular's Court View column rendering once our data arrives.
                 const clubAvail = data.clubsAvailabilities[0];
-                const slotCount = clubAvail?.availableTimeSlots?.length ?? 0;
-                // If the club actually has availability for that date, we are good.
-                if (slotCount > 0) return;
-                // Make sure a real court is present so we can synthesize one fake slot.
-                const court = clubAvail?.courts?.[0];
-                if (!court) return;
-                // Inject one synthetic slot so Angular can continue its booking flow.
-                clubAvail.availableTimeSlots = [{ timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450, courtId: court.courtId, courtsVersionsIds: [court.courtSetupVersionId || court.courtId] }];
-                Object.defineProperty(xhr, 'response', { get: () => JSON.stringify(data), configurable: true });
-                Object.defineProperty(xhr, 'responseText', { get: () => JSON.stringify(data), configurable: true });
+                if ((clubAvail?.availableTimeSlots?.length ?? 0) === 0) {
+                    const court = clubAvail?.courts?.[0];
+                    if (court) {
+                        clubAvail.availableTimeSlots = [{
+                            timeOfDay: 'Morning', fromInMinutes: 420, toInMinutes: 450,
+                            courtId: court.courtId,
+                            courtsVersionsIds: [court.courtSetupVersionId || court.courtId],
+                        }];
+                    }
+                }
+                const singleClubJson = JSON.stringify(data);
+                Object.defineProperty(xhr, 'response', { get: () => singleClubJson, configurable: true });
+                Object.defineProperty(xhr, 'responseText', { get: () => singleClubJson, configurable: true });
+
+                // Register a deferred patch.  When fetchAllClubs finishes it will call
+                // setRawFetchResults(), which triggers this callback with the full results.
+                getBookingStateService().setPendingNativePatch(function (results) {
+                    try {
+                        const mergedData = buildMergedAvailabilityPayload(data, results);
+                        applyMergedPayloadToXhr(xhr, mergedData);
+                        // Dispatch a synthetic 'load' event so Angular re-reads the response
+                        // and re-renders the Court View columns with all clubs' courts.
+                        xhr.dispatchEvent(new Event('load'));
+                    } catch (e) {
+                        console.log('[bc] deferred patch error:', e);
+                    }
+                });
             } catch (e) {
                 console.log('[bc] error:', e);
             }
@@ -4423,6 +4564,7 @@
         getDebugService().log('info', 'booking-flow-state-cleared', null);
         getBookingStateService().abortFetch();
         getBookingStateService().clearLastFetchState();
+        getBookingStateService().clearRawFetchState();
         getBookingStateService().clearPendingSlotBooking();
         removeOurContentAndUnhideNativeContent();
     }
@@ -5441,10 +5583,163 @@
 
     // #endregion Court view service and grid renderer.
 
+    // #region Native court column tagging service.
+    // This service implements the new Court View booking approach: instead of rendering
+    // our own custom grid, we inject all clubs' court data into Angular's native
+    // availability response so Angular renders every court as a native column.  We then
+    // tag each rendered column with data-bc-club-id and show/hide by selected club.
+    // Because users click real Angular-rendered slots, the Next button routing works
+    // without any state machine hacking.
+    const getNativeCourtColumnsService = (() => {
+        let serviceInstance = null;
+
+        return function getNativeCourtColumnsService() {
+            if (serviceInstance) return serviceInstance;
+
+            let columnObserver = null;
+            let selectedClubId = null;
+            const SELECTOR_ATTR = 'data-bc-native-cv-selector';
+
+            function loadSelectedClub() {
+                const stored = getLocalStorageService().getString(STORAGE_KEYS.COURT_VIEW_CLUB);
+                if (stored && Object.values(CLUBS).includes(stored)) return stored;
+                const order = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
+                if (Array.isArray(order) && order.length > 0) return order[0];
+                return CLUBS.broadway;
+            }
+
+            function saveSelectedClub(clubId) {
+                getLocalStorageService().setString(STORAGE_KEYS.COURT_VIEW_CLUB, clubId);
+            }
+
+            // Tags app-booking-calendar-column elements by their position in the merged
+            // courts order captured when the payload was built.  Angular renders columns
+            // in the same order courts appear in the response, so index-based mapping is
+            // reliable as long as the merged payload was the one Angular rendered.
+            function tagColumns() {
+                const courtsOrder = getBookingStateService().getMergedCourtsOrder();
+                if (!courtsOrder || courtsOrder.length === 0) return;
+                const columns = document.querySelectorAll('app-booking-calendar-column');
+                columns.forEach((col, i) => {
+                    if (i < courtsOrder.length) {
+                        col.setAttribute('data-bc-club-id', courtsOrder[i].clubId);
+                    }
+                });
+            }
+
+            // Shows columns for the given club, hides all others.  Columns without a
+            // data-bc-club-id tag (not yet tagged) are left visible so the grid doesn't
+            // flash empty while tagging is still in progress.
+            function applyClubFilter(clubId) {
+                document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
+                    col.style.display = col.getAttribute('data-bc-club-id') === clubId ? '' : 'none';
+                });
+            }
+
+            function injectClubSelector(calendarEl) {
+                if (calendarEl.querySelector(`[${SELECTOR_ATTR}]`)) return;
+
+                const clubOrder = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER)
+                    || Object.values(CLUBS);
+
+                const bar = document.createElement('div');
+                bar.setAttribute(SELECTOR_ATTR, '1');
+                bar.style.cssText = [
+                    'display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px;',
+                    'background:rgb(24,44,68); border-bottom:1px solid rgba(255,255,255,0.1);',
+                ].join('');
+
+                for (const clubId of clubOrder) {
+                    const name = CLUB_SHORT_NAMES[clubId];
+                    if (!name) continue;
+                    const btn = document.createElement('button');
+                    btn.textContent = name;
+                    btn.setAttribute('data-bc-ncv-club', clubId);
+                    btn.style.cssText = [
+                        'padding:4px 12px; border-radius:4px; border:1px solid rgba(255,255,255,0.3);',
+                        'background:transparent; color:#fff; font-size:13px; cursor:pointer;',
+                        'transition:background 0.15s;',
+                    ].join('');
+                    btn.addEventListener('click', () => {
+                        selectedClubId = clubId;
+                        saveSelectedClub(clubId);
+                        tagColumns();
+                        applyClubFilter(clubId);
+                        updateSelectorHighlight(bar, clubId);
+                    });
+                    bar.appendChild(btn);
+                }
+
+                // Insert before the scrollable calendar body so it stays above the columns.
+                calendarEl.insertBefore(bar, calendarEl.firstChild);
+                updateSelectorHighlight(bar, selectedClubId);
+            }
+
+            function updateSelectorHighlight(bar, clubId) {
+                bar.querySelectorAll('[data-bc-ncv-club]').forEach(btn => {
+                    const active = btn.getAttribute('data-bc-ncv-club') === clubId;
+                    btn.style.background = active ? 'rgb(0,176,199)' : 'transparent';
+                    btn.style.borderColor = active ? 'rgb(0,176,199)' : 'rgba(255,255,255,0.3)';
+                    btn.style.fontWeight  = active ? '600' : '';
+                });
+            }
+
+            // Installs the service: shows the native calendar, wires a column observer,
+            // and runs an initial tag+filter pass.  Safe to call on every reconcile pass —
+            // the observer is only wired once per install cycle.
+            function install() {
+                selectedClubId = loadSelectedClub();
+
+                // Un-hide the native calendar if we previously hid it.
+                const cal = document.querySelector('app-booking-calendar');
+                if (!cal) return;
+                if (cal.getAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR)) {
+                    cal.style.display = '';
+                    cal.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
+                }
+
+                injectClubSelector(cal);
+
+                // Wire a MutationObserver so newly rendered columns (e.g. after Angular
+                // re-renders on date change) are tagged and filtered automatically.
+                if (!columnObserver) {
+                    columnObserver = new MutationObserver(() => {
+                        tagColumns();
+                        applyClubFilter(selectedClubId);
+                    });
+                    columnObserver.observe(cal, { childList: true, subtree: true });
+                }
+
+                tagColumns();
+                applyClubFilter(selectedClubId);
+            }
+
+            // Removes all tagging, hides cleanup, disconnects observer.
+            // Called on booking flow exit.
+            function clear() {
+                if (columnObserver) {
+                    columnObserver.disconnect();
+                    columnObserver = null;
+                }
+                document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
+                    col.removeAttribute('data-bc-club-id');
+                    col.style.display = '';
+                });
+                document.querySelectorAll(`[${SELECTOR_ATTR}]`).forEach(el => el.remove());
+            }
+
+            serviceInstance = { install, clear };
+            return serviceInstance;
+        };
+    })();
+
+    // #endregion Native court column tagging service.
+
     function removeOurContentAndUnhideNativeContent() {
         document.querySelectorAll('.all-clubs-availability').forEach(el => el.remove());
         document.querySelectorAll(`.bc-debug-panel[data-bc-debug-surface="${DEBUG_PANEL_SURFACE_DURATION}"]`).forEach(el => el.remove());
         getCourtViewService().clearInjectedContent();
+        getNativeCourtColumnsService().clear();
         document.querySelectorAll(`[${getBookingDomQueryService().NATIVE_HIDDEN_ATTR}="1"]`).forEach(child => {
             child.style.display = '';
             child.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
@@ -5501,8 +5796,11 @@
                     getBookingViewPreference() !== BOOKING_VIEW_COURT) {
                 saveBookingViewPreference(BOOKING_VIEW_COURT);
             }
-            getCourtViewService().setVisible(true);
-            getCourtViewService().injectCourtView(lastFetchState.params.date, lastFetchState.params);
+            // Use the native column approach: Angular has already rendered all clubs'
+            // courts from the merged payload injected into the XHR response.  Install
+            // the column tagger so columns are tagged by club and filtered to the
+            // selected club.  The old custom grid service is no longer called here.
+            getNativeCourtColumnsService().install();
             return;
         }
 
@@ -5521,7 +5819,9 @@
         // all-clubs-availability render so no extra content appears above the court grid.
         if (getAvailabilityRenderPipeline().isCourtViewBookingInFlight()) return;
 
-        getCourtViewService().setVisible(false);
+        // Hour View is active — clear the native column tagging so columns are
+        // not filtered when the user switches back to Court View later.
+        getNativeCourtColumnsService().clear();
 
         bookingDomQueryService.getTimeSlotHosts().forEach(host => {
             if (host.querySelector('.all-clubs-availability')) return;
@@ -5560,6 +5860,9 @@
             categoryCode: params.categoryCode,
             timeSlotId: params.timeSlotId,
         });
+        // Clear stale raw results and any deferred patch from a previous date/fetch cycle
+        // so the new fetch starts clean.
+        getBookingStateService().clearRawFetchState();
         const signal = getBookingStateService().beginFetch();
 
         try {
@@ -5657,6 +5960,11 @@
                 }
             });
             getBookingStateService().setLastFetchState({ transformed, params, failedClubIds, courtsheetEventsByClubId });
+            // Store raw results so the XHR response patcher can merge all clubs' court data
+            // into Angular's native availability response for Court View column rendering.
+            // setRawFetchResults also fires any pending deferred patch if the native XHR
+            // already fired before our parallel fetches completed.
+            getBookingStateService().setRawFetchResults(successfulResults);
             removeOurContentAndUnhideNativeContent();
             injectIntoAllContainers();
         } catch (e) {
