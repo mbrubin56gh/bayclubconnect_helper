@@ -6732,29 +6732,6 @@
                 lockedSlot.setAttribute('data-bc-locked-cursor', '1');
             }
 
-            // Injects a small legend explaining the E/G/H court badges.  Idempotent —
-            // does nothing if already present.  Removed in clear() on flow exit.
-            function injectBadgeLegend() {
-                if (document.querySelector('[data-bc-badge-legend]')) return;
-                const legend = document.createElement('div');
-                legend.setAttribute('data-bc-badge-legend', '1');
-                legend.style.cssText = [
-                    'display:flex;gap:12px;align-items:center;',
-                    'background:rgba(20,40,55,0.88);border:1px solid rgba(255,255,255,0.15);',
-                    'border-radius:6px;padding:6px 12px;font-size:11px;',
-                    'color:rgba(255,255,255,0.75);margin-bottom:8px;',
-                ].join('');
-                legend.innerHTML =
-                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">G</span> Gated &nbsp; ' +
-                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">E</span> Edge &nbsp; ' +
-                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">H</span> Hitting wall';
-                const cal = document.querySelector('app-booking-calendar');
-                if (cal && cal.parentNode) {
-                    cal.parentNode.insertBefore(legend, cal);
-                } else {
-                    document.body.appendChild(legend);
-                }
-            }
 
             // Injects club shortcut buttons above the badge legend.  Called from tagColumns()
             // so it runs after columns are tagged — injectBadgeLegend (called from install())
@@ -6773,7 +6750,7 @@
 
                 const strip = document.createElement('div');
                 strip.setAttribute('data-bc-cv-club-nav', '1');
-                strip.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;';
+                strip.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:24px;';
 
                 const clubOrder = (() => {
                     const stored = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
@@ -6815,12 +6792,32 @@
                     strip.appendChild(btn);
                 });
 
-                // Insert before the legend (which is already a sibling of app-booking-calendar).
-                const legend = document.querySelector('[data-bc-badge-legend]');
+                // Append the G/E/H badge legend inline after the club buttons so the
+                // legend and nav buttons share one row.  Stamping data-bc-badge-legend here
+                // causes injectBadgeLegend()'s idempotency guard to skip a separate insertion.
+                const inlineLegend = document.createElement('span');
+                inlineLegend.setAttribute('data-bc-badge-legend', '1');
+                inlineLegend.style.cssText = [
+                    'font-size:11px;color:rgba(255,255,255,0.65);',
+                    'margin-left:8px;white-space:nowrap;align-self:center;',
+                ].join('');
+                inlineLegend.innerHTML =
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">G</span> Gated &nbsp; ' +
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">E</span> Edge &nbsp; ' +
+                    '<span style="color:rgba(255,210,80,0.95);font-weight:700;">H</span> Hitting wall';
+                strip.appendChild(inlineLegend);
+
                 const cal = document.querySelector('app-booking-calendar');
-                const parent = (legend && legend.parentNode) || (cal && cal.parentNode);
+                const parent = cal && cal.parentNode;
                 if (parent) {
-                    parent.insertBefore(strip, legend || cal);
+                    parent.insertBefore(strip, cal);
+                    // Left-align the buttons with the first court column, not the time axis.
+                    // Measure after insertion so the strip has a stable bounding rect.
+                    const contentEl = document.querySelector('.booking-calendar-columns-floating-scroll');
+                    if (contentEl) {
+                        const indent = contentEl.getBoundingClientRect().left - strip.getBoundingClientRect().left;
+                        if (indent > 0) strip.style.paddingLeft = indent + 'px';
+                    }
                 }
             }
 
@@ -6932,7 +6929,6 @@
                     cal.removeAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR);
                 }
                 injectColumnColorStyles();
-                injectBadgeLegend();
                 if (!columnObserver) {
                     columnObserver = new MutationObserver(tagColumns);
                     columnObserver.observe(cal, { childList: true, subtree: true });
