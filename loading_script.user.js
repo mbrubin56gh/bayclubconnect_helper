@@ -6148,6 +6148,7 @@
                 // is available.  Removes and re-creates on every call so date changes
                 // get a fresh strip.
                 injectWeatherStrip();
+                injectClubNavStrip();
             }
 
             // When a non-home-club native slot is clicked, Angular's bottom bar will render
@@ -6731,9 +6732,8 @@
                 lockedSlot.setAttribute('data-bc-locked-cursor', '1');
             }
 
-            // Injects a small fixed-position legend in the bottom-left corner explaining
-            // the E/G/H court badges.  Idempotent — does nothing if already present.
-            // The legend is removed in clear() on flow exit.
+            // Injects a small legend explaining the E/G/H court badges.  Idempotent —
+            // does nothing if already present.  Removed in clear() on flow exit.
             function injectBadgeLegend() {
                 if (document.querySelector('[data-bc-badge-legend]')) return;
                 const legend = document.createElement('div');
@@ -6748,13 +6748,79 @@
                     '<span style="color:rgba(255,210,80,0.95);font-weight:700;">G</span> Gated &nbsp; ' +
                     '<span style="color:rgba(255,210,80,0.95);font-weight:700;">E</span> Edge &nbsp; ' +
                     '<span style="color:rgba(255,210,80,0.95);font-weight:700;">H</span> Hitting wall';
-                // Inject as a static sibling immediately before the calendar so it
-                // appears at the top of the court view rather than as a floating overlay.
                 const cal = document.querySelector('app-booking-calendar');
                 if (cal && cal.parentNode) {
                     cal.parentNode.insertBefore(legend, cal);
                 } else {
                     document.body.appendChild(legend);
+                }
+            }
+
+            // Injects club shortcut buttons above the badge legend.  Called from tagColumns()
+            // so it runs after columns are tagged — injectBadgeLegend (called from install())
+            // fires before tagging completes and would always see an empty club list.
+            // Idempotent: only injects once per Court View session.
+            function injectClubNavStrip() {
+                if (document.querySelector('[data-bc-cv-club-nav]')) return;
+
+                const presentClubIds = [];
+                const seenIds = new Set();
+                document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
+                    const id = col.getAttribute('data-bc-club-id');
+                    if (!seenIds.has(id)) { seenIds.add(id); presentClubIds.push(id); }
+                });
+                if (presentClubIds.length === 0) return;
+
+                const strip = document.createElement('div');
+                strip.setAttribute('data-bc-cv-club-nav', '1');
+                strip.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;';
+
+                const clubOrder = (() => {
+                    const stored = getLocalStorageService().getJson(STORAGE_KEYS.CLUB_ORDER);
+                    return (Array.isArray(stored) && stored.length > 0)
+                        ? stored.filter(id => presentClubIds.includes(id))
+                        : presentClubIds;
+                })();
+                clubOrder.forEach(function (clubId) {
+                    const btn = document.createElement('button');
+                    btn.setAttribute('data-bc-cv-nav-btn', clubId);
+                    btn.textContent = CLUB_SHORT_NAMES[clubId] || clubId;
+                    btn.style.cssText = [
+                        'padding:5px 14px;border-radius:16px;border:none;cursor:pointer;',
+                        'font-size:13px;font-weight:600;',
+                        'background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.8);',
+                    ].join('');
+                    btn.addEventListener('click', function () {
+                        // Angular uses a separate div.floating-scroll element as the actual
+                        // scrollbar driver — it listens for scroll events on that element and
+                        // mirrors its scrollLeft to the content columns.  Setting scrollLeft
+                        // directly on the content (.booking-calendar-columns-floating-scroll)
+                        // bypasses Angular's sync, so the scrollbar position doesn't update.
+                        // The fix: scroll the floating-scroll element, which Angular already
+                        // watches.  Use getBoundingClientRect on the content element (which
+                        // reflects the current scroll state) to compute the target offset.
+                        const floatingScroll = document.querySelector('.floating-scroll');
+                        const contentEl = document.querySelector('.booking-calendar-columns-floating-scroll');
+                        const firstCol = document.querySelector(
+                            'app-booking-calendar-column[data-bc-club-id="' + clubId + '"]'
+                        );
+                        if (!floatingScroll || !contentEl || !firstCol) return;
+                        const contentRect = contentEl.getBoundingClientRect();
+                        const colRect = firstCol.getBoundingClientRect();
+                        floatingScroll.scrollLeft = floatingScroll.scrollLeft + colRect.left - contentRect.left;
+                        // Remove focus so the button does not retain :focus styling and so
+                        // scroll/keyboard events return to the document rather than the button.
+                        btn.blur();
+                    });
+                    strip.appendChild(btn);
+                });
+
+                // Insert before the legend (which is already a sibling of app-booking-calendar).
+                const legend = document.querySelector('[data-bc-badge-legend]');
+                const cal = document.querySelector('app-booking-calendar');
+                const parent = (legend && legend.parentNode) || (cal && cal.parentNode);
+                if (parent) {
+                    parent.insertBefore(strip, legend || cal);
                 }
             }
 
@@ -6900,6 +6966,7 @@
                     calendarClickTarget = null;
                 }
                 clearLockedSlotHover();
+                document.querySelectorAll('[data-bc-cv-club-nav]').forEach(el => el.remove());
                 document.querySelectorAll('[data-bc-badge-legend]').forEach(el => el.remove());
                 document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
                 document.querySelectorAll('app-booking-calendar-column[data-bc-club-id]').forEach(col => {
