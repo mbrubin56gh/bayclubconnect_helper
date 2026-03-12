@@ -96,6 +96,8 @@ Partners are mandatory. The `Ocp-Apim-Subscription-Key` header is static.
 
 **`getScheduledBookingService()`** is the singleton closure service owning all of: Worker API calls, local booking cache, player/photo caching, notification email/phone fetching, refresh token sync, and the public API (`scheduleBooking`, `cancelBooking`, `dismissBooking`, `getActiveBookings`, `getFailedBookings`, `fetchPossiblePlayers`, `fetchNotificationEmail`, `pushRefreshToken`, `syncRefreshTokenFromAppStorage`, `initializeOnPageLoad`, and XHR cache helpers).
 
+**`connect20auth` as a synchronous profile source**: Angular writes `localStorage.connect20auth` (including `profile.data.email`, `firstName`, `lastName`) before our script runs on every authenticated page load. Prefer reading from `connect20auth` first — before falling back to cached `bc_*` keys or making a network call — whenever user identity data is needed at startup. This avoids unnecessary API round-trips and eliminates first-load grace periods. `readUserEmail()` (IIFE scope) and `readProfileFromAppStorage()` (`getScheduledBookingService()` scope) encapsulate this pattern.
+
 **Refresh token management**: On every page load, `syncRefreshTokenFromAppStorage()` reads the Angular app's auth state from `localStorage.connect20auth` (where the app persists its token after login) and PUTs the refresh token to the Worker's `PUT /token` endpoint. The XHR and fetch interceptors also forward any token responses seen during the session. This keeps the Worker's KV refresh token perpetually current without manual bootstrapping.
 
 ### Navigation Cleanup

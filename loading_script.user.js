@@ -1569,7 +1569,8 @@
                     partnerEmails,
                     notificationEmail: await fetchNotificationEmail(),
                     userName: (() => {
-                        const p = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile');
+                        const p = getLocalStorageService().getJson(SELF_PROFILE_KEY, '[bc] failed to parse self profile')
+                            || readProfileFromAppStorage();
                         return (p && p.firstName && p.lastName) ? `${p.firstName} ${p.lastName}` : '';
                     })(),
                     status: SCHEDULED_STATUS_PENDING,
@@ -1623,9 +1624,35 @@
             // caching the result in localStorage so only one API call is ever made
             // per device. Returns null if auth headers are unavailable or the call
             // fails — in which case the Worker will simply skip the email notification.
+            // Reads the profile fields Angular persists to localStorage.connect20auth.
+            // Returns { email, firstName, lastName } with any absent fields as null.
+            function readProfileFromAppStorage() {
+                try {
+                    const raw = localStorage.getItem('connect20auth');
+                    if (!raw) return {};
+                    const state = JSON.parse(raw);
+                    const data = state && state.profile && state.profile.data;
+                    if (!data) return {};
+                    return {
+                        email: data.email || null,
+                        firstName: data.firstName || null,
+                        lastName: data.lastName || null,
+                    };
+                } catch (_e) {
+                    return {};
+                }
+            }
+
             async function fetchNotificationEmail() {
                 const cached = getLocalStorageService().getString(NOTIFICATION_EMAIL_KEY);
                 if (cached) return cached;
+                // connect20auth is written by Angular before our script runs, so this is
+                // synchronous and avoids an API round-trip on first use.
+                const appEmail = readProfileFromAppStorage().email;
+                if (appEmail) {
+                    getLocalStorageService().setString(NOTIFICATION_EMAIL_KEY, appEmail);
+                    return appEmail;
+                }
                 const headers = buildAuthHeaders();
                 if (!headers) return null;
                 try {
