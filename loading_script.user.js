@@ -1971,7 +1971,10 @@
 
                 const booking = {
                     id: crypto.randomUUID(),
-                    fireAtMs: computeFireAtMs(slotInfo.date, slotInfo.fromMinutes),
+                    // For straddling bookings (start is available, end is locked), fire
+                    // when the *last* locked slot's window opens, not the booking start.
+                    // slotInfo.fireAtFromMinutes carries that override when set.
+                    fireAtMs: computeFireAtMs(slotInfo.date, slotInfo.fireAtFromMinutes || slotInfo.fromMinutes),
                     bookingBody: {
                         clubId: slotInfo.clubId,
                         courtId: slotInfo.courtId,
@@ -4836,7 +4839,10 @@
             // Court View grid.  Derives the slot time from its DOM position, checks that
             // no existing event occupies the slot, then shows the partner picker / schedule
             // panel using the same panel builder and interaction wiring used by Hour View.
-            async function handleCourtViewLockedSlotClick(slot) {
+            // fireAtFromMinutesOverride: when set, used instead of fromMinutes to compute
+            // the fire time — needed for straddling slots whose last locked sub-slot opens
+            // later than the booking start.
+            async function handleCourtViewLockedSlotClick(slot, fireAtFromMinutesOverride) {
                 const column = slot.closest('app-booking-calendar-column[data-bc-club-id]');
                 if (!column) return;
 
@@ -4911,6 +4917,10 @@
                         weekday: 'short', month: 'short', day: 'numeric',
                     }),
                     allCourts,
+                    // When set, scheduleBooking uses this instead of fromMinutes to compute
+                    // fireAtMs — needed when the booking start is available but later
+                    // sub-slots are locked and open at a different time.
+                    fireAtFromMinutes: fireAtFromMinutesOverride || undefined,
                 };
 
                 let players, photosByMemberId;
@@ -6152,6 +6162,30 @@
                     '.booking-calendar-column-time-slot.booking-calendar-column-time-slot-unavailable'
                 );
                 if (lockedSlot) {
+                    // Only intercept if the slot is window-locked (no courtsheet event
+                    // covers it).  If a class, existing booking, or other event makes it
+                    // unavailable, let Angular handle the click so it can show its native
+                    // "slot unavailable" error — we should not suppress that feedback.
+                    const lockedCol = lockedSlot.closest('app-booking-calendar-column[data-bc-club-id]');
+                    if (lockedCol) {
+                        const lockedClubId = lockedCol.getAttribute('data-bc-club-id');
+                        const lockedCourtId = lockedCol.getAttribute('data-bc-court-id');
+                        const lockedFetchState = getBookingStateService().getLastFetchState();
+                        const lockedAllSlots = Array.from(
+                            lockedCol.querySelectorAll('.booking-calendar-column-time-slot')
+                        );
+                        const lockedIndex = lockedAllSlots.indexOf(lockedSlot);
+                        const lockedFrom = COURT_VIEW_GRID_START_MINUTES + lockedIndex * 30;
+                        const lockedEvents = lockedFetchState &&
+                            lockedFetchState.courtsheetEventsByClubId &&
+                            lockedFetchState.courtsheetEventsByClubId[lockedClubId];
+                        const coveredByEvent = lockedEvents && lockedCourtId && lockedEvents.some(function (ev) {
+                            return ev.court && ev.court.courtId === lockedCourtId &&
+                                ev.timeFromInMinutes < lockedFrom + 30 &&
+                                ev.timeToInMinutes > lockedFrom;
+                        });
+                        if (coveredByEvent) return; // Let Angular show its native error.
+                    }
                     // Stop propagation in capture phase so Angular's slot-level listener
                     // never fires and never shows its native "slot unavailable" error.
                     event.stopPropagation();
@@ -6173,6 +6207,27 @@
 
                 // Determine the home club name so we can strip it from Angular's label.
                 const lastFetchState = getBookingStateService().getLastFetchState();
+
+                // Check whether the clicked slot's full duration straddles the booking
+                // window.  If so, stop propagation (so Angular does not natively book
+                // just the available fragment) and show a prompt offering the user a
+                // choice between booking now (partial) or scheduling the full block.
+                const slotDate = lastFetchState && lastFetchState.params && lastFetchState.params.date;
+                if (slotDate) {
+                    const allSlots = Array.from(col.querySelectorAll('.booking-calendar-column-time-slot'));
+                    const slotIndex = allSlots.indexOf(slot);
+                    if (slotIndex >= 0) {
+                        const straddle = computeStraddleInfo(col, slotIndex, slotDate, lastFetchState);
+                        if (straddle) {
+                            // Do NOT stopPropagation — let Angular see the original trusted
+                            // click so its state machine advances and Next becomes enabled.
+                            // The overlay just offers the user a choice; "Book now" only
+                            // needs to override pendingSlotBooking and fix the bar label.
+                            showStraddlePrompt(slot, col, slotIndex, straddle, slotDate, lastFetchState);
+                            return;
+                        }
+                    }
+                }
                 const homeClubId = lastFetchState && lastFetchState.params && lastFetchState.params.nativeClubId;
                 const homeClubShortName = (homeClubId && CLUB_SHORT_NAMES[homeClubId]) || '';
 
@@ -6203,6 +6258,142 @@
                     clearInterval(barInterval);
                 }, 150);
                 cancelBarUpdate = function () { clearInterval(barInterval); };
+            }
+
+            // Shows a compact prompt when the user clicks an available slot whose full
+            // duration straddles the booking window boundary.  Offers two options:
+            //   "Book now"  — native booking for the available fragment only.
+            //   "Schedule"  — scheduled booking for the full duration, firing when the
+            //                 last locked sub-slot's window opens.
+            function showStraddlePrompt(slot, col, _slotIndex, straddle, slotDate, _lastFetchState) {
+                // Remove any prior prompt before injecting a new one.
+                document.querySelectorAll('[data-bc-straddle-prompt]').forEach(function (el) { el.remove(); });
+
+                // Use the block-start fromMinutes from computeStraddleInfo, which already
+                // walked back to the first available slot — the same anchor Angular uses.
+                const fromMinutes = straddle.fromMinutes;
+                const partialFrom = minutesToHumanTime(fromMinutes);
+                const partialTo   = minutesToHumanTime(straddle.partialToMinutes);
+                const fullTo      = minutesToHumanTime(straddle.fullToMinutes);
+                const fireAt      = new Date(getScheduledBookingService().computeFireAtMs(slotDate, straddle.fireAtFromMinutes));
+                const fireLabel   = fireAt.toLocaleString('en-US', {
+                    weekday: 'short', month: 'short', day: 'numeric',
+                    hour: 'numeric', minute: '2-digit',
+                });
+
+                const overlay = document.createElement('div');
+                overlay.setAttribute('data-bc-straddle-prompt', '1');
+                overlay.style.cssText = [
+                    'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;',
+                    'display:flex;align-items:center;justify-content:center;',
+                    'background:rgba(0,0,0,0.55);',
+                ].join('');
+
+                const card = document.createElement('div');
+                card.style.cssText = [
+                    'background:#1a2f3c;border:1px solid rgba(255,255,255,0.15);',
+                    'border-radius:10px;padding:24px 20px;max-width:320px;width:90%;',
+                    'color:#e8edf0;font-family:inherit;',
+                ].join('');
+
+                const title = document.createElement('div');
+                title.style.cssText = 'font-size:14px;font-weight:600;margin-bottom:6px;';
+                title.textContent = 'Slot crosses the booking window';
+
+                const subtitle = document.createElement('div');
+                subtitle.style.cssText = 'font-size:12px;color:rgba(232,237,240,0.65);margin-bottom:20px;';
+                subtitle.textContent = partialTo + ' is the last time you can book right now.';
+
+                const btnBook = document.createElement('button');
+                btnBook.style.cssText = [
+                    'display:block;width:100%;padding:11px 12px;margin-bottom:10px;',
+                    'background:rgba(0,188,212,0.18);border:1px solid rgba(0,188,212,0.5);',
+                    'border-radius:6px;color:#e8edf0;font-size:13px;cursor:pointer;text-align:left;',
+                ].join('');
+                btnBook.innerHTML = '<strong>Book ' + partialFrom + '\u2013' + partialTo + ' now</strong>';
+
+                const btnSchedule = document.createElement('button');
+                btnSchedule.style.cssText = [
+                    'display:block;width:100%;padding:11px 12px;margin-bottom:10px;',
+                    'background:rgba(255,160,0,0.15);border:1px solid rgba(255,160,0,0.45);',
+                    'border-radius:6px;color:#e8edf0;font-size:13px;cursor:pointer;text-align:left;',
+                ].join('');
+                btnSchedule.innerHTML = '<strong>Schedule ' + partialFrom + '\u2013' + fullTo + '</strong>' +
+                    '<div style="font-size:11px;color:rgba(255,160,0,0.85);margin-top:3px;">Books at ' + fireLabel + '</div>';
+
+                const btnCancel = document.createElement('button');
+                btnCancel.style.cssText = [
+                    'display:block;width:100%;padding:8px 12px;',
+                    'background:transparent;border:1px solid rgba(255,255,255,0.15);',
+                    'border-radius:6px;color:rgba(232,237,240,0.5);font-size:12px;cursor:pointer;',
+                ].join('');
+                btnCancel.textContent = 'Cancel';
+
+                function dismiss() {
+                    overlay.remove();
+                }
+
+                btnBook.addEventListener('click', function () {
+                    dismiss();
+                    // Build a partial slotInfo for the available fragment only.
+                    const clubId = col.getAttribute('data-bc-club-id');
+                    const courtId = col.getAttribute('data-bc-court-id');
+                    const courtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
+                    const courtEntry = courtsOrder.find(function (c) { return c.courtId === courtId; });
+                    const courtName = (courtEntry && courtEntry.courtName) || 'Court';
+                    const partialSlotInfo = {
+                        clubId,
+                        courtId,
+                        courtName,
+                        date: slotDate,
+                        fromMinutes,
+                        toMinutes: straddle.partialToMinutes,
+                    };
+                    // Store partial duration so the XHR interceptor rewrites the POST body
+                    // with the truncated toMinutes rather than the full selected duration.
+                    // Angular already advanced its state from the original trusted slot click,
+                    // so no re-click is needed — Next is already enabled.
+                    getBookingStateService().setPendingSlotBooking(partialSlotInfo);
+                    // Override Angular's bar label — it will show the home club name, but
+                    // we need the actual booking club and the truncated time range.
+                    if (cancelBarUpdate) { cancelBarUpdate(); }
+                    const slotLabel = CLUB_SHORT_NAMES[clubId] + ' \u00b7 ' + courtName +
+                        ' @ ' + minutesToHumanTime(fromMinutes) + '\u2013' + minutesToHumanTime(straddle.partialToMinutes);
+                    const barDeadline = Date.now() + 6000;
+                    const barInterval = setInterval(function () {
+                        const bottomBar = document.querySelector('.white-bg.p-2 .container');
+                        if (!bottomBar) { if (Date.now() > barDeadline) { clearInterval(barInterval); } return; }
+                        const infoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
+                        const nativeInfo = bottomBar.querySelector('.row .col-12.col-md-auto:not(.bc-injected-info)');
+                        if (nativeInfo) { nativeInfo.style.display = 'none'; }
+                        infoHolder.textContent = slotLabel;
+                        clearInterval(barInterval);
+                        if (Date.now() > barDeadline) { clearInterval(barInterval); }
+                    }, 150);
+                    cancelBarUpdate = function () { clearInterval(barInterval); };
+                });
+
+                btnSchedule.addEventListener('click', function () {
+                    dismiss();
+                    // Delegate to the locked-slot schedule flow, passing the fire-time
+                    // override so the Worker waits for the last locked sub-slot to open.
+                    getAvailabilityRenderPipeline().handleCourtViewLockedSlotClick(
+                        slot, straddle.fireAtFromMinutes
+                    );
+                });
+
+                btnCancel.addEventListener('click', dismiss);
+                overlay.addEventListener('click', function (e) {
+                    if (e.target === overlay) dismiss();
+                });
+
+                card.appendChild(title);
+                card.appendChild(subtitle);
+                card.appendChild(btnBook);
+                card.appendChild(btnSchedule);
+                card.appendChild(btnCancel);
+                overlay.appendChild(card);
+                document.body.appendChild(overlay);
             }
 
             // Injects a <style> tag with border-top rules so each club's columns get
@@ -6265,7 +6456,15 @@
                         '{background:rgba(0,188,212,0.22) !important;box-shadow:' + LR + ';}' +
                     hoverSel + ' [data-bc-hover-highlight="first"]{box-shadow:' + LR + ',' + TOP + ';}' +
                     hoverSel + ' [data-bc-hover-highlight="last"]{box-shadow:' + LR + ',' + BOT + ';}' +
-                    hoverSel + ' [data-bc-hover-highlight="only"]{box-shadow:' + LR + ',' + TOP + ',' + BOT + ';}';
+                    hoverSel + ' [data-bc-hover-highlight="only"]{box-shadow:' + LR + ',' + TOP + ',' + BOT + ';}' +
+                    // While a straddle hover is active, suppress Angular's native hover
+                    // highlight on any slot we have NOT tagged — those are the slots above
+                    // the hovered slot that Angular fills upward to complete the duration.
+                    // Without this, Angular's 90-min upward fill and our downward extension
+                    // render simultaneously.
+                    hoverSel + '[data-bc-straddle-active] .booking-calendar-column-time-slot:not([data-bc-hover-highlight]):hover' +
+                        '{background:transparent !important;box-shadow:none !important;}';
+
 
                 const style = document.createElement('style');
                 style.setAttribute('data-bc-col-colors', '1');
@@ -6284,11 +6483,103 @@
                 document.head.appendChild(style);
             }
 
+            // Returns straddle info if a slot's full duration crosses the booking window
+            // boundary, or null if the slot is either fully available or fully locked.
+            // A "straddle" means at least one sub-slot is available (window already open)
+            // and at least one is locked (window not yet open).
+            //
+            // Returns: { firstLockedIndex, lastLockedIndex, partialToMinutes,
+            //            fullToMinutes, fireAtFromMinutes }
+            //   partialToMinutes  — end time for a "book now" partial booking (up to the
+            //                       first locked sub-slot).
+            //   fullToMinutes     — end time for the full scheduled booking.
+            //   fireAtFromMinutes — the last locked sub-slot's fromMinutes; used as the
+            //                       fire-time reference so the Worker waits until the
+            //                       entire duration is within the booking window.
+            function computeStraddleInfo(column, slotIndex, _slotDate, lastFetchState) {
+                const rawTimeSlotId = lastFetchState && lastFetchState.params && lastFetchState.params.timeSlotId;
+                const clubId = column.getAttribute('data-bc-club-id');
+                const courtId = column.getAttribute('data-bc-court-id');
+                const effectiveTimeSlotId = CLUB_MAX_TIMESLOT[clubId] && rawTimeSlotId === TIMESLOTS.min90
+                    ? CLUB_MAX_TIMESLOT[clubId]
+                    : rawTimeSlotId;
+                const durationMinutes = effectiveTimeSlotId === TIMESLOTS.min90 ? 90 : 60;
+                const durationSlots = durationMinutes / 30;
+
+                const allSlots = Array.from(column.querySelectorAll('.booking-calendar-column-time-slot'));
+                const lastIndex = allSlots.length - 1;
+
+                // Build a set of indices blocked by an actual courtsheet event so we can
+                // distinguish "locked by the booking window" from "blocked by a class or
+                // existing reservation."  Only window-locked sub-slots form a straddle.
+                const bookedIndices = new Set();
+                const clubEvents = lastFetchState && lastFetchState.courtsheetEventsByClubId &&
+                    lastFetchState.courtsheetEventsByClubId[clubId];
+                if (clubEvents && courtId) {
+                    clubEvents.forEach(function (ev) {
+                        if (!ev.court || ev.court.courtId !== courtId) return;
+                        for (let i = 0; i <= lastIndex; i++) {
+                            const slotFrom = COURT_VIEW_GRID_START_MINUTES + i * 30;
+                            if (ev.timeFromInMinutes < slotFrom + 30 && ev.timeToInMinutes > slotFrom) {
+                                bookedIndices.add(i);
+                            }
+                        }
+                    });
+                }
+
+                // Compute the straddle from the hovered slot downward.  Angular fills the
+                // selected duration by pulling from slots ABOVE the hover point (anchoring
+                // at the block start), so hovering the middle or last slot of a 90-min
+                // available block shows the native 90-min highlight going upward.  We want
+                // to offer a different option: scheduling the full duration DOWNWARD from
+                // the hover point into the locked region.  So we always scan forward from
+                // slotIndex, regardless of what slots are available above it.
+                const fromMinutes = COURT_VIEW_GRID_START_MINUTES + slotIndex * 30;
+
+                // Walk the sub-slots AFTER slotIndex within the duration window.
+                // A sub-slot is "window-locked" if Angular marks it unavailable but no
+                // courtsheet event covers it — the server denied it solely because the
+                // booking window hasn't opened yet.
+                let firstLockedIndex = -1;
+                let lastLockedIndex = -1;
+                for (let i = slotIndex + 1; i < slotIndex + durationSlots && i <= lastIndex; i++) {
+                    const isUnavailable = allSlots[i].classList.contains(
+                        'booking-calendar-column-time-slot-unavailable'
+                    );
+                    if (isUnavailable && !bookedIndices.has(i)) {
+                        // Window-locked — part of the straddle extension.
+                        if (firstLockedIndex < 0) firstLockedIndex = i;
+                        lastLockedIndex = i;
+                    } else if (isUnavailable) {
+                        // Blocked by an event — stop extending; can't book through it.
+                        break;
+                    }
+                }
+
+                if (firstLockedIndex < 0) return null;
+
+                return {
+                    firstLockedIndex,
+                    lastLockedIndex,
+                    durationSlots,
+                    // Start of the booking from the hovered slot's perspective.
+                    fromMinutes,
+                    // End of the last available sub-slot = start of the first locked one.
+                    partialToMinutes: COURT_VIEW_GRID_START_MINUTES + firstLockedIndex * 30,
+                    fullToMinutes: fromMinutes + durationMinutes,
+                    // Fire when the last locked sub-slot's window opens.
+                    fireAtFromMinutes: COURT_VIEW_GRID_START_MINUTES + lastLockedIndex * 30,
+                };
+            }
+
             // Clears all hover-highlight attributes and cursor overrides set by
             // onCalendarMouseOver.
             function clearLockedSlotHover() {
                 document.querySelectorAll('[data-bc-hover-highlight]').forEach(function (el) {
                     el.removeAttribute('data-bc-hover-highlight');
+                });
+                document.querySelectorAll('[data-bc-straddle-active]').forEach(function (el) {
+                    el.removeAttribute('data-bc-straddle-active');
                 });
                 document.querySelectorAll('[data-bc-locked-cursor]').forEach(function (el) {
                     el.style.cursor = '';
@@ -6307,7 +6598,47 @@
                     '.booking-calendar-column-time-slot.booking-calendar-column-time-slot-unavailable'
                 );
                 clearLockedSlotHover();
-                if (!lockedSlot) return;
+
+                // If hovering an available slot, check whether its full duration straddles
+                // the booking window.  If so, suppress Angular's upward-fill hover and
+                // highlight the locked extension slots so the user sees the full block
+                // they could schedule.
+                //
+                // Note: Angular's upward-fill hover for 90-min+ free blocks cannot be
+                // suppressed — it registers at document level in capture phase, before our
+                // handler, and uses zone.js change detection rather than CSS :hover.
+                // The conflict (both highlights visible simultaneously) is a known visual
+                // bug for 90-min+ blocks; 60-min blocks are unaffected.
+                if (!lockedSlot) {
+                    const availSlot = event.target.closest(
+                        '.booking-calendar-column-time-slot:not(.booking-calendar-column-time-slot-unavailable)'
+                    );
+                    if (!availSlot) return;
+                    const availCol = availSlot.closest('app-booking-calendar-column[data-bc-club-id]');
+                    if (!availCol) return;
+                    const availLastFetchState = getBookingStateService().getLastFetchState();
+                    const availDate = availLastFetchState && availLastFetchState.params && availLastFetchState.params.date;
+                    if (!availDate) return;
+                    const availAllSlots = Array.from(availCol.querySelectorAll('.booking-calendar-column-time-slot'));
+                    const availIndex = availAllSlots.indexOf(availSlot);
+                    if (availIndex < 0) return;
+                    const straddle = computeStraddleInfo(availCol, availIndex, availDate, availLastFetchState);
+                    if (!straddle) return;
+                    event.stopPropagation();
+                    availCol.setAttribute('data-bc-straddle-active', '1');
+                    // Tag every slot in the straddle block with its position so CSS draws
+                    // top/bottom edges only at the block boundaries.
+                    const blockFirst = availIndex;
+                    const blockLast  = straddle.lastLockedIndex;
+                    for (let i = blockFirst; i <= blockLast; i++) {
+                        const pos = (i === blockFirst && i === blockLast) ? 'only'
+                            : i === blockFirst ? 'first'
+                            : i === blockLast  ? 'last'
+                            : 'middle';
+                        availAllSlots[i].setAttribute('data-bc-hover-highlight', pos);
+                    }
+                    return;
+                }
 
                 const column = lockedSlot.closest('app-booking-calendar-column[data-bc-club-id]');
                 if (!column) return;
@@ -6545,7 +6876,10 @@
                     // Use capture phase so we intercept locked-slot clicks before
                     // Angular's bubble-phase listener on the slot element can fire.
                     cal.addEventListener('click', onCalendarSlotClick, true);
-                    cal.addEventListener('mouseover', onCalendarMouseOver);
+                    // Capture phase so we run before Angular's slot-level mouseover
+                    // handlers.  In the straddle case we call stopPropagation() to
+                    // prevent Angular from applying its upward-fill hover highlight.
+                    cal.addEventListener('mouseover', onCalendarMouseOver, true);
                     cal.addEventListener('mouseleave', clearLockedSlotHover);
                 }
                 tagColumns();
@@ -6561,7 +6895,7 @@
                 }
                 if (calendarClickTarget) {
                     calendarClickTarget.removeEventListener('click', onCalendarSlotClick, true);
-                    calendarClickTarget.removeEventListener('mouseover', onCalendarMouseOver);
+                    calendarClickTarget.removeEventListener('mouseover', onCalendarMouseOver, true);
                     calendarClickTarget.removeEventListener('mouseleave', clearLockedSlotHover);
                     calendarClickTarget = null;
                 }
