@@ -151,11 +151,14 @@ cd cloudflare-worker && npm test
 ### End-to-end canary tests
 
 ```bash
-cd canary-tests && npm test              # headless
-cd canary-tests && npm test -- --headed  # watch the browser
+cd canary-tests && npm test                              # all browsers, headless
+cd canary-tests && npm test -- --headed                  # all browsers, watch the browser
+cd canary-tests && npm test -- --project=chromium        # desktop Chrome only
+cd canary-tests && npm test -- --project=firefox         # desktop Firefox only
+cd canary-tests && npm test -- --project=mobile-chromium # mobile Chrome (Pixel 5) only
 ```
 
-Canary tests run against the live site with the userscript injected and serve as both a regression guard and a canary for Bay Club DOM/API changes. Requires a `.env` file with `BC_EMAIL` and `BC_PASSWORD`.
+Canary tests run against the live site with the userscript injected across three browser projects (desktop Chromium, desktop Firefox, and mobile Chromium on Pixel 5). They serve as both a regression guard and a canary for Bay Club DOM/API changes. Requires a `.env` file with `BC_EMAIL` and `BC_PASSWORD`.
 
 ### Deploy the Worker
 

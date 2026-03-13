@@ -306,15 +306,18 @@ Tests cover all HTTP endpoints, pure helper functions, and the cron tick logic (
 Playwright end-to-end tests that run against the live bayclubconnect.com site with the userscript injected. They serve as both a regression guard for our own code and a canary for Bay Club DOM/API changes. Requires `.env` with `BC_EMAIL` and `BC_PASSWORD` (copied from `canary-tests/.env.example`).
 
 ```bash
-cd canary-tests && npm test                   # headless (CI mode)
-cd canary-tests && npm test -- --headed       # watch the browser run
-cd canary-tests && npm test -- --ui           # Playwright interactive UI (time-travel debugger)
-cd canary-tests && npm test -- --debug        # step through with Playwright Inspector
+cd canary-tests && npm test                              # all projects, headless
+cd canary-tests && npm test -- --headed                  # watch the browser run
+cd canary-tests && npm test -- --project=chromium        # desktop Chrome only
+cd canary-tests && npm test -- --project=firefox         # desktop Firefox only
+cd canary-tests && npm test -- --project=mobile-chromium # mobile Chrome (Pixel 5) only
+cd canary-tests && npm test -- --ui                      # Playwright interactive UI (time-travel debugger)
+cd canary-tests && npm test -- --debug                   # step through with Playwright Inspector
 ```
 
 The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, weather emoji ticks on the slider, club preference ordering widget, grouped time slot expansion, duration/player preference auto-select, edge/gated court indicators, locked slot → partner picker flow, booking flow cleanup, dashboard carousel DOM structure (`app-dashboard-events` / `app-dashboard-favorites` separation), court view DOM structure (COURT VIEW button, `app-booking-calendar`, native columns), Court View native column features (column tagging, club nav strip, badge legend, weather strip, edge/gated badges, scroll), and Court View mobile touch (viewport rendering, nav strip, tap-to-scroll).
 
-**Browser projects**: Chromium (desktop), Firefox (desktop), and mobile-chromium (Pixel 5 with `hasTouch:true`). Hour View tests skip on mobile-chromium because the mobile DOM layout is fundamentally different (desktop `.all-clubs-availability` container is hidden, navigation tiles use a different structure). Court View tests run on all three projects.
+**Browser projects**: Chromium (desktop), Firefox (desktop), and mobile-chromium (Pixel 5 with `hasTouch:true`). All tests run on all three projects. Locators use `:visible` to target the correct container when the script injects into both desktop and mobile DOM hosts. Step 1 navigation (club ordering widget, auto-select) falls back to direct URL when the desktop `div.tile` entry point is hidden on mobile viewports. The Court View mobile touch block uses `requireMobile(test)` to skip on desktop projects.
 
 **Key calibration notes**:
 - Club sections are identified by `data-club-id` UUID attributes, not by text — the API `shortName` for some clubs may differ from our display label.
@@ -323,6 +326,7 @@ The suite covers: Open-Meteo weather API shape, Bay Club availability API contra
 - `test.setTimeout(120_000)` must be called at the top of `beforeAll` for the locked-slot describe block — `test.describe.configure({ timeout })` does not extend `beforeAll` hook timeouts in Playwright 1.58.
 - Angular renders two `app-time-slot-view-type-select` toggle components — one hidden inside a collapsed container. Locators must use `:visible` pseudo-class to target the active instance.
 - Worker preference sync is blocked via Playwright route interception (`**/prefs**` returns empty prefs) so server-stored values do not corrupt the clean test state.
+- On mobile-chromium, the Court View nav-button scroll test skips gracefully when the `div.floating-scroll` element is absent (mobile layout limitation).
 
 ## Running All Tests
 
