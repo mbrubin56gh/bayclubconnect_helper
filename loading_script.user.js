@@ -302,6 +302,7 @@
                     clubId: c.bc_clubId,
                     courtName: (c.courtName || c.name || '').trim(),
                     courtOrder: c.order ?? 0,
+                    openingHours: c.openingHours || [],
                 }))
             );
 
@@ -683,6 +684,7 @@
                                         clubId: c.bc_clubId,
                                         courtName: (c.courtName || c.name || '').trim(),
                                         courtOrder: c.order != null ? c.order : 0,
+                                        openingHours: c.openingHours || [],
                                     };
                                 })
                             );
@@ -6487,6 +6489,24 @@
             // A "straddle" means at least one sub-slot is available (window already open)
             // and at least one is locked (window not yet open).
             //
+            // Returns the opening-hours range { fromInMinutes, toInMinutes } for the
+            // given court entry on the given date string (YYYY-MM-DD), or null if the
+            // court has no schedule data.  Uses noon local time to derive the day of week
+            // so daylight-saving transitions do not shift the date.
+            const _DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            function getCourtOpenHoursForDate(courtEntry, dateStr) {
+                if (!courtEntry || !Array.isArray(courtEntry.openingHours) || courtEntry.openingHours.length === 0) {
+                    return null;
+                }
+                const dayName = _DAY_NAMES[new Date(dateStr + 'T12:00:00').getDay()];
+                const dayEntry = courtEntry.openingHours.find(function (h) { return h.dayOfWeek === dayName; });
+                if (!dayEntry || !Array.isArray(dayEntry.openingHours) || dayEntry.openingHours.length === 0) {
+                    return null;
+                }
+                // Courts typically have a single time range per day; take the first.
+                return dayEntry.openingHours[0];
+            }
+
             // Returns: { firstLockedIndex, lastLockedIndex, partialToMinutes,
             //            fullToMinutes, fireAtFromMinutes }
             //   partialToMinutes  — end time for a "book now" partial booking (up to the
@@ -6537,11 +6557,15 @@
 
                 // Walk the sub-slots AFTER slotIndex within the duration window.
                 // A sub-slot is "window-locked" if Angular marks it unavailable, no
-                // courtsheet event covers it, AND its Pacific time is more than 3 days
-                // from now (meaning the booking window hasn't opened yet).  Slots that
-                // are unavailable but within the 3-day window (e.g. courts closed at
-                // 10pm) are not window-locked and must not be treated as straddle targets.
+                // courtsheet event covers it, its time falls within the court's operating
+                // hours, AND its Pacific time is more than 3 days from now (meaning the
+                // booking window hasn't opened yet).  Slots outside operating hours or
+                // within the 3-day window are courts-closed or otherwise non-bookable
+                // and must not be treated as straddle targets.
                 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+                const courtsOrderForStraddle = getBookingStateService().getMergedCourtsOrder() || [];
+                const straddleCourtEntry = courtsOrderForStraddle.find(function (c) { return c.courtId === courtId; });
+                const straddleOpenHours = getCourtOpenHoursForDate(straddleCourtEntry, slotDate);
                 let firstLockedIndex = -1;
                 let lastLockedIndex = -1;
                 for (let i = slotIndex + 1; i < slotIndex + durationSlots && i <= lastIndex; i++) {
@@ -6549,7 +6573,10 @@
                         'booking-calendar-column-time-slot-unavailable'
                     );
                     const slotFromMinutes = COURT_VIEW_GRID_START_MINUTES + i * 30;
-                    const isWindowLocked = isUnavailable && !bookedIndices.has(i) &&
+                    const withinHours = !straddleOpenHours ||
+                        (slotFromMinutes >= straddleOpenHours.fromInMinutes &&
+                         slotFromMinutes < straddleOpenHours.toInMinutes);
+                    const isWindowLocked = isUnavailable && !bookedIndices.has(i) && withinHours &&
                         pacificSlotTimeMs(slotDate, slotFromMinutes) > Date.now() + THREE_DAYS_MS;
                     if (isWindowLocked) {
                         // Window-locked — part of the straddle extension.
@@ -6668,6 +6695,13 @@
                 const slotDate = lastFetchState && lastFetchState.params && lastFetchState.params.date;
                 if (!slotDate) return;
                 const fromMinutes = COURT_VIEW_GRID_START_MINUTES + hoverIndex * 30;
+                const hoverCourtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
+                const hoverCourtEntry = hoverCourtsOrder.find(function (c) { return c.courtId === courtId; });
+                const hoverOpenHours = getCourtOpenHoursForDate(hoverCourtEntry, slotDate);
+                // Reject if the hovered slot is outside the court's operating hours —
+                // those slots are courts-closed, not window-locked, and are not bookable.
+                if (hoverOpenHours && (fromMinutes < hoverOpenHours.fromInMinutes ||
+                        fromMinutes >= hoverOpenHours.toInMinutes)) return;
                 if (Date.now() >= getScheduledBookingService().computeFireAtMs(slotDate, fromMinutes)) return;
 
                 // Build a set of slot indices that overlap a booked or blocked event.
@@ -6692,11 +6726,18 @@
                 // window opens, so showing a hover highlight would be misleading.
                 if (bookedIndices.has(hoverIndex)) return;
 
+                // Cap the extension at the court's last open slot so the window never
+                // reaches into courts-closed time (e.g. 10pm–11pm on the grid).
+                const courtCloseIndex = hoverOpenHours
+                    ? Math.floor((hoverOpenHours.toInMinutes - COURT_VIEW_GRID_START_MINUTES) / 30) - 1
+                    : lastIndex;
+                const effectiveLastIndex = Math.min(lastIndex, courtCloseIndex);
+
                 // Phase 1: extend downward from hover until duration is filled, a booked
-                // slot is hit, or the column ends.
+                // slot is hit, or the court's last open slot is reached.
                 let endIndex = hoverIndex;
                 while (
-                    endIndex < lastIndex &&
+                    endIndex < effectiveLastIndex &&
                     endIndex - hoverIndex + 1 < durationSlots &&
                     !bookedIndices.has(endIndex + 1)
                 ) {
