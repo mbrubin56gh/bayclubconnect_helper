@@ -38,6 +38,23 @@ const authState = JSON.parse(
 );
 const isAuthenticated = authState.cookies && authState.cookies.length > 0;
 
+// Extract the logged-in user's email from the auth state localStorage snapshot.
+// Used by fake Worker responses that need notificationEmail to match the current user.
+const authEmail = (() => {
+    try {
+        const origins = authState.origins || [];
+        for (const origin of origins) {
+            const entry = (origin.localStorage || []).find(i => i.name === 'connect20auth');
+            if (entry) {
+                const parsed = JSON.parse(entry.value);
+                const email = parsed && parsed.profile && parsed.profile.data && parsed.profile.data.email;
+                if (email) return email.trim().toLowerCase();
+            }
+        }
+    } catch (_e) { /* ignore */ }
+    return '';
+})();
+
 // Helper used throughout to conditionally skip a test.
 function requireAuth(t) {
     if (!isAuthenticated) t.skip(true, 'No auth state — set BC_EMAIL and BC_PASSWORD in .env');
@@ -1305,6 +1322,186 @@ test.describe('Bay Club /home/dashboard DOM structure', () => {
             .textContent({ timeout: 10_000 })
             .catch(() => '');
         expect(labelText).toMatch(/upcoming activities/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 14. Pending bookings display (fake Worker response)
+// ---------------------------------------------------------------------------
+
+test.describe('Pending bookings display with fake Worker response', () => {
+    // These tests intercept the Worker GET /bookings endpoint and return
+    // synthetic pending bookings, then verify that the extension renders
+    // the pending section on /bookings and pending cards on the dashboard.
+
+    // A booking date far enough in the future that it stays pending.
+    const futureDate = '2029-06-15';
+    const fakePendingBookings = [
+        {
+            id: 'fake-pending-1',
+            fireAtMs: Date.now() + 3 * 24 * 60 * 60 * 1000,
+            bookingBody: {
+                clubId: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
+                courtId: 'fake-court-1',
+                date: { value: futureDate, date: futureDate },
+                timeFromInMinutes: 480,
+                timeToInMinutes: 570,
+                categoryOptionsId: 'fake-cat',
+                timeSlotId: 'fake-slot',
+                categoryCode: 'PB',
+            },
+            confirmBody: { invitations: [], isVisibleToBuddies: true },
+            slotLabel: `Broadway \u00b7 Pickleball 1 \u00b7 8:00\u20139:30 AM \u00b7 Jun 15`,
+            originalCourtName: 'Pickleball 1',
+            fallbackCourts: [],
+            partnerNames: ['Test Partner'],
+            partnerEmails: [],
+            notificationEmail: authEmail,
+            userName: 'Test User',
+            status: 'pending',
+            slotCheckStatus: 'unknown',
+            failureReason: null,
+            createdAtMs: Date.now(),
+        },
+    ];
+
+    test.describe('/bookings page pending section', () => {
+        let page;
+        let context;
+
+        test.beforeAll(async ({ browser }) => {
+            test.setTimeout(60_000);
+            if (!isAuthenticated) return;
+            context = await createContextWithScript(browser);
+
+            // Intercept Worker GET /bookings to return fake pending bookings.
+            await context.route('**/bayclubconnect-bookings.mark-rubin.workers.dev/bookings', route => {
+                if (route.request().method() === 'GET') {
+                    route.fulfill({
+                        status: 200,
+                        contentType: 'application/json',
+                        body: JSON.stringify(fakePendingBookings),
+                    });
+                } else {
+                    route.continue();
+                }
+            });
+
+            page = await context.newPage();
+            await page.goto('/bookings', { waitUntil: 'networkidle' });
+        });
+
+        test.afterAll(async () => {
+            if (page) await page.close();
+        });
+
+        test('pending section is rendered on /bookings', async () => {
+            requireAuth(test);
+            await expect(
+                page.locator('[data-bc-pending-section]')
+            ).toBeAttached({ timeout: 15_000 });
+        });
+
+        test('pending section contains the Pending Bookings heading', async () => {
+            requireAuth(test);
+            const sectionText = await page
+                .locator('[data-bc-pending-section]')
+                .textContent({ timeout: 10_000 });
+            expect(sectionText).toMatch(/Pending Bookings/);
+        });
+
+        test('pending booking row is rendered with correct id', async () => {
+            requireAuth(test);
+            await expect(
+                page.locator('[data-bc-pending-booking="fake-pending-1"]')
+            ).toBeAttached({ timeout: 10_000 });
+        });
+
+        test('pending booking row shows the slot label', async () => {
+            requireAuth(test);
+            const rowText = await page
+                .locator('[data-bc-pending-booking="fake-pending-1"]')
+                .textContent({ timeout: 10_000 });
+            expect(rowText).toMatch(/Broadway/);
+            expect(rowText).toMatch(/Pickleball 1/);
+        });
+
+        test('pending booking row shows partner names', async () => {
+            requireAuth(test);
+            const rowText = await page
+                .locator('[data-bc-pending-booking="fake-pending-1"]')
+                .textContent({ timeout: 10_000 });
+            expect(rowText).toMatch(/Test Partner/);
+        });
+
+        test('pending booking row has a countdown element', async () => {
+            requireAuth(test);
+            await expect(
+                page.locator('[data-bc-pending-booking="fake-pending-1"] [data-bc-countdown]')
+            ).toBeAttached({ timeout: 10_000 });
+        });
+
+        test('pending booking row has a cancel button for the scheduler', async () => {
+            requireAuth(test);
+            await expect(
+                page.locator('[data-bc-cancel-booking="fake-pending-1"]')
+            ).toBeAttached({ timeout: 10_000 });
+        });
+    });
+
+    test.describe('/home/dashboard pending cards', () => {
+        let page;
+        let context;
+
+        test.beforeAll(async ({ browser }) => {
+            test.setTimeout(60_000);
+            if (!isAuthenticated) return;
+            context = await createContextWithScript(browser);
+
+            // Intercept Worker GET /bookings to return fake pending bookings.
+            await context.route('**/bayclubconnect-bookings.mark-rubin.workers.dev/bookings', route => {
+                if (route.request().method() === 'GET') {
+                    route.fulfill({
+                        status: 200,
+                        contentType: 'application/json',
+                        body: JSON.stringify(fakePendingBookings),
+                    });
+                } else {
+                    route.continue();
+                }
+            });
+
+            page = await context.newPage();
+            await page.goto('/home/dashboard', { waitUntil: 'networkidle' });
+        });
+
+        test.afterAll(async () => {
+            if (page) await page.close();
+        });
+
+        test('pending dashboard card is rendered', async () => {
+            requireAuth(test);
+            await expect(
+                page.locator('[data-bc-dashboard-pending="fake-pending-1"]')
+            ).toBeAttached({ timeout: 15_000 });
+        });
+
+        test('pending dashboard card shows booking details', async () => {
+            requireAuth(test);
+            const cardText = await page
+                .locator('[data-bc-dashboard-pending="fake-pending-1"]')
+                .textContent({ timeout: 10_000 });
+            expect(cardText).toMatch(/PENDING/);
+            expect(cardText).toMatch(/Pickleball/i);
+        });
+
+        test('pending dashboard card shows partner names', async () => {
+            requireAuth(test);
+            const cardText = await page
+                .locator('[data-bc-dashboard-pending="fake-pending-1"]')
+                .textContent({ timeout: 10_000 });
+            expect(cardText).toMatch(/Test Partner/);
+        });
     });
 });
 
