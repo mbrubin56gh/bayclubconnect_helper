@@ -1,117 +1,152 @@
-# Bay Club Connect Pickleball Court Reservation Helper
+# Bay Club Connect Pickleball Helper
 
-This is a Tampermonkey script to show pickleball court availability across multiple Bay Club locations and allows booking at any club, regarless of which club is set as the default. It works on desktop Chrome, desktop Firefox, and Firefox for Android.
+A Tampermonkey userscript that makes court booking at [bayclubconnect.com](https://bayclubconnect.com) much less painful for Bay Club members who play pickleball across all four Bay Area locations.
 
-## Scope
+The native app only shows availability for your "home" club. This helper fetches all four clubs in parallel and shows everything in one unified view — so you can find the best open court without checking each club separately.
 
-This is a practical helper for a small friend group, not a fully productized tool. Bay Club can change the SPA behavior at any time, so this script may occasionally need small maintenance updates.
+---
 
-## Demo
+## Main availability view
 
-Seeing it in action probably gets you the idea faster than all that blah, blah, blah below, so here's a video of what the enriched booking flow is like with the extension.
+![Hour View showing all four clubs](screenshots/hour-view-multi-club.png)
 
-https://github.com/user-attachments/assets/358deb10-f6b8-4e3d-913f-6dea0083e576
+Slots are grouped by club and time of day (Morning / Afternoon / Evening). Edge courts are marked **E**, gated courts **G**, and courts next to a hitting wall **H**. Multiple courts available at the same time collapse into a single expandable card.
 
-## Supported Clubs
-- Redwood Shores
-- Broadway
-- South San Francisco
-- Santa Clara
+---
+
+## Features
+
+### Multi-club availability in one view
+
+All four clubs — Redwood Shores, Broadway, South San Francisco, and Santa Clara — are fetched in parallel and shown together. You can switch between **By Club** and **By Time** layouts.
+
+### Time range filter and weather
+
+A dual-handle slider filters slots to your preferred playing hours. Hourly weather emoji appear along the slider from Open-Meteo so you know what to expect on outdoor courts.
+
+### Indoor courts toggle
+
+Broadway and South SF are indoor only. The toggle hides outdoor-only clubs (Santa Clara and Redwood Shores outdoor courts) when you want to play indoors.
+
+### Club preference ordering
+
+Drag to reorder clubs in the priority you want them shown. Preference is saved and synced across devices.
+
+### Court View — all clubs in one calendar grid
+
+![Court View with multi-club columns](screenshots/court-view.png)
+
+Switching to Court View shows every court from all four clubs in a single horizontal calendar grid. The club nav strip at the top lets you jump to any club's section. Columns are tagged with the correct club so you always know which location you are booking.
+
+### Scheduled bookings
+
+Bay Club opens the booking window exactly 3 days in advance at the minute of the slot. Locked slots (beyond the window) are clickable — tapping one opens an inline partner picker. Select your partners, tap **Schedule**, and the helper fires the booking automatically the moment the window opens, even if your browser tab is closed.
+
+### Bookings page enhancements
+
+![Bookings page with pending section](screenshots/bookings-page.png)
+
+The `/bookings` page gets a **Pending Bookings** section showing each scheduled booking with a live countdown, partner names, and **Google Calendar** / **Download Event** links. Failed attempts appear in red with a **Dismiss** button.
+
+### Dashboard pending cards
+
+![Dashboard with pending booking cards](screenshots/dashboard.png)
+
+Scheduled bookings appear as cards on the home dashboard alongside your confirmed bookings, so you can see everything at a glance.
+
+---
 
 ## Installation
 
-# Chrome
+1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser.
+2. Open the Tampermonkey dashboard and create a new script.
+3. Paste the contents of [`loading_script.user.js`](loading_script.user.js) and save.
+4. Navigate to [bayclubconnect.com](https://bayclubconnect.com) — the helper loads automatically on every page.
 
-1. Install the [Tampermonkey Chrome extension](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
-Be aware that Tampermonkey allows you or someone to install scripts that inject into web pages and alter their behavior. Be careful.
-3. Click "Add to Chrome" and confirm.
-5. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js)
-6. Tampermonkey will show an install dialog. Click "Install".
-7. After you install it, click on the puzzle piece in your Chrome 
-toolbar, find the Tampermonkey extension listed there, click on the vertical three dots, and click on "Manage Extension".
-<img width="617" height="633" alt="Screenshot 2026-02-24 at 3 55 56 PM" src="https://github.com/user-attachments/assets/f440c6f2-1c46-4405-87d2-3426e9a49993" />
+> The helper is gated by an allow-list checked on startup. If you are not already on the list, reach out to get added.
 
-8. Make sure the Developer Mode toggle in the top right is switched on, make sure the On button is switched on, and scroll to the Allow User Scripts button and turn that on.
-   <img width="1437" height="780" alt="Screenshot 2026-02-24 at 3 56 47 PM" src="https://github.com/user-attachments/assets/d5ea269a-329b-4532-b50c-ef351139fc9f" />
-9. If you're still seeing a warning from Tampermonkey that developer mode is not turned on, quit Chrome and restart it.
-10. Done! The script runs automatically on [bayclubconnect.com](bayclubconnect.com).
-11. It might be convenient to have the Tampermonkey extension pinned.
+---
 
-Here's a video of manipulating the Tampermonkey extension:
+## How it works
 
-https://github.com/user-attachments/assets/9d8c290a-9de8-43e9-9667-117bb6c05cdd
+**XHR interception** — The script patches `XMLHttpRequest.prototype.open` and `send` to intercept the native availability and court-booking requests before Angular reads them. When the native app fires a single availability request for the home club, the helper fires four parallel requests (one per club), merges the results, and delivers the combined payload back to Angular — which renders it as if the server sent it all at once.
 
-# Firefox
+**Angular state machine navigation** — Angular's booking flow is a state machine that requires real user clicks to advance. The helper secretly clicks a native Angular slot when you select one of the injected cards, advancing Angular's state. The outgoing booking POST is then rewritten with the correct club, court, time, and partners.
 
-Tampermonkey is not supported on iOS or Chrome for Android, but it is supported by Firefox for Android.
-The instructions are essentially the same as for Chrome:
-1. Install the [Tampermonkey extension for Firefox](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/).
-2. Navigate to the [script install URL](https://raw.githubusercontent.com/mbrubin56gh/bayclubconnect_helper/master/loading_script.user.js).
-3. Follow whatever instructions you see to install the script.
-4. That should be all you need. Navigate to the [Bay Club connect homepage](bayclubconnect.com) and log in.
-5. It seems that the mobile Bay Club application is just a thin wrapper around their website. So instead of using the native app on Android, you can add a home screen shortcut to launching [bayclubconnect.com](bayclubconnect.com) via Firefox: in your Android Firefox, click on the three vertical dots in the top right, expand the "... More" section, and find the entry to "Add to Home screen". You can use that shortcut instead of the native app with no real loss of previous functionality, and you get the extension!
+**Court View merging** — The same XHR interception pattern is applied to the two courtsheet endpoints Angular uses for Court View. All four clubs' court columns are merged into the response Angular renders, so every court appears natively as a real interactive column.
 
-## Usage
+**Cloudflare Worker backend** — Scheduled bookings are persisted to a Cloudflare Worker (KV storage). A cron job fires every minute, picks up bookings whose window has opened, executes the two-step Bay Club booking API, and sends an email notification to you and your partners via Resend — regardless of whether your browser tab is open.
 
-- Log in to your account at [bayclubconnect.com](bayclubconnect.com).
-- Navigate to the court booking page as normal, regardless of what club you have selected.
-- Walk through Pickleball booking. When you get to the typical players count and duration selector, you can choose the order of club availabilities that will be displayed. That display order will be remembered across sessions, and you can always reorder them when you return to this screen.
-  
-<img width="1170" height="306" alt="Screenshot 2026-02-24 at 4 22 01 PM" src="https://github.com/user-attachments/assets/cab7cb67-eb6a-44b6-9060-622ed156b551" />
+---
 
-- The players count and duration selection you choose will be remembered across booking sessions.
-- When you click Next to get to the availability listings, Hour View is now defaulted to instead of Court View. This helper only supports the Hour View, and this helper assumes you prefer it. You can always select Court View manually.
-- Available slots across all clubs will appear automatically.
-- There is a time range slider to filter the court availabilities displayed to match your specified start and end times, a weather report for each hour on the slider, and a checkbox to show indoor courts only. There's a toggle to switch between BY CLUB and BY TIME sorting: when BY CLUB is selected, you'll see a list of clubs, and under each club, the available slots for that club; when BY TIME is selected, you'll see a list of times, and under each time, the available slots for that time, in club sorted order.
+## Configuration
 
+All preferences are persisted to `localStorage` and synced to the Worker so they carry over across devices and sessions.
 
-| BY CLUB | BY TIME |
-| :---: | :---: |
-| <img width="1205" height="723" alt="Screenshot 2026-02-24 at 4 32 41 PM" src="https://github.com/user-attachments/assets/0d881664-b001-4750-859a-20c338307208"/> | <img width="1170" height="717" alt="Screenshot 2026-02-24 at 4 33 16 PM" src="https://github.com/user-attachments/assets/8ce9829a-f6c3-433b-96ab-68e3d992ad4f"/> |
+| Control | What it does |
+|---------|--------------|
+| **Indoor courts only** toggle | Hides outdoor-only clubs from the availability list |
+| **Time range slider** | Filters slots to your preferred playing hours |
+| **By Club / By Time** toggle | Switches between grouping slots by club or by time |
+| **Club order drag widget** | Sets the display order of clubs in the By Club view |
+| **HOUR VIEW / COURT VIEW** tabs | Persists your preferred calendar layout across sessions |
 
-- Unlike the native time slot selector in Hour View, we show all the courts available for a time slot. The native one just shows that some court is available for that time slot and it picks an arbitrary court for you if more than one is available. With this extension, you can choose which one you want to book: click on a card for a time slot with multiple courts listed, and it will expand to allow you to choose your court. That court remains selected until you actually select another court (and not merely expand another card). The court you selected also shows on the bottom information bar.
+---
 
-<img width="1144" height="668" alt="Screenshot 2026-02-24 at 4 33 54 PM" src="https://github.com/user-attachments/assets/58412af9-e4b3-49e9-8dce-c85eaf55c0c7" />
+## Scheduled bookings
 
-- Cards for times with edge courts are outlined in gold and show a gold **E**: these courts are highlighted because they are less likely to have balls from other courts spray onto them or vice versa. Cards for times with courts that are gated (e.g. surrounded by a fence) have a heavier gold border and show a gold **G** instead (only Santa Clara has these courts). Courts adjacent to a hitting wall show an **H** alongside the E or G badge (currently courts 9 and 10 at Santa Clara).
+Bay Club's booking window opens exactly **3 days in advance** at the minute the slot starts. For example, a 7:00 AM slot on Saturday opens on Wednesday at 7:00 AM.
 
-- Select your time slot and court and then click the button to proceed with booking.
+To schedule a booking for a locked slot:
 
-- Once you're on the bookings page, you'll see links to add your booking to Google calendar or to download more generically the calendar entry to add on your own to your calendar application.
+1. Navigate to the booking flow and select a date beyond 3 days out.
+2. Tap any locked slot (shown with a lock or strikethrough style).
+3. An inline partner picker appears — select your partners and tap **Schedule**.
+4. The helper persists the record to the Worker. No need to keep the tab open.
+5. At the exact moment the window opens, the Worker fires the POST and PUT to book the court and invite your partners.
+6. You and your partners each receive an email confirmation (or failure notice).
 
-<img width="834" height="300" alt="Screenshot 2026-02-25 at 7 20 41 PM" src="https://github.com/user-attachments/assets/f3e2eecb-8cd6-4f08-a4ff-e1622dfdc3af" />
+Pending bookings appear on the `/bookings` page and on the home dashboard. You can cancel a pending booking at any time before it fires.
 
-- If a time slot is available, but not within the 3 day booking period, you can still select it and walk through a custom booking flow that will schedule an attempt to reserve the slot when the 3 day booking period opens up for that slot. The slot will display with a calendar icon in the top right and a note at the bottom saying when the slot opens up. Click on the slot and go through the booking flow (you'll get a slightly different partner picker, but don't let that throw you). When you're done, you'll see on the /bookings page a card indicating the pending booking attempt, which you can also cancel from there.
+---
 
-<img width="343" height="309" alt="Screenshot 2026-03-02 at 8 29 35 AM" src="https://github.com/user-attachments/assets/c9c0dac2-e379-49ee-b1f3-6927c83376a9" />
+## Backend
 
-<img width="1147" height="219" alt="Screenshot 2026-03-02 at 8 33 54 AM" src="https://github.com/user-attachments/assets/ba70709b-9c9c-4852-9d62-31780cca6b2a" />
+The Cloudflare Worker at `bayclubconnect-bookings.mark-rubin.workers.dev` handles:
 
+- **Storing** scheduled bookings in KV storage
+- **Firing** the Bay Club two-step booking API at the right moment (cron every minute)
+- **Storing** refresh tokens per user so the Worker can authenticate without a browser session
+- **Syncing** user preferences (club order, time range, view mode, etc.) across devices
+- **Emailing** success/failure notifications via Resend
 
-## Debugging
+---
 
-If you hit an issue and want to send diagnostics, the helper includes a hidden debug mode.
+## Development
 
-- You can enable debug mode from any Bay Club Connect page with either method:
-   - Tap or click the top-left corner of the page five times within four seconds.
-   - Type `debug` within five seconds (while your cursor is not in an input field).
-- When debug mode is enabled, you will see a debug panel on both helper screens:
-  The Player Count and Duration screen.
-  The court availability screen.
-- The debug panel includes:
-  `Copy logs` to copy a support packet to the clipboard.
-  `Email logs` to open a prefilled email draft.
-  `Download logs` to save a log file.
-  `Clear logs` to reset the stored debug entries.
-- You can disable debug mode from the panel by unchecking the Debug mode checkbox.
+### Userscript tests
 
-## Disabling
-- If you're not enjoying this or you want to return to the native experience for any reason, you can disable the extension through Tampermonkey's Dashboard. You can also delete the installation of the script from there. If you didn't install TamperMonkey for other reasons, you can just uninstall Tampermonkey entirely by going through Chrome's extension management UI.
-- You can also temporarily disable this for as long as you like via the Tampermonkey extension's Dashboard UI.
+```bash
+npm run test:script   # Vitest suite covering pure utility functions
+```
 
-## Refreshing
-- As I fix bugs or release new features, I'll update the version number for the script. But the Tampermonkey extension may take several hours to refresh the script. You can trigger a refresh yourself by clicking on the Utilities menu item for the extension and then clicking on the "Check for userscript updates" entry. Or you can select Dashboard and delete the script and reinstall it.
+### Worker tests
 
-## Thanks
+```bash
+cd cloudflare-worker && npm test
+```
 
-Weather information is pulled from [Open-Meteo](https://open-meteo.com/)
+### End-to-end canary tests
+
+```bash
+cd canary-tests && npm test              # headless
+cd canary-tests && npm test -- --headed  # watch the browser
+```
+
+Canary tests run against the live site with the userscript injected and serve as both a regression guard and a canary for Bay Club DOM/API changes. Requires a `.env` file with `BC_EMAIL` and `BC_PASSWORD`.
+
+### Deploy the Worker
+
+```bash
+cd cloudflare-worker && wrangler deploy
+```
