@@ -32,6 +32,21 @@ module.exports = defineConfig({
             name: 'chromium',
             use: { ...devices['Desktop Chrome'] },
         },
+        {
+            name: 'firefox',
+            use: { ...devices['Desktop Firefox'] },
+        },
+        {
+            // Mobile viewport with touch enabled — hover is suppressed so we can
+            // test touch-only code paths (e.g. straddle detection without mouseover).
+            name: 'mobile-chromium',
+            use: {
+                ...devices['Pixel 5'],
+                // Playwright's Pixel 5 device already sets hasTouch:true and a
+                // mobile viewport (393×851).  We just need to make sure the
+                // userscript's mobile layout is exercised.
+            },
+        },
     ],
 
     outputDir: 'test-results',

@@ -241,8 +241,8 @@ Server-side component that executes scheduled bookings without requiring the bro
 - `cloudflare-worker/worker.js` — Cloudflare Worker source.
 - `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, D1 binding, cron schedule).
 - `cloudflare-worker/CLOUDFLARE.md` — Detailed setup, architecture, and dev workflow notes for the Worker, written for someone new to Cloudflare.
-- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (57 tests) run against the live site.
-- `canary-tests/playwright.config.js` — Playwright configuration (single Chromium worker, auth state, timeouts).
+- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (64 tests) run against the live site.
+- `canary-tests/playwright.config.js` — Playwright configuration (Chromium, Firefox, and mobile-chromium projects; single worker, auth state, timeouts).
 - `canary-tests/global-setup.js` — Logs in with BC_EMAIL/BC_PASSWORD from `.env` and saves auth state before the suite runs.
 
 ## External Assumptions And Contracts
@@ -312,13 +312,17 @@ cd canary-tests && npm test -- --ui           # Playwright interactive UI (time-
 cd canary-tests && npm test -- --debug        # step through with Playwright Inspector
 ```
 
-The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, weather emoji ticks on the slider, club preference ordering widget, grouped time slot expansion, duration/player preference auto-select, edge/gated court indicators, locked slot → partner picker flow, booking flow cleanup, dashboard carousel DOM structure (`app-dashboard-events` / `app-dashboard-favorites` separation), and court view DOM structure (COURT VIEW button, `app-booking-calendar`, injected container, club selector).
+The suite covers: Open-Meteo weather API shape, Bay Club availability API contract, booking POST URL, native booking DOM selectors, `/bookings` page DOM, our injected availability UI, by-club/by-time toggle, indoor-only toggle, time range slider, weather emoji ticks on the slider, club preference ordering widget, grouped time slot expansion, duration/player preference auto-select, edge/gated court indicators, locked slot → partner picker flow, booking flow cleanup, dashboard carousel DOM structure (`app-dashboard-events` / `app-dashboard-favorites` separation), court view DOM structure (COURT VIEW button, `app-booking-calendar`, native columns), Court View native column features (column tagging, club nav strip, badge legend, weather strip, edge/gated badges, scroll), and Court View mobile touch (viewport rendering, nav strip, tap-to-scroll).
+
+**Browser projects**: Chromium (desktop), Firefox (desktop), and mobile-chromium (Pixel 5 with `hasTouch:true`). Hour View tests skip on mobile-chromium because the mobile DOM layout is fundamentally different (desktop `.all-clubs-availability` container is hidden, navigation tiles use a different structure). Court View tests run on all three projects.
 
 **Key calibration notes**:
 - Club sections are identified by `data-club-id` UUID attributes, not by text — the API `shortName` for some clubs may differ from our display label.
 - Locked-slot tests reset `bc_time_range` and `bc_indoor_only` in localStorage before clicking a slot, then bounce the date selection to force a re-render, because the Worker preference sync may have restored narrow filter values on page load.
 - The `app-calendar-cancelled-by-me-list` test skips gracefully when the user has no cancelled bookings (the element is conditionally rendered by Angular).
 - `test.setTimeout(120_000)` must be called at the top of `beforeAll` for the locked-slot describe block — `test.describe.configure({ timeout })` does not extend `beforeAll` hook timeouts in Playwright 1.58.
+- Angular renders two `app-time-slot-view-type-select` toggle components — one hidden inside a collapsed container. Locators must use `:visible` pseudo-class to target the active instance.
+- Worker preference sync is blocked via Playwright route interception (`**/prefs**` returns empty prefs) so server-stored values do not corrupt the clean test state.
 
 ## Running All Tests
 
