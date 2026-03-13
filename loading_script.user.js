@@ -6456,12 +6456,13 @@
                     hoverSel + ' [data-bc-hover-highlight="last"]{box-shadow:' + LR + ',' + BOT + ';}' +
                     hoverSel + ' [data-bc-hover-highlight="only"]{box-shadow:' + LR + ',' + TOP + ',' + BOT + ';}' +
                     // While a straddle hover is active, suppress Angular's native hover
-                    // highlight on any slot we have NOT tagged — those are the slots above
-                    // the hovered slot that Angular fills upward to complete the duration.
-                    // Without this, Angular's 90-min upward fill and our downward extension
-                    // render simultaneously.
-                    hoverSel + '[data-bc-straddle-active] .booking-calendar-column-time-slot:not([data-bc-hover-highlight]):hover' +
-                        '{background:transparent !important;box-shadow:none !important;}';
+                    // tile.  Angular injects a child div.booking-calendar-add-tile into the
+                    // hovered slot — sized to the full booking duration — to produce the
+                    // upward/downward fill visual.  Hiding it when data-bc-straddle-active
+                    // is set lets our own highlight (data-bc-hover-highlight) take over
+                    // without Angular's tile rendering simultaneously.
+                    hoverSel + '[data-bc-straddle-active] .booking-calendar-add-tile' +
+                        '{display:none !important;}';
 
 
                 const style = document.createElement('style');
@@ -6494,7 +6495,7 @@
             //   fireAtFromMinutes — the last locked sub-slot's fromMinutes; used as the
             //                       fire-time reference so the Worker waits until the
             //                       entire duration is within the booking window.
-            function computeStraddleInfo(column, slotIndex, _slotDate, lastFetchState) {
+            function computeStraddleInfo(column, slotIndex, slotDate, lastFetchState) {
                 const rawTimeSlotId = lastFetchState && lastFetchState.params && lastFetchState.params.timeSlotId;
                 const clubId = column.getAttribute('data-bc-club-id');
                 const courtId = column.getAttribute('data-bc-court-id');
@@ -6535,21 +6536,27 @@
                 const fromMinutes = COURT_VIEW_GRID_START_MINUTES + slotIndex * 30;
 
                 // Walk the sub-slots AFTER slotIndex within the duration window.
-                // A sub-slot is "window-locked" if Angular marks it unavailable but no
-                // courtsheet event covers it — the server denied it solely because the
-                // booking window hasn't opened yet.
+                // A sub-slot is "window-locked" if Angular marks it unavailable, no
+                // courtsheet event covers it, AND its Pacific time is more than 3 days
+                // from now (meaning the booking window hasn't opened yet).  Slots that
+                // are unavailable but within the 3-day window (e.g. courts closed at
+                // 10pm) are not window-locked and must not be treated as straddle targets.
+                const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
                 let firstLockedIndex = -1;
                 let lastLockedIndex = -1;
                 for (let i = slotIndex + 1; i < slotIndex + durationSlots && i <= lastIndex; i++) {
                     const isUnavailable = allSlots[i].classList.contains(
                         'booking-calendar-column-time-slot-unavailable'
                     );
-                    if (isUnavailable && !bookedIndices.has(i)) {
+                    const slotFromMinutes = COURT_VIEW_GRID_START_MINUTES + i * 30;
+                    const isWindowLocked = isUnavailable && !bookedIndices.has(i) &&
+                        pacificSlotTimeMs(slotDate, slotFromMinutes) > Date.now() + THREE_DAYS_MS;
+                    if (isWindowLocked) {
                         // Window-locked — part of the straddle extension.
                         if (firstLockedIndex < 0) firstLockedIndex = i;
                         lastLockedIndex = i;
                     } else if (isUnavailable) {
-                        // Blocked by an event — stop extending; can't book through it.
+                        // Courts closed or blocked by an event — stop extending.
                         break;
                     }
                 }
@@ -6585,8 +6592,6 @@
                 });
             }
 
-            // Highlights a duration-length window of locked slots around the hovered
-            // slot, respecting already-booked events as hard boundaries.
             // Strategy: extend downward (later in time) first; if a booked slot blocks
             // the full duration, fill the shortfall by extending upward (earlier in
             // time) from the hover point; cap at the first booked slot in each direction
@@ -6935,9 +6940,7 @@
                     // Use capture phase so we intercept locked-slot clicks before
                     // Angular's bubble-phase listener on the slot element can fire.
                     cal.addEventListener('click', onCalendarSlotClick, true);
-                    // Capture phase so we run before Angular's slot-level mouseover
-                    // handlers.  In the straddle case we call stopPropagation() to
-                    // prevent Angular from applying its upward-fill hover highlight.
+                    // Cal-level capture for our own straddle highlighting logic.
                     cal.addEventListener('mouseover', onCalendarMouseOver, true);
                     cal.addEventListener('mouseleave', clearLockedSlotHover);
                 }
