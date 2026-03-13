@@ -32,6 +32,7 @@ const {
     buildFailedBookingRowHtml,
     buildCalendarDataForPendingBooking,
     isBookingRelevantToCurrentUser,
+    compareBookingsByReservationTime,
     formatPendingBookingDayLabel,
     SLOT_CHECK_STATUS,
 } = require('./loading_script.user.js');
@@ -389,6 +390,51 @@ describe('isBookingRelevantToCurrentUser', () => {
 
     it('matches partner email case-insensitively', () => {
         expect(isBookingRelevantToCurrentUser(booking, 'PARTNER1@EXAMPLE.COM')).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// compareBookingsByReservationTime
+// ---------------------------------------------------------------------------
+
+describe('compareBookingsByReservationTime', () => {
+    function makeBooking(date, timeFromInMinutes) {
+        return { bookingBody: { date: { value: date }, timeFromInMinutes } };
+    }
+
+    it('sorts earlier dates first', () => {
+        const bookings = [
+            makeBooking('2026-03-15', 600),
+            makeBooking('2026-03-13', 600),
+            makeBooking('2026-03-14', 600),
+        ];
+        bookings.sort(compareBookingsByReservationTime);
+        expect(bookings.map(b => b.bookingBody.date.value)).toEqual([
+            '2026-03-13', '2026-03-14', '2026-03-15',
+        ]);
+    });
+
+    it('sorts earlier times first within the same date', () => {
+        const bookings = [
+            makeBooking('2026-03-14', 900),
+            makeBooking('2026-03-14', 420),
+            makeBooking('2026-03-14', 660),
+        ];
+        bookings.sort(compareBookingsByReservationTime);
+        expect(bookings.map(b => b.bookingBody.timeFromInMinutes)).toEqual([420, 660, 900]);
+    });
+
+    it('handles bookings with missing bookingBody gracefully', () => {
+        const bookings = [
+            makeBooking('2026-03-15', 600),
+            { },
+            makeBooking('2026-03-13', 420),
+        ];
+        bookings.sort(compareBookingsByReservationTime);
+        // Missing bookingBody sorts to the front (empty string < any date string).
+        expect(bookings[0].bookingBody).toBeUndefined();
+        expect(bookings[1].bookingBody.date.value).toBe('2026-03-13');
+        expect(bookings[2].bookingBody.date.value).toBe('2026-03-15');
     });
 });
 

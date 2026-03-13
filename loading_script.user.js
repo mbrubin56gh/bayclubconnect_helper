@@ -2751,7 +2751,8 @@
                     STORAGE_KEYS.NOTIFICATION_EMAIL, '[bc] failed to read notification email for dashboard'
                 );
                 const relevantBookings = getScheduledBookingService().getActiveBookings()
-                    .filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+                    .filter(b => isBookingRelevantToCurrentUser(b, currentEmail))
+                    .sort(compareBookingsByReservationTime);
 
                 // Remove stale cards from anywhere in the document — the target
                 // carousel can shift between reconcile passes on Firefox mobile, so
@@ -2895,11 +2896,22 @@
                     booking.partnerEmails.some(e => e && e.toLowerCase() === normalizedCurrent);
             }
 
+            // Sorts bookings by reservation date and start time (earliest first).
+            function compareBookingsByReservationTime(a, b) {
+                const dateA = (a.bookingBody && a.bookingBody.date && a.bookingBody.date.value) || '';
+                const dateB = (b.bookingBody && b.bookingBody.date && b.bookingBody.date.value) || '';
+                if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+                const timeA = (a.bookingBody && a.bookingBody.timeFromInMinutes) || 0;
+                const timeB = (b.bookingBody && b.bookingBody.timeFromInMinutes) || 0;
+                return timeA - timeB;
+            }
+
             Object.assign(_bcTestExports, {
                 buildPendingBookingRowHtml,
                 buildFailedBookingRowHtml,
                 buildCalendarDataForPendingBooking,
                 isBookingRelevantToCurrentUser,
+                compareBookingsByReservationTime,
                 SLOT_CHECK_STATUS: getScheduledBookingService().SLOT_CHECK_STATUS,
             });
 
@@ -2909,8 +2921,12 @@
                 const currentEmail = getLocalStorageService().getString(STORAGE_KEYS.NOTIFICATION_EMAIL, '[bc] failed to read notification email');
                 const allActiveBookings = getScheduledBookingService().getActiveBookings();
                 const allFailedBookings = getScheduledBookingService().getFailedBookings();
-                const activeBookings = allActiveBookings.filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
-                const failedBookings = allFailedBookings.filter(b => isBookingRelevantToCurrentUser(b, currentEmail));
+                const activeBookings = allActiveBookings
+                    .filter(b => isBookingRelevantToCurrentUser(b, currentEmail))
+                    .sort(compareBookingsByReservationTime);
+                const failedBookings = allFailedBookings
+                    .filter(b => isBookingRelevantToCurrentUser(b, currentEmail))
+                    .sort(compareBookingsByReservationTime);
                 const existingSection = document.querySelector('[data-bc-pending-section]');
 
                 if (activeBookings.length === 0 && failedBookings.length === 0) {
