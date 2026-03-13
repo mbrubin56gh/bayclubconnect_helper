@@ -6249,6 +6249,24 @@
                             // click so its state machine advances and Next becomes enabled.
                             // The overlay just offers the user a choice; "Book now" only
                             // needs to override pendingSlotBooking and fix the bar label.
+
+                            // On mobile there is no preceding mouseover, so the straddle
+                            // highlight has not been applied yet.  Apply it now so the user
+                            // sees which slots are involved behind the semi-transparent
+                            // prompt overlay.
+                            if (!col.hasAttribute('data-bc-straddle-active')) {
+                                col.setAttribute('data-bc-straddle-active', '1');
+                                var blockFirst = slotIndex;
+                                var blockLast  = straddle.lastLockedIndex;
+                                for (var hi = blockFirst; hi <= blockLast; hi++) {
+                                    var pos = (hi === blockFirst && hi === blockLast) ? 'only'
+                                        : hi === blockFirst ? 'first'
+                                        : hi === blockLast  ? 'last'
+                                        : 'middle';
+                                    allSlots[hi].setAttribute('data-bc-hover-highlight', pos);
+                                }
+                            }
+
                             showStraddlePrompt(slot, col, slotIndex, straddle, slotDate, lastFetchState);
                             return;
                         }
@@ -6350,13 +6368,16 @@
                 const btnCancel = document.createElement('button');
                 btnCancel.style.cssText = [
                     'display:block;width:100%;padding:8px 12px;',
-                    'background:transparent;border:1px solid rgba(255,255,255,0.15);',
-                    'border-radius:6px;color:rgba(232,237,240,0.5);font-size:12px;cursor:pointer;',
+                    'background:transparent;border:1px solid rgba(255,255,255,0.45);',
+                    'border-radius:6px;color:#e8edf0;font-size:12px;cursor:pointer;',
                 ].join('');
                 btnCancel.textContent = 'Cancel';
 
                 function dismiss() {
                     overlay.remove();
+                    // Clean up straddle highlight attributes that were applied by
+                    // the click handler (mobile path) or the hover handler (desktop).
+                    clearLockedSlotHover();
                 }
 
                 btnBook.addEventListener('click', function () {
