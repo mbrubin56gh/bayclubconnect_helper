@@ -42,11 +42,15 @@ The instructions are essentially the same as for Chrome:
 4. That should be all you need. Navigate to the [Bay Club connect homepage](bayclubconnect.com) and log in.
 5. It seems that the mobile Bay Club application is just a thin wrapper around their website. So instead of using the native app on Android, you can add a home screen shortcut to launching [bayclubconnect.com](bayclubconnect.com) via Firefox: in your Android Firefox, click on the three vertical dots in the top right, expand the "... More" section, and find the entry to "Add to Home screen". You can use that shortcut instead of the native app with no real loss of previous functionality, and you get the extension!
 
+---
+
 ### Usage
 
 - Install the extension.
 - Log in to your account at [bayclubconnect.com](bayclubconnect.com).
 - Navigate to the court booking page as normal, and you will see the Bay Club's web app UI augmented with extra helpers. They are discussed below, but it should feel pretty natural to use.
+
+---
 
 ## Features
 
@@ -105,3 +109,56 @@ The `/bookings` page gets a **Pending Bookings** section showing each scheduled 
 Scheduled bookings appear as cards on the home dashboard alongside your confirmed bookings, so you can see everything at a glance.
 
 ![Dashboard with pending booking cards](screenshots/dashboard.png)
+
+---
+
+## Developer Information
+
+### How it works
+
+**XHR interception** — The script patches `XMLHttpRequest.prototype.open` and `send` to intercept the native availability and court-booking requests before Angular reads them. When the native app fires a single availability request for the home club, the helper fires four parallel requests (one per club), merges the results, and delivers the combined payload back to Angular — which renders it as if the server sent it all at once.
+
+**Angular state machine navigation** — Angular's booking flow is a state machine that requires real user clicks to advance. The helper secretly clicks a native Angular slot when you select one of the injected cards, advancing Angular's state. The outgoing booking POST is then rewritten with the correct club, court, time, and partners.
+
+**Court View merging** — The same XHR interception pattern is applied to the two courtsheet endpoints Angular uses for Court View. All four clubs' court columns are merged into the response Angular renders, so every court appears natively as a real interactive column.
+
+**Cloudflare Worker backend** — Scheduled bookings are persisted to a Cloudflare Worker (KV storage). A cron job fires every minute, picks up bookings whose window has opened, executes the two-step Bay Club booking API, and sends an email notification to you and your partners via Resend — regardless of whether your browser tab is open.
+
+
+### Backend
+
+The Cloudflare Worker handles:
+
+- **Storing** scheduled bookings in KV storage
+- **Firing** the Bay Club two-step booking API at the right moment (cron every minute)
+- **Storing** refresh tokens per user so the Worker can authenticate without a browser session
+- **Syncing** user preferences (club order, time range, view mode, etc.) across devices
+- **Emailing** success/failure notifications via Resend
+
+
+### Userscript tests
+
+```bash
+npm run test:script   # Vitest suite covering pure utility functions
+```
+
+### Worker tests
+
+```bash
+cd cloudflare-worker && npm test
+```
+
+### End-to-end canary tests
+
+```bash
+cd canary-tests && npm test              # headless
+cd canary-tests && npm test -- --headed  # watch the browser
+```
+
+Canary tests run against the live site with the userscript injected and serve as both a regression guard and a canary for Bay Club DOM/API changes. Requires a `.env` file with `BC_EMAIL` and `BC_PASSWORD`.
+
+### Deploy the Worker
+
+```bash
+cd cloudflare-worker && wrangler deploy
+```
