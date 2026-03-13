@@ -6072,6 +6072,30 @@
         return function getNativeCourtColumnsService() {
             if (serviceInstance) return serviceInstance;
 
+            // On Firefox Android, Angular's slide animation creates two
+            // app-court-time-slot-select elements (and therefore two
+            // app-booking-calendar elements).  The old view stays permanently at
+            // translateX(590px) off-screen; the visible one has no transform.
+            // querySelector returns the first (off-screen) one, so we need to
+            // select the on-screen calendar explicitly.
+            function findVisibleCalendar() {
+                var all = document.querySelectorAll('app-booking-calendar');
+                if (all.length <= 1) return all[0] || null;
+                // Return the one without a transformed ancestor.
+                for (var i = 0; i < all.length; i++) {
+                    var hasTransform = false;
+                    var a = all[i].parentElement;
+                    while (a && a !== document.body) {
+                        var t = getComputedStyle(a).transform;
+                        if (t && t !== 'none') { hasTransform = true; break; }
+                        a = a.parentElement;
+                    }
+                    if (!hasTransform) return all[i];
+                }
+                // Fallback: return the first one.
+                return all[0];
+            }
+
             // Expands abbreviated Court View court names to their canonical form so
             // badge lookup tables (which use full names) match correctly.
             // Angular renders "PB1" for Santa Clara and bare "1" for Redwood Shores
@@ -6092,7 +6116,6 @@
             function tagColumns() {
                 const courtsOrder = getBookingStateService().getMergedCourtsOrder();
                 if (!courtsOrder || courtsOrder.length === 0) return;
-                const columns = document.querySelectorAll('app-booking-calendar-column');
 
                 // Derive pod conflicts once per tag pass so we don't repeat the work
                 // per column.  Returns {} when no pod members are configured.
@@ -6101,56 +6124,56 @@
                     ? computePodConflicts(lastFetchState.params.date, lastFetchState)
                     : {};
 
-                columns.forEach((col, i) => {
-                    if (i >= courtsOrder.length) return;
-                    const clubId = courtsOrder[i].clubId;
-                    // Prefer the court name Angular has already rendered into the DOM;
-                    // the availability API courts often lack human-readable names.
-                    const courtName = (
-                        col.querySelector('div.court-name')?.textContent?.trim() ||
-                        courtsOrder[i].courtName || ''
-                    );
-                    col.setAttribute('data-bc-club-id', clubId);
-                    col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
-
-                    // Build the E/G/H badge string for this court and stamp it so CSS
-                    // can append it to the court name via ::after without touching the DOM.
-                    // Court View renders abbreviated names ("PB1", "2"), so normalize
-                    // before checking the lookup tables which use full names ("Pickleball 1").
-                    const canonicalName = normalizeCourtViewName(courtName);
-                    const badges = [];
-                    if (isCourtGated(canonicalName, clubId))      badges.push('G');
-                    if (isCourtEdge(canonicalName, clubId))       badges.push('E');
-                    if (courtHasHittingWall(canonicalName, clubId)) badges.push('H');
-                    // Stamp data-bc-badges on div.court-name itself so CSS attr() in
-                    // the ::after pseudo-element can read it — attr() resolves on the
-                    // element the pseudo-element belongs to, not on an ancestor.
-                    const courtNameEl = col.querySelector('div.court-name');
-                    if (courtNameEl) {
-                        if (badges.length > 0) {
-                            courtNameEl.setAttribute('data-bc-badges', badges.join(' '));
-                        } else {
-                            courtNameEl.removeAttribute('data-bc-badges');
-                        }
-                    }
-                    // Also stamp on the column element for CSS selectors (pod conflict, etc.).
-                    if (badges.length > 0) {
-                        col.setAttribute('data-bc-badges', badges.join(' '));
-                    } else {
-                        col.removeAttribute('data-bc-badges');
-                    }
-
-                    if (podConflicts[clubId]) {
-                        col.setAttribute('data-bc-pod-conflict', podConflicts[clubId].type);
-                    } else {
-                        col.removeAttribute('data-bc-pod-conflict');
-                    }
+                // On Firefox Android, Angular keeps two app-booking-calendar elements
+                // (one off-screen at translateX(590px), one visible).  Both contain
+                // columns that need tagging so CSS attribute selectors (color bands,
+                // badges) apply to whichever copy is rendered.  Tag each calendar's
+                // columns independently using per-calendar indexing.
+                document.querySelectorAll('app-booking-calendar').forEach(cal => {
+                    const columns = cal.querySelectorAll('app-booking-calendar-column');
+                    columns.forEach((col, i) => {
+                        if (i >= courtsOrder.length) return;
+                        tagOneColumn(col, i, courtsOrder, podConflicts);
+                    });
                 });
-                // Inject the weather strip after columns are tagged so the fetch date
-                // is available.  Removes and re-creates on every call so date changes
-                // get a fresh strip.
+
                 injectWeatherStrip();
                 injectClubNavStrip();
+            }
+
+            function tagOneColumn(col, i, courtsOrder, podConflicts) {
+                const clubId = courtsOrder[i].clubId;
+                const courtName = (
+                    col.querySelector('div.court-name')?.textContent?.trim() ||
+                    courtsOrder[i].courtName || ''
+                );
+                col.setAttribute('data-bc-club-id', clubId);
+                col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
+
+                const canonicalName = normalizeCourtViewName(courtName);
+                const badges = [];
+                if (isCourtGated(canonicalName, clubId))      badges.push('G');
+                if (isCourtEdge(canonicalName, clubId))       badges.push('E');
+                if (courtHasHittingWall(canonicalName, clubId)) badges.push('H');
+                const courtNameEl = col.querySelector('div.court-name');
+                if (courtNameEl) {
+                    if (badges.length > 0) {
+                        courtNameEl.setAttribute('data-bc-badges', badges.join(' '));
+                    } else {
+                        courtNameEl.removeAttribute('data-bc-badges');
+                    }
+                }
+                if (badges.length > 0) {
+                    col.setAttribute('data-bc-badges', badges.join(' '));
+                } else {
+                    col.removeAttribute('data-bc-badges');
+                }
+
+                if (podConflicts[clubId]) {
+                    col.setAttribute('data-bc-pod-conflict', podConflicts[clubId].type);
+                } else {
+                    col.removeAttribute('data-bc-pod-conflict');
+                }
             }
 
             // When a non-home-club native slot is clicked, Angular's bottom bar will render
@@ -6811,25 +6834,56 @@
                         'background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.8);',
                     ].join('');
                     btn.addEventListener('click', function () {
-                        // Angular uses a separate div.floating-scroll element as the actual
-                        // scrollbar driver — it listens for scroll events on that element and
-                        // mirrors its scrollLeft to the content columns.  Setting scrollLeft
-                        // directly on the content (.booking-calendar-columns-floating-scroll)
-                        // bypasses Angular's sync, so the scrollbar position doesn't update.
-                        // The fix: scroll the floating-scroll element, which Angular already
-                        // watches.  Use getBoundingClientRect on the content element (which
-                        // reflects the current scroll state) to compute the target offset.
-                        const floatingScroll = document.querySelector('.floating-scroll');
-                        const contentEl = document.querySelector('.booking-calendar-columns-floating-scroll');
-                        const firstCol = document.querySelector(
+                        // On Firefox Android, Angular keeps two app-booking-calendar
+                        // elements: one off-screen (tagged columns) and one visible
+                        // (untagged).  Find the target column index from the tagged
+                        // copy, then locate the same-index column in the visible copy.
+                        var taggedCol = document.querySelector(
                             'app-booking-calendar-column[data-bc-club-id="' + clubId + '"]'
                         );
-                        if (!floatingScroll || !contentEl || !firstCol) return;
-                        const contentRect = contentEl.getBoundingClientRect();
-                        const colRect = firstCol.getBoundingClientRect();
-                        floatingScroll.scrollLeft = floatingScroll.scrollLeft + colRect.left - contentRect.left;
-                        // Remove focus so the button does not retain :focus styling and so
-                        // scroll/keyboard events return to the document rather than the button.
+                        if (!taggedCol) return;
+                        // Determine this column's index among all columns in its calendar.
+                        var taggedCal = taggedCol.closest('app-booking-calendar');
+                        var taggedCols = taggedCal
+                            ? taggedCal.querySelectorAll('app-booking-calendar-column')
+                            : [];
+                        var colIndex = -1;
+                        for (var ci = 0; ci < taggedCols.length; ci++) {
+                            if (taggedCols[ci] === taggedCol) { colIndex = ci; break; }
+                        }
+                        if (colIndex < 0) return;
+                        // Find the corresponding column in the visible calendar.
+                        var visCal = findVisibleCalendar();
+                        if (!visCal) return;
+                        var visCols = visCal.querySelectorAll('app-booking-calendar-column');
+                        var firstCol = visCols[colIndex] || null;
+                        if (!firstCol) return;
+                        // Find the scrollable container.  On desktop Angular uses a
+                        // separate div.floating-scroll as the scrollbar driver.  On
+                        // mobile it may not exist; walk up from the column to find the
+                        // nearest horizontally scrollable ancestor.
+                        var floatingScroll = document.querySelector('.floating-scroll');
+                        var contentEl = visCal.querySelector('.booking-calendar-columns-floating-scroll');
+                        var scrollTarget = null;
+                        if (floatingScroll) {
+                            scrollTarget = floatingScroll;
+                        } else if (contentEl && contentEl.scrollWidth > contentEl.clientWidth) {
+                            scrollTarget = contentEl;
+                        } else {
+                            var el = firstCol.parentElement;
+                            while (el && el !== document.body) {
+                                if (el.scrollWidth > el.clientWidth) {
+                                    scrollTarget = el;
+                                    break;
+                                }
+                                el = el.parentElement;
+                            }
+                        }
+                        if (!scrollTarget) return;
+                        var containerRect = scrollTarget.getBoundingClientRect();
+                        var colRect = firstCol.getBoundingClientRect();
+                        var scrollDelta = colRect.left - containerRect.left;
+                        scrollTarget.scrollLeft = scrollTarget.scrollLeft + scrollDelta;
                         btn.blur();
                     });
                     strip.appendChild(btn);
@@ -6850,7 +6904,7 @@
                     '<span style="color:rgba(255,210,80,0.95);font-weight:700;">H</span> Hitting wall';
                 strip.appendChild(inlineLegend);
 
-                const cal = document.querySelector('app-booking-calendar');
+                const cal = findVisibleCalendar();
                 const parent = cal && cal.parentNode;
                 if (parent) {
                     parent.insertBefore(strip, cal);
@@ -6875,7 +6929,7 @@
                 const STRIP_WIDTH = 20; // Pixels wide for the emoji column.
                 const SLOT_HEIGHT = 64; // Angular renders each 30-minute slot at 64px.
 
-                const cal = document.querySelector('app-booking-calendar');
+                const cal = findVisibleCalendar();
                 if (!cal) return;
                 const date = getBookingStateService().getLastFetchState()?.params?.date;
                 if (!date) return;
@@ -6965,7 +7019,7 @@
             let columnObserver = null;
             let calendarClickTarget = null;
             function install() {
-                const cal = document.querySelector('app-booking-calendar');
+                const cal = findVisibleCalendar();
                 if (!cal) return;
                 if (cal.getAttribute(getBookingDomQueryService().NATIVE_HIDDEN_ATTR)) {
                     cal.style.display = '';
