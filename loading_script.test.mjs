@@ -638,6 +638,11 @@ describe('gatherAlternativeSlots', () => {
         return { Morning: clubs, Afternoon: [], Evening: [] };
     }
 
+    // Helper to build a court object with a name for classifyCourtType.
+    function court(id, name) {
+        return { courtId: id, courtName: name || id };
+    }
+
     it('returns nearby times at the same club within ±2 hours', () => {
         const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
         const lastFetchState = {
@@ -646,10 +651,10 @@ describe('gatherAlternativeSlots', () => {
                     clubId: primaryClubId,
                     shortName: 'Broadway',
                     availabilities: [
-                        { fromInMinutes: 420, toInMinutes: 510, fromHumanTime: '7:00 AM', toHumanTime: '8:30 AM', courts: [{ courtId: 'c1' }] },
-                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c2' }] },
-                        { fromInMinutes: 540, toInMinutes: 630, fromHumanTime: '9:00 AM', toHumanTime: '10:30 AM', courts: [{ courtId: 'c3' }] },
-                        { fromInMinutes: 720, toInMinutes: 810, fromHumanTime: '12:00 PM', toHumanTime: '1:30 PM', courts: [{ courtId: 'c4' }] },
+                        { fromInMinutes: 420, toInMinutes: 510, fromHumanTime: '7:00 AM', toHumanTime: '8:30 AM', courts: [court('c1', 'PB 1')] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('c2', 'PB 2')] },
+                        { fromInMinutes: 540, toInMinutes: 630, fromHumanTime: '9:00 AM', toHumanTime: '10:30 AM', courts: [court('c3', 'PB 3')] },
+                        { fromInMinutes: 720, toInMinutes: 810, fromHumanTime: '12:00 PM', toHumanTime: '1:30 PM', courts: [court('c4', 'PB 4')] },
                     ],
                 },
             ]),
@@ -673,14 +678,14 @@ describe('gatherAlternativeSlots', () => {
                     clubId: primaryClubId,
                     shortName: 'Broadway',
                     availabilities: [
-                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c1' }] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('c1', 'PB 1')] },
                     ],
                 },
                 {
                     clubId: CLUBS.southSF,
                     shortName: 'South SF',
                     availabilities: [
-                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 's1' }, { courtId: 's2' }] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('s1', 'PB 1'), court('s2', 'PB 2')] },
                     ],
                 },
             ]),
@@ -702,7 +707,7 @@ describe('gatherAlternativeSlots', () => {
                     clubId: primaryClubId,
                     shortName: 'Broadway',
                     availabilities: [
-                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c1' }] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('c1', 'PB 1')] },
                     ],
                 },
             ]),
@@ -729,10 +734,10 @@ describe('gatherAlternativeSlots', () => {
                     clubId: primaryClubId,
                     shortName: 'Broadway',
                     availabilities: [
-                        { fromInMinutes: 360, toInMinutes: 450, fromHumanTime: '6:00 AM', toHumanTime: '7:30 AM', courts: [{ courtId: 'c1' }] },
-                        { fromInMinutes: 450, toInMinutes: 540, fromHumanTime: '7:30 AM', toHumanTime: '9:00 AM', courts: [{ courtId: 'c2' }] },
-                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c3' }] },
-                        { fromInMinutes: 510, toInMinutes: 600, fromHumanTime: '8:30 AM', toHumanTime: '10:00 AM', courts: [{ courtId: 'c4' }] },
+                        { fromInMinutes: 360, toInMinutes: 450, fromHumanTime: '6:00 AM', toHumanTime: '7:30 AM', courts: [court('c1', 'PB 1')] },
+                        { fromInMinutes: 450, toInMinutes: 540, fromHumanTime: '7:30 AM', toHumanTime: '9:00 AM', courts: [court('c2', 'PB 2')] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('c3', 'PB 3')] },
+                        { fromInMinutes: 510, toInMinutes: 600, fromHumanTime: '8:30 AM', toHumanTime: '10:00 AM', courts: [court('c4', 'PB 4')] },
                     ],
                 },
             ]),
@@ -745,5 +750,56 @@ describe('gatherAlternativeSlots', () => {
         expect(altTimes[0].fromMinutes).toBe(450); // 30 min
         expect(altTimes[1].fromMinutes).toBe(510); // 30 min
         expect(altTimes[2].fromMinutes).toBe(360); // 120 min
+    });
+
+    it('respects custom rangeMinutes parameter', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: primaryClubId,
+                    shortName: 'Broadway',
+                    availabilities: [
+                        { fromInMinutes: 420, toInMinutes: 510, fromHumanTime: '7:00 AM', toHumanTime: '8:30 AM', courts: [court('c1', 'PB 1')] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [court('c2', 'PB 2')] },
+                        { fromInMinutes: 540, toInMinutes: 630, fromHumanTime: '9:00 AM', toHumanTime: '10:30 AM', courts: [court('c3', 'PB 3')] },
+                    ],
+                },
+            ]),
+        };
+
+        // With range of 30, only 30 minutes away slots should be included.
+        // 7:00 AM is 60 min away, 9:00 AM is 60 min away — both outside range.
+        const { altTimes: narrow } = gatherAlternativeSlots(slotInfo, lastFetchState, 30);
+        expect(narrow.length).toBe(0);
+
+        // With range of 60, both should be included.
+        const { altTimes: wide } = gatherAlternativeSlots(slotInfo, lastFetchState, 60);
+        expect(wide.length).toBe(2);
+    });
+
+    it('annotates courts with type badges', () => {
+        const slotInfo = { clubId: CLUBS.santaClara, fromMinutes: 480, toMinutes: 540, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: CLUBS.santaClara,
+                    shortName: 'Santa Clara',
+                    availabilities: [
+                        { fromInMinutes: 480, toInMinutes: 540, fromHumanTime: '8:00 AM', toHumanTime: '9:00 AM', courts: [court('c1', 'Pickleball 1')] },
+                        {
+                            fromInMinutes: 540, toInMinutes: 600, fromHumanTime: '9:00 AM', toHumanTime: '10:00 AM',
+                            courts: [court('c1', 'Pickleball 1'), court('c5', 'Pickleball 5')],
+                        },
+                    ],
+                },
+            ]),
+        };
+
+        const { altTimes } = gatherAlternativeSlots(slotInfo, lastFetchState);
+        expect(altTimes.length).toBe(1);
+        // Pickleball 1 at Santa Clara is gated; Pickleball 5 is edge.
+        expect(altTimes[0].courts[0].courtType).toBe('gated');
+        expect(altTimes[0].courts[1].courtType).toBe('edge');
     });
 });

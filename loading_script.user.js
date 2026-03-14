@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.14
+// @version      1.15
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1971,6 +1971,23 @@
                 );
                 const partnerEmails = selectedPartners.map(p => emailByPersonId.get(String(p.personId))).filter(Boolean);
 
+                // When the user picks a "book now" slot from the flexibility screen,
+                // courtId is null — pick the best available court (gated > edge > standard)
+                // as the primary, with the rest as fallbacks.
+                let effectiveCourtId = slotInfo.courtId;
+                let effectiveCourtName = slotInfo.courtName;
+                let effectiveAllCourts = slotInfo.allCourts || [];
+                if (!effectiveCourtId && effectiveAllCourts.length > 0) {
+                    const sorted = effectiveAllCourts.slice().sort((a, b) => {
+                        const typeOrder = { gated: 0, hitting_wall: 1, edge: 2, standard: 3 };
+                        const aType = classifyCourtType(slotInfo.clubId, a.courtName);
+                        const bType = classifyCourtType(slotInfo.clubId, b.courtName);
+                        return (typeOrder[aType] || 3) - (typeOrder[bType] || 3);
+                    });
+                    effectiveCourtId = sorted[0].courtId;
+                    effectiveCourtName = sorted[0].courtName;
+                }
+
                 const booking = {
                     id: crypto.randomUUID(),
                     // For straddling bookings (start is available, end is locked), fire
@@ -1979,7 +1996,7 @@
                     fireAtMs: computeFireAtMs(slotInfo.date, slotInfo.fireAtFromMinutes || slotInfo.fromMinutes),
                     bookingBody: {
                         clubId: slotInfo.clubId,
-                        courtId: slotInfo.courtId,
+                        courtId: effectiveCourtId,
                         date: { value: slotInfo.date, date: slotInfo.date },
                         timeFromInMinutes: slotInfo.fromMinutes,
                         timeToInMinutes: slotInfo.toMinutes,
@@ -1991,36 +2008,22 @@
                         invitations: selectedPartners.map(p => ({ personId: p.personId })),
                         isVisibleToBuddies: isVisibleToBuddies !== false,
                     },
-                    slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${slotInfo.courtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
+                    slotLabel: `${CLUB_SHORT_NAMES[slotInfo.clubId] || 'Unknown'} \u00b7 ${effectiveCourtName || 'Court'} \u00b7 ${minutesToHumanTime(slotInfo.fromMinutes)}\u2013${minutesToHumanTime(slotInfo.toMinutes)} \u00b7 ${formatDateForSlotLabel(slotInfo.date)}`,
                     // The original court name is stored separately so the Worker can mention
                     // it in the email if a fallback court is used instead.
-                    originalCourtName: slotInfo.courtName || null,
+                    originalCourtName: effectiveCourtName || null,
                     // Court type of the primary court so the Worker's availability
                     // check can prefer same-type fallbacks when auto-switching.
-                    primaryCourtType: classifyCourtType(slotInfo.clubId, slotInfo.courtName),
-                    // Courts sorted by preference, excluding the primary.  When the user
-                    // has expressed a court type preference via the flexibility screen, sort
-                    // by that preference first; otherwise fall back to the default gated >
-                    // edge > standard ordering.
-                    fallbackCourts: (() => {
-                        const courtTypePref = slotInfo.flexibilityPrefs && slotInfo.flexibilityPrefs.courtTypePref;
-                        const tagged = (slotInfo.allCourts || [])
-                            .filter(c => c.courtId !== slotInfo.courtId)
-                            .map(c => ({
-                                courtId: c.courtId,
-                                courtName: c.courtName || null,
-                                courtType: classifyCourtType(slotInfo.clubId, c.courtName),
-                            }));
-                        if (courtTypePref && courtTypePref !== 'any') {
-                            // Preferred type first, then the rest in existing order.
-                            tagged.sort((a, b) => {
-                                const aMatch = a.courtType === courtTypePref ? 0 : 1;
-                                const bMatch = b.courtType === courtTypePref ? 0 : 1;
-                                return aMatch - bMatch;
-                            });
-                        }
-                        return tagged;
-                    })(),
+                    primaryCourtType: classifyCourtType(slotInfo.clubId, effectiveCourtName),
+                    // Courts sorted by preference (gated > edge > standard), excluding
+                    // the primary.  The Worker tries them in order if the primary POST fails.
+                    fallbackCourts: effectiveAllCourts
+                        .filter(c => c.courtId !== effectiveCourtId)
+                        .map(c => ({
+                            courtId: c.courtId,
+                            courtName: c.courtName || null,
+                            courtType: classifyCourtType(slotInfo.clubId, c.courtName),
+                        })),
                     // User-selected alternative time/club slots from the flexibility screen.
                     // The Worker tries these (in order) if the primary slot and all fallback
                     // courts are taken at fire time.
@@ -3803,11 +3806,16 @@
     // determine whether an alternative slot is locked (beyond the window).
     const BOOKING_WINDOW_DAYS = 3;
 
+    // Default time range (in minutes) for nearby-time alternatives.
+    const DEFAULT_ALT_RANGE_MINUTES = 120;
+
     // Gathers alternative time slots and clubs from the last fetched
     // availability data.  Returns { altTimes, altClubs } where each entry
     // has enough information to render a selectable card on the flexibility
-    // screen and to reconstruct a booking body later.
-    function gatherAlternativeSlots(slotInfo, lastFetchState) {
+    // screen and to reconstruct a booking body later.  rangeMinutes controls
+    // how far from the primary slot to look for nearby times (default ±2 hours).
+    function gatherAlternativeSlots(slotInfo, lastFetchState, rangeMinutes) {
+        const range = (rangeMinutes != null) ? rangeMinutes : DEFAULT_ALT_RANGE_MINUTES;
         const altTimes = [];
         const altClubs = [];
         const transformed = lastFetchState && lastFetchState.transformed;
@@ -3829,6 +3837,13 @@
                     const slotMs = pacificSlotTimeMs(slotInfo.date, slot.fromInMinutes);
                     const isLocked = (slotMs - now) > windowMs;
 
+                    // Annotate each court with its type badge for display.
+                    const courtsWithType = slot.courts.map(c => ({
+                        courtId: c.courtId,
+                        courtName: c.courtName,
+                        courtType: classifyCourtType(clubEntry.clubId, c.courtName),
+                    }));
+
                     const entry = {
                         clubId: clubEntry.clubId,
                         clubName: CLUB_SHORT_NAMES[clubEntry.clubId] || clubEntry.shortName,
@@ -3837,14 +3852,14 @@
                         fromTime: slot.fromHumanTime,
                         toTime: slot.toHumanTime,
                         courtCount: slot.courts.length,
-                        courts: slot.courts,
+                        courts: courtsWithType,
                         locked: isLocked,
                     };
 
                     if (isSameClub) {
-                        // Nearby times at the same club (within ±2 hours).
+                        // Nearby times at the same club within the configured range.
                         const timeDiff = Math.abs(slot.fromInMinutes - slotInfo.fromMinutes);
-                        if (timeDiff <= 120) {
+                        if (timeDiff <= range) {
                             altTimes.push(entry);
                         }
                     } else if (isSameTime) {
@@ -4553,10 +4568,71 @@
 
             // Builds the HTML for the flexibility preferences screen shown between
             // locked-slot selection and the partner picker.
+            // Formats a court list as a comma-separated string with type badges.
+            function formatCourtList(courts) {
+                return courts.map(c => {
+                    const badge = c.courtType === 'gated' ? ' [G]'
+                        : c.courtType === 'edge' ? ' [E]'
+                        : c.courtType === 'hitting_wall' ? ' [H]'
+                        : '';
+                    return (c.courtName || c.courtId) + badge;
+                }).join(', ');
+            }
+
+            // Builds an HTML card for a single alternative slot.  mode is
+            // 'radio' (book-now section) or 'checkbox' (schedule section).
+            function buildAltSlotCardHtml(alt, mode, isClubCard) {
+                const inputHtml = mode === 'radio'
+                    ? `<input type="radio" name="bc-flex-book-now" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`
+                    : `<input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`;
+                const clubColor = CLUB_COLUMN_COLORS[alt.clubId] || '#aaa';
+                const titleHtml = isClubCard
+                    ? `<span style="color: ${clubColor}; font-weight: 500;">${alt.clubName}</span>`
+                    : `${alt.fromTime}\u2013${alt.toTime}`;
+                const courtListStr = formatCourtList(alt.courts);
+                return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
+                    data-club-name="${alt.clubName || ''}"
+                    data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
+                    data-locked="${alt.locked ? '1' : '0'}"
+                    data-from-time="${alt.fromTime}" data-to-time="${alt.toTime}"
+                    style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                    background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
+                    border: 1px solid transparent; transition: all 0.15s;">
+                    ${inputHtml}
+                    <div style="flex: 1;">
+                        <div style="font-size: 13px; color: white;">${titleHtml}</div>
+                        <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${courtListStr}</div>
+                    </div>
+                </label>`;
+            }
+
+            // Builds an HTML card for the selected-backups priority list with a
+            // drag handle and a numbered position indicator.
+            function buildPriorityCardHtml(alt, index) {
+                const clubColor = CLUB_COLUMN_COLORS[alt.clubId] || '#aaa';
+                const clubLabel = `<span style="color: ${clubColor}; font-weight: 500;">${alt.clubName}</span>`;
+                const timeLabel = `${alt.fromTime}\u2013${alt.toTime}`;
+                return `<div data-bc-flex-priority-item draggable="true"
+                    data-club-id="${alt.clubId}" data-club-name="${alt.clubName || ''}"
+                    data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
+                    data-locked="${alt.locked ? '1' : '0'}"
+                    data-from-time="${alt.fromTime}" data-to-time="${alt.toTime}"
+                    style="display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+                    background: rgba(0,188,212,0.1); border: 1px solid rgba(0,188,212,0.4);
+                    border-radius: 8px; cursor: grab; user-select: none; transition: all 0.15s;">
+                    <span style="font-size: 16px; color: rgba(255,255,255,0.4); cursor: grab; touch-action: none;">\u2630</span>
+                    <span data-bc-flex-priority-num style="font-size: 12px; color: rgb(0,188,212); font-weight: 600; min-width: 18px;">${index + 1}.</span>
+                    <div style="flex: 1; font-size: 13px; color: white;">${clubLabel} ${timeLabel}</div>
+                    <button data-bc-flex-priority-remove style="background: none; border: none; color: rgba(255,255,255,0.4); font-size: 16px; cursor: pointer; padding: 0 4px;">\u00d7</button>
+                </div>`;
+            }
+
+            // Builds the flexibility screen HTML.  The screen is split into two
+            // sections: "Available now" (slots within the booking window, radio
+            // selection for immediate booking) and "Schedule as backup" (locked
+            // slots, checkboxes with drag-to-reorder priority list).
             function buildFlexibilityScreenHtml(slotInfo, lastFetchState) {
                 const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
-                const primaryCourtType = classifyCourtType(slotInfo.clubId, slotInfo.courtName);
-
                 const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
                 const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -4564,90 +4640,110 @@
                     ? `today at ${fireAtTimeLabel}`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-                // Court type preference pills.
-                const courtTypes = [
-                    { value: 'gated', label: 'Gated' },
-                    { value: 'edge', label: 'Edge' },
-                    { value: 'any', label: 'Any court' },
-                ];
-                const defaultPref = (primaryCourtType === 'gated' || primaryCourtType === 'edge')
-                    ? primaryCourtType : 'any';
-                const courtTypePillsHtml = courtTypes.map(ct => {
-                    const isActive = ct.value === defaultPref;
-                    return `<button data-bc-flex-court-type="${ct.value}" style="
-                        padding: 6px 14px; border-radius: 16px; border: 1px solid rgba(0,188,212,0.4);
-                        font-size: 13px; cursor: pointer; transition: all 0.15s;
-                        background: ${isActive ? 'rgb(0,188,212)' : 'transparent'};
-                        color: ${isActive ? '#1a2f3c' : 'rgba(255,255,255,0.7)'};
-                        font-weight: ${isActive ? '600' : '400'};
-                    ">${ct.label}</button>`;
-                }).join('');
+                // Split alternatives into available-now and locked.
+                const nowTimes = altTimes.filter(a => !a.locked);
+                const nowClubs = altClubs.filter(a => !a.locked);
+                const schedTimes = altTimes.filter(a => a.locked);
+                const schedClubs = altClubs.filter(a => a.locked);
 
-                // Alternative time slot cards.
-                let altTimesHtml = '';
-                if (altTimes.length > 0) {
-                    const cards = altTimes.map(alt => {
-                        const lockIcon = alt.locked ? ' \ud83d\uddd3' : '';
-                        return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
-                            data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
-                            data-locked="${alt.locked ? '1' : '0'}"
-                            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-                            background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
-                            border: 1px solid transparent; transition: all 0.15s;">
-                            <input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">
-                            <div style="flex: 1;">
-                                <div style="font-size: 13px; color: white;">${alt.fromTime}\u2013${alt.toTime}${lockIcon}</div>
-                                <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${alt.courtCount} court${alt.courtCount !== 1 ? 's' : ''} available</div>
-                            </div>
-                        </label>`;
-                    }).join('');
-                    altTimesHtml = `
-                        <div style="margin-bottom: 16px;">
-                            <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Nearby times at ${slotInfo.clubName}</div>
-                            <div style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                // "Available now" section — radio selection for immediate booking.
+                const hasNow = nowTimes.length > 0 || nowClubs.length > 0;
+                let nowSection = '';
+                if (hasNow) {
+                    let nowTimesHtml = '';
+                    if (nowTimes.length > 0) {
+                        const cards = nowTimes.map(a => buildAltSlotCardHtml(a, 'radio', false)).join('');
+                        nowTimesHtml = `<div style="margin-bottom: 10px;">
+                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
+                            <div data-bc-flex-now-times style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
-                }
-
-                // Alternative club cards.
-                let altClubsHtml = '';
-                if (altClubs.length > 0) {
-                    const cards = altClubs.map(alt => {
-                        const lockIcon = alt.locked ? ' \ud83d\uddd3' : '';
-                        const clubColor = CLUB_COLUMN_COLORS[alt.clubId] || '#aaa';
-                        return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
-                            data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
-                            data-locked="${alt.locked ? '1' : '0'}"
-                            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-                            background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
-                            border: 1px solid transparent; transition: all 0.15s;">
-                            <input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">
-                            <div style="flex: 1;">
-                                <div style="font-size: 13px; color: white;">
-                                    <span style="color: ${clubColor}; font-weight: 500;">${alt.clubName}</span>${lockIcon}
-                                </div>
-                                <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${alt.courtCount} court${alt.courtCount !== 1 ? 's' : ''} available</div>
-                            </div>
-                        </label>`;
-                    }).join('');
-                    altClubsHtml = `
-                        <div style="margin-bottom: 16px;">
-                            <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Same time at other clubs</div>
-                            <div style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                    }
+                    let nowClubsHtml = '';
+                    if (nowClubs.length > 0) {
+                        const cards = nowClubs.map(a => buildAltSlotCardHtml(a, 'radio', true)).join('');
+                        nowClubsHtml = `<div style="margin-bottom: 10px;">
+                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Same time at other clubs</div>
+                            <div data-bc-flex-now-clubs style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
-                }
-
-                // If there are no alternatives at all, show a simpler message.
-                const hasAlternatives = altTimes.length > 0 || altClubs.length > 0;
-                const alternativesSection = hasAlternatives
-                    ? `<div data-bc-flex-alternatives style="margin-bottom: 16px;">
-                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 12px;">Add backup slots</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 12px;">
-                            If your primary slot is taken when the window opens, the system will try these in order.
+                    }
+                    nowSection = `<div data-bc-flex-now-section style="margin-bottom: 20px;">
+                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 6px;">Book a different slot now</div>
+                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 10px;">
+                            These slots are open right now. Select one to book it immediately instead.
                         </div>
-                        ${altTimesHtml}
-                        ${altClubsHtml}
-                    </div>`
-                    : '';
+                        ${nowTimesHtml}${nowClubsHtml}
+                    </div>`;
+                }
+
+                // "Schedule as backup" section — checkboxes with priority reorder.
+                const hasSched = schedTimes.length > 0 || schedClubs.length > 0;
+                const fallbackCourtCount = (slotInfo.allCourts || [])
+                    .filter(c => c.courtId !== slotInfo.courtId).length;
+                let schedSection = '';
+                if (hasSched) {
+                    let schedTimesHtml = '';
+                    if (schedTimes.length > 0) {
+                        const cards = schedTimes.map(a => buildAltSlotCardHtml(a, 'checkbox', false)).join('');
+                        schedTimesHtml = `<div style="margin-bottom: 10px;">
+                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
+                            <div data-bc-flex-sched-times style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                        </div>`;
+                    }
+                    let schedClubsHtml = '';
+                    if (schedClubs.length > 0) {
+                        const cards = schedClubs.map(a => buildAltSlotCardHtml(a, 'checkbox', true)).join('');
+                        schedClubsHtml = `<div style="margin-bottom: 10px;">
+                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Same time at other clubs</div>
+                            <div data-bc-flex-sched-clubs style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                        </div>`;
+                    }
+
+                    const fallbackNote = fallbackCourtCount > 0
+                        ? `For each slot, the system tries all ${fallbackCourtCount + 1} courts \u2014 gated first, then edge, then any available.`
+                        : 'For each slot, the system tries gated courts first, then edge, then any available.';
+
+                    schedSection = `<div data-bc-flex-sched-section style="margin-bottom: 20px;">
+                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 6px;">Add backup slots</div>
+                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 10px;">
+                            If <em>every</em> court at ${slotInfo.clubName} ${slotInfo.fromTime}\u2013${slotInfo.toTime} is taken when the window opens, the system will try your backups in the order below. ${fallbackNote}
+                        </div>
+                        <div data-bc-flex-priority-list style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-height: 0;"></div>
+                        ${schedTimesHtml}${schedClubsHtml}
+                    </div>`;
+                }
+
+                // Time range stepper — lets the user widen or narrow the nearby-time window.
+                const defaultRange = DEFAULT_ALT_RANGE_MINUTES;
+                const primaryFrom = slotInfo.fromMinutes;
+                const rangeStartMin = Math.max(300, primaryFrom - defaultRange);
+                const rangeEndMin = Math.min(1380, primaryFrom + defaultRange);
+
+                function fmtMin(m) {
+                    const h = Math.floor(m / 60);
+                    const mm = m % 60;
+                    const suffix = h >= 12 ? 'PM' : 'AM';
+                    const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+                    return `${h12}:${String(mm).padStart(2, '0')} ${suffix}`;
+                }
+
+                const timeStepperHtml = (altTimes.length > 0 || altClubs.length > 0) ? `
+                    <div data-bc-flex-time-stepper style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
+                        <span style="font-size: 12px; color: rgba(255,255,255,0.5);">Show times from</span>
+                        <div style="display: inline-flex; align-items: center; background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden;">
+                            <button data-bc-flex-range-start-down style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
+                            <span data-bc-flex-range-start style="font-size: 13px; color: white; min-width: 70px; text-align: center;" data-minutes="${rangeStartMin}">${fmtMin(rangeStartMin)}</span>
+                            <button data-bc-flex-range-start-up style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
+                        </div>
+                        <span style="font-size: 12px; color: rgba(255,255,255,0.5);">to</span>
+                        <div style="display: inline-flex; align-items: center; background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden;">
+                            <button data-bc-flex-range-end-down style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
+                            <span data-bc-flex-range-end style="font-size: 13px; color: white; min-width: 70px; text-align: center;" data-minutes="${rangeEndMin}">${fmtMin(rangeEndMin)}</span>
+                            <button data-bc-flex-range-end-up style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
+                        </div>
+                    </div>` : '';
+
+                // Divider between sections when both are present.
+                const divider = (hasNow && hasSched) ? `<div style="border-top: 1px solid rgba(255,255,255,0.1); margin-bottom: 20px;"></div>` : '';
 
                 return `<div data-bc-flex-screen style="padding: 16px;">
                     <div style="display: flex; align-items: center; margin-bottom: 16px;">
@@ -4659,11 +4755,10 @@
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
                         <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
                     </div>
-                    <div style="margin-bottom: 16px;">
-                        <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Court preference</div>
-                        <div data-bc-flex-court-pref style="display: flex; gap: 8px; flex-wrap: wrap;">${courtTypePillsHtml}</div>
-                    </div>
-                    ${alternativesSection}
+                    ${timeStepperHtml}
+                    ${nowSection}
+                    ${divider}
+                    ${schedSection}
                     <div style="display: flex; justify-content: center; gap: 12px; align-items: center; margin-top: 20px;">
                         <button data-bc-flex-next style="background: rgb(0,188,212); color: #1a2f3c; border: none; border-radius: 4px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: pointer;">Next \u2192</button>
                         <button data-bc-flex-cancel style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 13px; cursor: pointer; text-decoration: underline;">Cancel</button>
@@ -4671,75 +4766,333 @@
                 </div>`;
             }
 
-            // Wires interactions on the flexibility screen: court type pills,
-            // alternative slot checkboxes, and navigation buttons.
-            function bindFlexibilityScreenInteractions(flexScreen, onNext, onBack) {
-                // Court type preference pill mutual exclusion.
-                const pillContainer = flexScreen.querySelector('[data-bc-flex-court-pref]');
-                if (pillContainer) {
-                    pillContainer.addEventListener('click', (e) => {
-                        const pill = e.target.closest('[data-bc-flex-court-type]');
-                        if (!pill) return;
-                        pillContainer.querySelectorAll('[data-bc-flex-court-type]').forEach(p => {
-                            p.style.background = 'transparent';
-                            p.style.color = 'rgba(255,255,255,0.7)';
-                            p.style.fontWeight = '400';
+            // Wires all interactions on the flexibility screen: radio selection
+            // for book-now slots, checkbox + drag-to-reorder for schedule backup
+            // slots, time range stepper, and navigation buttons.
+            function bindFlexibilityScreenInteractions(flexScreen, slotInfo, lastFetchState, onNext, onBookNow, onBack) {
+                const priorityList = flexScreen.querySelector('[data-bc-flex-priority-list]');
+                const nowSection = flexScreen.querySelector('[data-bc-flex-now-section]');
+                const schedSection = flexScreen.querySelector('[data-bc-flex-sched-section]');
+                const nextBtn = flexScreen.querySelector('[data-bc-flex-next]');
+
+                // -- Mutual exclusion: selecting a book-now radio disables schedule
+                //    section and changes Next to "Book now"; deselecting re-enables.
+                function updateSectionStates() {
+                    const selectedRadio = flexScreen.querySelector('[data-bc-flex-now-section] input[type="radio"]:checked');
+                    if (schedSection) {
+                        schedSection.style.opacity = selectedRadio ? '0.35' : '1';
+                        schedSection.style.pointerEvents = selectedRadio ? 'none' : '';
+                    }
+                    if (nextBtn) {
+                        nextBtn.textContent = selectedRadio ? 'Book now \u2192' : 'Next \u2192';
+                    }
+                }
+
+                // -- Book-now radio selection visual feedback.
+                if (nowSection) {
+                    nowSection.addEventListener('change', (e) => {
+                        if (e.target.type !== 'radio') return;
+                        // Highlight the selected card, unhighlight others.
+                        nowSection.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
+                            const radio = label.querySelector('input[type="radio"]');
+                            label.style.borderColor = (radio && radio.checked) ? 'rgba(0,188,212,0.6)' : 'transparent';
+                            label.style.background = (radio && radio.checked) ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
                         });
-                        pill.style.background = 'rgb(0,188,212)';
-                        pill.style.color = '#1a2f3c';
-                        pill.style.fontWeight = '600';
+                        updateSectionStates();
                     });
                 }
 
-                // Alternative slot checkbox visual feedback.
-                flexScreen.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
-                    const checkbox = label.querySelector('input[type="checkbox"]');
-                    if (checkbox) {
-                        checkbox.addEventListener('change', () => {
-                            label.style.borderColor = checkbox.checked
-                                ? 'rgba(0,188,212,0.6)' : 'transparent';
-                            label.style.background = checkbox.checked
-                                ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
+                // -- Schedule section: checkbox adds/removes from priority list.
+                function updatePriorityNumbering() {
+                    if (!priorityList) return;
+                    priorityList.querySelectorAll('[data-bc-flex-priority-item]').forEach((el, i) => {
+                        const numEl = el.querySelector('[data-bc-flex-priority-num]');
+                        if (numEl) numEl.textContent = `${i + 1}.`;
+                    });
+                }
+
+                function addToPriorityList(label) {
+                    if (!priorityList) return;
+                    const alt = {
+                        clubId: label.getAttribute('data-club-id'),
+                        clubName: label.getAttribute('data-club-name'),
+                        fromMinutes: parseInt(label.getAttribute('data-from-minutes'), 10),
+                        toMinutes: parseInt(label.getAttribute('data-to-minutes'), 10),
+                        locked: label.getAttribute('data-locked') === '1',
+                        fromTime: label.getAttribute('data-from-time'),
+                        toTime: label.getAttribute('data-to-time'),
+                    };
+                    const count = priorityList.querySelectorAll('[data-bc-flex-priority-item]').length;
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = buildPriorityCardHtml(alt, count);
+                    const card = wrapper.firstElementChild;
+                    priorityList.appendChild(card);
+
+                    // Remove button unchecks the source checkbox and removes from list.
+                    card.querySelector('[data-bc-flex-priority-remove]')?.addEventListener('click', () => {
+                        card.remove();
+                        // Find and uncheck the matching source checkbox.
+                        const src = flexScreen.querySelector(
+                            `[data-bc-flex-sched-section] [data-bc-flex-alt-slot][data-club-id="${alt.clubId}"][data-from-minutes="${alt.fromMinutes}"][data-to-minutes="${alt.toMinutes}"]`
+                        );
+                        if (src) {
+                            const cb = src.querySelector('input[type="checkbox"]');
+                            if (cb) cb.checked = false;
+                            src.style.borderColor = 'transparent';
+                            src.style.background = 'rgba(255,255,255,0.05)';
+                        }
+                        updatePriorityNumbering();
+                    });
+
+                    initPriorityItemDrag(card);
+                }
+
+                function removeFromPriorityList(label) {
+                    if (!priorityList) return;
+                    const clubId = label.getAttribute('data-club-id');
+                    const from = label.getAttribute('data-from-minutes');
+                    const to = label.getAttribute('data-to-minutes');
+                    const match = priorityList.querySelector(
+                        `[data-bc-flex-priority-item][data-club-id="${clubId}"][data-from-minutes="${from}"][data-to-minutes="${to}"]`
+                    );
+                    if (match) match.remove();
+                    updatePriorityNumbering();
+                }
+
+                if (schedSection) {
+                    schedSection.addEventListener('change', (e) => {
+                        if (e.target.type !== 'checkbox') return;
+                        const label = e.target.closest('[data-bc-flex-alt-slot]');
+                        if (!label) return;
+                        label.style.borderColor = e.target.checked ? 'rgba(0,188,212,0.6)' : 'transparent';
+                        label.style.background = e.target.checked ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
+                        if (e.target.checked) {
+                            addToPriorityList(label);
+                        } else {
+                            removeFromPriorityList(label);
+                        }
+                    });
+                }
+
+                // -- Drag-to-reorder for priority list (desktop and mobile touch).
+                let draggedPriorityItem = null;
+                let touchDraggedPriorityItem = null;
+
+                function reorderPriorityItem(overItem, clientY) {
+                    const dragged = draggedPriorityItem || touchDraggedPriorityItem;
+                    if (!dragged || overItem === dragged || !priorityList) return;
+                    const rect = overItem.getBoundingClientRect();
+                    const midY = rect.top + rect.height / 2;
+                    if (clientY < midY) {
+                        priorityList.insertBefore(dragged, overItem);
+                    } else {
+                        priorityList.insertBefore(dragged, overItem.nextSibling);
+                    }
+                }
+
+                function onPriorityTouchMove(event) {
+                    if (!touchDraggedPriorityItem) return;
+                    const touch = event.touches && event.touches[0];
+                    if (!touch) return;
+                    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                    const overItem = target?.closest('[data-bc-flex-priority-item]');
+                    if (!overItem || !priorityList.contains(overItem)) return;
+                    event.preventDefault();
+                    reorderPriorityItem(overItem, touch.clientY);
+                }
+
+                function stopPriorityTouchDrag() {
+                    if (!touchDraggedPriorityItem) return;
+                    touchDraggedPriorityItem.style.opacity = '1';
+                    touchDraggedPriorityItem = null;
+                    document.removeEventListener('touchmove', onPriorityTouchMove);
+                    document.removeEventListener('touchend', stopPriorityTouchDrag);
+                    document.removeEventListener('touchcancel', stopPriorityTouchDrag);
+                    updatePriorityNumbering();
+                }
+
+                function initPriorityItemDrag(item) {
+                    item.addEventListener('dragstart', () => {
+                        draggedPriorityItem = item;
+                        setTimeout(() => { item.style.opacity = '0.4'; }, 0);
+                    });
+                    item.addEventListener('dragend', () => {
+                        item.style.opacity = '1';
+                        draggedPriorityItem = null;
+                        updatePriorityNumbering();
+                    });
+                    item.addEventListener('dragover', (event) => {
+                        event.preventDefault();
+                        reorderPriorityItem(item, event.clientY);
+                    });
+                    item.addEventListener('touchstart', (event) => {
+                        if (!event.touches || event.touches.length !== 1) return;
+                        touchDraggedPriorityItem = item;
+                        item.style.opacity = '0.4';
+                        document.addEventListener('touchmove', onPriorityTouchMove, { passive: false });
+                        document.addEventListener('touchend', stopPriorityTouchDrag);
+                        document.addEventListener('touchcancel', stopPriorityTouchDrag);
+                    });
+                }
+
+                // -- Time range stepper: nudge start/end by 30 minutes, re-filter slots.
+                const stepperEl = flexScreen.querySelector('[data-bc-flex-time-stepper]');
+                if (stepperEl) {
+                    const startEl = stepperEl.querySelector('[data-bc-flex-range-start]');
+                    const endEl = stepperEl.querySelector('[data-bc-flex-range-end]');
+
+                    function fmtMin(m) {
+                        const h = Math.floor(m / 60);
+                        const mm = m % 60;
+                        const suffix = h >= 12 ? 'PM' : 'AM';
+                        const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+                        return `${h12}:${String(mm).padStart(2, '0')} ${suffix}`;
+                    }
+
+                    function adjustRange(which, delta) {
+                        const el = (which === 'start') ? startEl : endEl;
+                        if (!el) return;
+                        let current = parseInt(el.getAttribute('data-minutes'), 10);
+                        current += delta;
+                        // Clamp to 5:00 AM (300) – 11:00 PM (1380).
+                        current = Math.max(300, Math.min(1380, current));
+                        // Prevent start from crossing end and vice versa.
+                        if (which === 'start' && endEl) {
+                            const endMin = parseInt(endEl.getAttribute('data-minutes'), 10);
+                            if (current >= endMin) return;
+                        }
+                        if (which === 'end' && startEl) {
+                            const startMin = parseInt(startEl.getAttribute('data-minutes'), 10);
+                            if (current <= startMin) return;
+                        }
+                        el.setAttribute('data-minutes', current);
+                        el.textContent = fmtMin(current);
+                        rerenderSlots();
+                    }
+
+                    // Re-gather alternatives with the new time range and rebuild
+                    // the slot lists, preserving any existing priority selections.
+                    function rerenderSlots() {
+                        const startMin = parseInt(startEl.getAttribute('data-minutes'), 10);
+                        const endMin = parseInt(endEl.getAttribute('data-minutes'), 10);
+                        // Compute the range as the max distance from the primary slot
+                        // to either bound of the stepper window.
+                        const primaryFrom = slotInfo.fromMinutes;
+                        const rangeMinutes = Math.max(primaryFrom - startMin, endMin - primaryFrom);
+                        // Only altTimes changes with the time range; altClubs (same time,
+                        // other clubs) is unaffected by the stepper.
+                        const { altTimes } = gatherAlternativeSlots(slotInfo, lastFetchState, rangeMinutes);
+
+                        // Further filter to the stepper window (the range is symmetric
+                        // around the primary, but the stepper bounds may be asymmetric).
+                        const filteredTimes = altTimes.filter(a =>
+                            a.fromMinutes >= startMin && a.fromMinutes <= endMin
+                        );
+
+                        // Save current priority list selections so we can preserve them.
+                        const priorityKeys = new Set();
+                        if (priorityList) {
+                            priorityList.querySelectorAll('[data-bc-flex-priority-item]').forEach(el => {
+                                priorityKeys.add(`${el.getAttribute('data-club-id')}:${el.getAttribute('data-from-minutes')}:${el.getAttribute('data-to-minutes')}`);
+                            });
+                        }
+
+                        // Rebuild nearby-times lists (split into now and sched).
+                        const nowTimesContainer = flexScreen.querySelector('[data-bc-flex-now-times]');
+                        const schedTimesContainer = flexScreen.querySelector('[data-bc-flex-sched-times]');
+                        if (nowTimesContainer) {
+                            const nowTimes = filteredTimes.filter(a => !a.locked);
+                            nowTimesContainer.innerHTML = nowTimes.map(a => buildAltSlotCardHtml(a, 'radio', false)).join('');
+                        }
+                        if (schedTimesContainer) {
+                            const schedTimes = filteredTimes.filter(a => a.locked);
+                            schedTimesContainer.innerHTML = schedTimes.map(a => {
+                                const html = buildAltSlotCardHtml(a, 'checkbox', false);
+                                const key = `${a.clubId}:${a.fromMinutes}:${a.toMinutes}`;
+                                if (priorityKeys.has(key)) {
+                                    // Re-check previously selected items.
+                                    return html.replace('type="checkbox"', 'type="checkbox" checked');
+                                }
+                                return html;
+                            }).join('');
+                        }
+
+                        // Update visibility of section headers based on whether
+                        // there are any slots to show.
+                        updateSectionStates();
+                    }
+
+                    stepperEl.querySelector('[data-bc-flex-range-start-down]')?.addEventListener('click', () => adjustRange('start', -30));
+                    stepperEl.querySelector('[data-bc-flex-range-start-up]')?.addEventListener('click', () => adjustRange('start', 30));
+                    stepperEl.querySelector('[data-bc-flex-range-end-down]')?.addEventListener('click', () => adjustRange('end', -30));
+                    stepperEl.querySelector('[data-bc-flex-range-end-up]')?.addEventListener('click', () => adjustRange('end', 30));
+                }
+
+                // Look up the courts array for a given slot from the gathered alternatives.
+                function findCourtsForSlot(clubId, fromMinutes, toMinutes) {
+                    const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState, 720);
+                    const all = altTimes.concat(altClubs);
+                    const match = all.find(a =>
+                        a.clubId === clubId &&
+                        a.fromMinutes === fromMinutes &&
+                        a.toMinutes === toMinutes
+                    );
+                    return match ? match.courts : [];
+                }
+
+                // -- Collect the final preferences from the screen state.
+                function collectFlexibilityPrefs() {
+                    // Check if a book-now radio is selected.
+                    const selectedRadio = flexScreen.querySelector('[data-bc-flex-now-section] input[type="radio"]:checked');
+                    if (selectedRadio) {
+                        const label = selectedRadio.closest('[data-bc-flex-alt-slot]');
+                        const clubId = label.getAttribute('data-club-id');
+                        const fromMinutes = parseInt(label.getAttribute('data-from-minutes'), 10);
+                        const toMinutes = parseInt(label.getAttribute('data-to-minutes'), 10);
+                        return {
+                            bookNowSlot: {
+                                clubId,
+                                clubName: label.getAttribute('data-club-name'),
+                                fromMinutes,
+                                toMinutes,
+                                fromTime: label.getAttribute('data-from-time'),
+                                toTime: label.getAttribute('data-to-time'),
+                                courts: findCourtsForSlot(clubId, fromMinutes, toMinutes),
+                            },
+                            alternativeSlots: [],
+                        };
+                    }
+
+                    // Collect from the priority list in display order.
+                    const alternativeSlots = [];
+                    if (priorityList) {
+                        priorityList.querySelectorAll('[data-bc-flex-priority-item]').forEach(el => {
+                            alternativeSlots.push({
+                                clubId: el.getAttribute('data-club-id'),
+                                fromMinutes: parseInt(el.getAttribute('data-from-minutes'), 10),
+                                toMinutes: parseInt(el.getAttribute('data-to-minutes'), 10),
+                                locked: el.getAttribute('data-locked') === '1',
+                            });
                         });
+                    }
+
+                    return { alternativeSlots };
+                }
+
+                // -- Navigation buttons.
+                flexScreen.querySelector('[data-bc-flex-back]')?.addEventListener('click', onBack);
+                flexScreen.querySelector('[data-bc-flex-cancel]')?.addEventListener('click', onBack);
+                nextBtn?.addEventListener('click', () => {
+                    const prefs = collectFlexibilityPrefs();
+                    if (prefs.bookNowSlot) {
+                        onBookNow(prefs.bookNowSlot);
+                    } else {
+                        onNext(prefs);
                     }
                 });
 
-                // Collect flexibility preferences from the screen state.
-                function collectFlexibilityPrefs() {
-                    const activePill = flexScreen.querySelector('[data-bc-flex-court-type][style*="rgb(0,188,212)"]');
-                    // Fall back to checking fontWeight since inline style serialization varies across browsers.
-                    const courtTypePref = activePill
-                        ? activePill.getAttribute('data-bc-flex-court-type')
-                        : (function () {
-                            const allPills = flexScreen.querySelectorAll('[data-bc-flex-court-type]');
-                            for (const p of allPills) {
-                                if (p.style.fontWeight === '600') return p.getAttribute('data-bc-flex-court-type');
-                            }
-                            return 'any';
-                        })();
-
-                    const alternativeSlots = [];
-                    flexScreen.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
-                        const checkbox = label.querySelector('input[type="checkbox"]');
-                        if (checkbox && checkbox.checked) {
-                            alternativeSlots.push({
-                                clubId: label.getAttribute('data-club-id'),
-                                fromMinutes: parseInt(label.getAttribute('data-from-minutes'), 10),
-                                toMinutes: parseInt(label.getAttribute('data-to-minutes'), 10),
-                                locked: label.getAttribute('data-locked') === '1',
-                            });
-                        }
-                    });
-
-                    return { courtTypePref, alternativeSlots };
-                }
-
-                // Navigation buttons.
-                flexScreen.querySelector('[data-bc-flex-back]')?.addEventListener('click', onBack);
-                flexScreen.querySelector('[data-bc-flex-cancel]')?.addEventListener('click', onBack);
-                flexScreen.querySelector('[data-bc-flex-next]')?.addEventListener('click', () => {
-                    onNext(collectFlexibilityPrefs());
-                });
+                // Initialize section states on first render.
+                updateSectionStates();
             }
 
             function buildSchedulePanelHtml(slotInfo, players, photosByMemberId) {
@@ -5064,12 +5417,35 @@
                         initNextButton();
                     }
 
-                    bindFlexibilityScreenInteractions(flexScreen, function onNext(flexibilityPrefs) {
-                        // Remove the flexibility screen and inject the partner picker.
+                    function proceedToPartnerPicker(updatedSlotInfo) {
                         document.querySelectorAll('[data-bc-flex-screen]').forEach(f => f.remove());
-                        slotInfo.flexibilityPrefs = flexibilityPrefs;
-                        injectPartnerPickerIntoHosts(hostsToUse, anchorElement, slotInfo, players, photosByMemberId);
-                    }, returnToSlotGrid);
+                        injectPartnerPickerIntoHosts(hostsToUse, anchorElement, updatedSlotInfo, players, photosByMemberId);
+                    }
+
+                    bindFlexibilityScreenInteractions(flexScreen, slotInfo, lastFetchState,
+                        function onNext(flexibilityPrefs) {
+                            // Schedule path: attach backup slots and proceed to partner picker.
+                            slotInfo.flexibilityPrefs = flexibilityPrefs;
+                            proceedToPartnerPicker(slotInfo);
+                        },
+                        function onBookNow(bookNowSlot) {
+                            // Book-now path: update slotInfo to reflect the chosen available
+                            // slot, then proceed to partner picker for immediate booking.
+                            slotInfo.clubId = bookNowSlot.clubId;
+                            slotInfo.clubName = bookNowSlot.clubName;
+                            slotInfo.fromMinutes = bookNowSlot.fromMinutes;
+                            slotInfo.toMinutes = bookNowSlot.toMinutes;
+                            slotInfo.fromTime = bookNowSlot.fromTime;
+                            slotInfo.toTime = bookNowSlot.toTime;
+                            // Set allCourts from the slot's court list so scheduleBooking
+                            // can pick the best primary and build fallbacks.
+                            slotInfo.allCourts = bookNowSlot.courts || [];
+                            slotInfo.courtId = null;
+                            slotInfo.courtName = null;
+                            slotInfo.flexibilityPrefs = { alternativeSlots: [] };
+                            proceedToPartnerPicker(slotInfo);
+                        },
+                        returnToSlotGrid);
                 }
             }
 
@@ -5372,16 +5748,32 @@
 
                 const flexScreen = flexOverlay.querySelector('[data-bc-flex-screen]');
                 if (flexScreen) {
-                    bindFlexibilityScreenInteractions(flexScreen, function onNext(flexibilityPrefs) {
-                        // Remove the flexibility overlay and inject the partner picker overlay.
+                    function proceedToPartnerPickerOverlay(updatedSlotInfo) {
                         removeCvOverlays();
-                        slotInfo.flexibilityPrefs = flexibilityPrefs;
-
                         const pickerOverlay = createCvOverlay();
                         document.body.appendChild(pickerOverlay);
+                        injectPartnerPickerIntoHosts([pickerOverlay], null, updatedSlotInfo, players, photosByMemberId, removeCvOverlays);
+                    }
 
-                        injectPartnerPickerIntoHosts([pickerOverlay], null, slotInfo, players, photosByMemberId, removeCvOverlays);
-                    }, removeCvOverlays);
+                    bindFlexibilityScreenInteractions(flexScreen, slotInfo, lastFetchState,
+                        function onNext(flexibilityPrefs) {
+                            slotInfo.flexibilityPrefs = flexibilityPrefs;
+                            proceedToPartnerPickerOverlay(slotInfo);
+                        },
+                        function onBookNow(bookNowSlot) {
+                            slotInfo.clubId = bookNowSlot.clubId;
+                            slotInfo.clubName = bookNowSlot.clubName;
+                            slotInfo.fromMinutes = bookNowSlot.fromMinutes;
+                            slotInfo.toMinutes = bookNowSlot.toMinutes;
+                            slotInfo.fromTime = bookNowSlot.fromTime;
+                            slotInfo.toTime = bookNowSlot.toTime;
+                            slotInfo.allCourts = bookNowSlot.courts || [];
+                            slotInfo.courtId = null;
+                            slotInfo.courtName = null;
+                            slotInfo.flexibilityPrefs = { alternativeSlots: [] };
+                            proceedToPartnerPickerOverlay(slotInfo);
+                        },
+                        removeCvOverlays);
                 }
             }
 
