@@ -1641,7 +1641,7 @@ test.describe('Court View native column features', () => {
         expect(text).toMatch(/[EGH]/);
     });
 
-    test('clicking a club nav button scrolls the calendar', async () => {
+    test('clicking a club nav button scrolls the target club to the left edge', async () => {
         requireAuth(test);
 
         // Find the last club nav button (likely a different club than what is
@@ -1658,27 +1658,39 @@ test.describe('Court View native column features', () => {
             'app-booking-calendar-column[data-bc-club-id="' + targetClubId + '"]'
         ).first();
         await expect(targetCol).toBeAttached({ timeout: 10_000 });
-        const beforeBox = await targetCol.boundingBox();
 
         await lastBtn.click();
         // Wait a beat for the scroll to take effect.
         await page.waitForTimeout(500);
 
         const afterBox = await targetCol.boundingBox();
-        // The column should have moved leftward (or stayed if already visible).
-        // On mobile viewports, the floating-scroll element may not exist and the
-        // ancestor-walk fallback may not find a scrollable container, so the column
-        // might not move.  Accept a position change or the column being in view.
-        if (beforeBox && afterBox) {
+        if (!afterBox) {
+            test.skip(true, 'Could not get bounding box for target column after scroll');
+            return;
+        }
+
+        // The target column's left edge should align with the content container's
+        // left edge (the scroll area, not the time axis).  Find the content
+        // container's left edge for comparison.
+        const contentLeft = await page.evaluate(() => {
+            const el = document.querySelector('.booking-calendar-columns-floating-scroll');
+            return el ? el.getBoundingClientRect().left : null;
+        });
+
+        if (contentLeft === null) {
+            // Mobile fallback — no floating-scroll container.  Just verify the
+            // column is in the viewport.
             const viewportWidth = page.viewportSize().width;
-            const moved = Math.abs(afterBox.x - beforeBox.x) > 1;
-            const inView = afterBox.x < viewportWidth;
-            if (!moved && !inView) {
-                // No scrollable container found — not a regression, just a
-                // mobile layout limitation.
+            if (afterBox.x >= viewportWidth) {
                 test.skip(true, 'Nav button click did not scroll — likely no scrollable ancestor on this viewport');
             }
+            return;
         }
+
+        // Allow up to 2px tolerance for rounding.  The column should be at the
+        // left edge of the content area, not a few columns to the right.
+        const offset = Math.abs(afterBox.x - contentLeft);
+        expect(offset).toBeLessThanOrEqual(2);
     });
 });
 

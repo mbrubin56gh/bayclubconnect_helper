@@ -6205,10 +6205,13 @@
                             }
                         }
                         if (!scrollTarget) return;
-                        var containerRect = scrollTarget.getBoundingClientRect();
+                        // Compute the absolute scroll position for the target column.
+                        // On desktop the scroll driver (div.floating-scroll) mirrors its
+                        // scrollLeft to the content columns, so the delta must be relative
+                        // to the content container, not the scroll driver.
                         var colRect = firstCol.getBoundingClientRect();
-                        var scrollDelta = colRect.left - containerRect.left;
-                        scrollTarget.scrollLeft = scrollTarget.scrollLeft + scrollDelta;
+                        var refRect = (contentEl || scrollTarget).getBoundingClientRect();
+                        scrollTarget.scrollLeft = scrollTarget.scrollLeft + (colRect.left - refRect.left);
                         btn.blur();
                     });
                     strip.appendChild(btn);
