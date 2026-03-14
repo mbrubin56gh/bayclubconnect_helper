@@ -911,10 +911,11 @@ async function handleRequest(request, env) {
         let historyRows = [];
         let statsRows = [];
         let totalHistoryCount = 0;
+        let availabilitySnapshots = [];
         if (env.DB) {
             try {
-                // Three parallel queries: paginated rows, all-time status counts, total row count.
-                const [histResult, statsResult, countResult] = await Promise.all([
+                // Four parallel queries: paginated rows, status counts, total count, availability snapshots.
+                const [histResult, statsResult, countResult, availResult] = await Promise.all([
                     env.DB.prepare(
                         'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT ? OFFSET ?'
                     ).bind(pageSize, (page - 1) * pageSize).all(),
@@ -922,16 +923,20 @@ async function handleRequest(request, env) {
                         'SELECT status, COUNT(*) as count FROM booking_history GROUP BY status'
                     ).all(),
                     env.DB.prepare('SELECT COUNT(*) as total FROM booking_history').all(),
+                    env.DB.prepare(
+                        'SELECT * FROM availability_snapshots ORDER BY checked_at_ms DESC LIMIT 500'
+                    ).all(),
                 ]);
                 historyRows = histResult.results;
                 statsRows = statsResult.results;
                 totalHistoryCount = (countResult.results[0] && countResult.results[0].total) || 0;
+                availabilitySnapshots = availResult.results;
             } catch (_e) {
                 // Table may not exist yet if schema has not been applied.
             }
         }
         return new Response(
-            renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, dashSecret),
+            renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, dashSecret, availabilitySnapshots),
             { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
         );
     }
@@ -1048,7 +1053,135 @@ function escHtml(str) {
         .replace(/"/g, '&quot;');
 }
 
-function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, secret) {
+// Maps club UUIDs to short display names for the dashboard.
+const CLUB_SHORT_NAMES = {
+    '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63': 'Broadway',
+    '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18': 'Redwood Shores',
+    'ce7e7607-09e6-4d16-8197-1fffb70db776': 'South SF',
+    '3bc78448-ec6b-49e1-a2ae-64abd68e646b': 'Santa Clara',
+};
+
+// Formats minutes-since-midnight to a display time string like "7:00 AM".
+function formatMinutesTime(minutes) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+// Builds the availability insights HTML section from snapshot rows.
+function renderAvailabilityInsightsHtml(snapshots) {
+    if (!snapshots || snapshots.length === 0) {
+        return '<p style="color:#999;font-style:italic;padding:8px 0;">No availability data yet. Snapshots are recorded during each slot check cycle.</p>';
+    }
+
+    // Group snapshots by club+time key for aggregation.
+    const bySlot = {};
+    for (const snap of snapshots) {
+        const key = `${snap.club_id}|${snap.time_from}-${snap.time_to}`;
+        if (!bySlot[key]) {
+            bySlot[key] = {
+                clubId: snap.club_id,
+                timeFrom: snap.time_from,
+                timeTo: snap.time_to,
+                checks: [],
+            };
+        }
+        bySlot[key].checks.push({
+            available: snap.available_courts,
+            total: snap.total_courts,
+            checkedAt: snap.checked_at_ms,
+            date: snap.date,
+        });
+    }
+
+    // Build a summary table: club × time slot → avg availability.
+    const entries = Object.values(bySlot)
+        .sort((a, b) => {
+            const clubCmp = (CLUB_SHORT_NAMES[a.clubId] || a.clubId).localeCompare(
+                CLUB_SHORT_NAMES[b.clubId] || b.clubId
+            );
+            return clubCmp !== 0 ? clubCmp : a.timeFrom - b.timeFrom;
+        });
+
+    const rows = entries.map(entry => {
+        const avgAvail = entry.checks.reduce((sum, c) => sum + c.available, 0) / entry.checks.length;
+        const avgTotal = entry.checks.reduce((sum, c) => sum + c.total, 0) / entry.checks.length;
+        const pct = avgTotal > 0 ? (avgAvail / avgTotal) * 100 : 0;
+
+        // Color: green (>66%), yellow (33-66%), red (<33%).
+        let color, bg;
+        if (pct > 66) { color = '#2e7d32'; bg = '#e8f5e9'; }
+        else if (pct > 33) { color = '#e65100'; bg = '#fff3e0'; }
+        else { color = '#c62828'; bg = '#ffebee'; }
+
+        // Find most recent check for "last seen" column.
+        const latest = entry.checks.reduce((a, b) => a.checkedAt > b.checkedAt ? a : b);
+        const lastDate = new Date(latest.checkedAt).toLocaleString('en-US', {
+            timeZone: 'America/Los_Angeles',
+            month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+        });
+
+        // Mini sparkline: last 10 checks, newest on right.
+        const recent = entry.checks
+            .sort((a, b) => a.checkedAt - b.checkedAt)
+            .slice(-10);
+        const sparkline = recent.map(c => {
+            const p = c.total > 0 ? (c.available / c.total) * 100 : 0;
+            let barColor;
+            if (p > 66) barColor = '#4caf50';
+            else if (p > 33) barColor = '#ff9800';
+            else barColor = '#f44336';
+            const height = Math.max(2, Math.round(p / 100 * 20));
+            return `<span title="${c.date}: ${c.available}/${c.total}" style="display:inline-block;width:6px;height:${height}px;background:${barColor};margin:0 1px;vertical-align:bottom;border-radius:1px;"></span>`;
+        }).join('');
+
+        const clubName = escHtml(CLUB_SHORT_NAMES[entry.clubId] || entry.clubId);
+        const timeRange = `${formatMinutesTime(entry.timeFrom)}–${formatMinutesTime(entry.timeTo)}`;
+
+        return `<tr>
+            <td>${clubName}</td>
+            <td>${timeRange}</td>
+            <td style="background:${bg};color:${color};font-weight:600;text-align:center;border-radius:4px;">${avgAvail.toFixed(1)} / ${avgTotal.toFixed(0)} (${Math.round(pct)}%)</td>
+            <td style="white-space:nowrap;">${sparkline}</td>
+            <td style="font-size:12px;color:#999;">${entry.checks.length}</td>
+            <td style="font-size:12px;color:#999;white-space:nowrap;">${lastDate}</td>
+        </tr>`;
+    }).join('');
+
+    // Most contested slots (lowest avg availability %).
+    const contested = entries
+        .map(e => {
+            const avgTotal = e.checks.reduce((s, c) => s + c.total, 0) / e.checks.length;
+            const avgAvail = e.checks.reduce((s, c) => s + c.available, 0) / e.checks.length;
+            const pct = avgTotal > 0 ? (avgAvail / avgTotal) * 100 : 100;
+            return { ...e, pct, avgAvail, avgTotal };
+        })
+        .filter(e => e.checks.length >= 2)
+        .sort((a, b) => a.pct - b.pct)
+        .slice(0, 5);
+
+    let contestedHtml = '';
+    if (contested.length > 0) {
+        const items = contested.map(e => {
+            const clubName = CLUB_SHORT_NAMES[e.clubId] || e.clubId;
+            const timeRange = `${formatMinutesTime(e.timeFrom)}–${formatMinutesTime(e.timeTo)}`;
+            return `<span style="background:#ffebee;color:#c62828;padding:4px 10px;border-radius:12px;font-size:13px;font-weight:500;">${escHtml(clubName)} ${timeRange} — ${Math.round(e.pct)}% avail</span>`;
+        }).join(' ');
+        contestedHtml = `<div style="margin-bottom:16px;">
+            <strong style="font-size:13px;color:#666;">Most contested:</strong> ${items}
+        </div>`;
+    }
+
+    return `${contestedHtml}
+    <table><thead><tr>
+        <th>Club</th><th>Time Slot</th><th>Avg Availability</th><th>Trend</th><th>Checks</th><th>Last Seen</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistoryCount, page, pageSize, secret, availabilitySnapshots) {
     const now = Date.now();
 
     function ptTime(ms) {
@@ -1217,6 +1350,8 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
   <h2>History</h2>
   ${statsHtml}
   ${historyHtml}
+  <h2>Availability Insights</h2>
+  ${renderAvailabilityInsightsHtml(availabilitySnapshots)}
 <script>
   async function cancelBooking(id) {
     // Suppress the 60s auto-refresh so it doesn't clobber our feedback.
