@@ -4571,16 +4571,21 @@
             // Formats a court list as a comma-separated string with type badges.
             function formatCourtList(courts) {
                 return courts.map(c => {
-                    const badge = c.courtType === 'gated' ? ' [G]'
-                        : c.courtType === 'edge' ? ' [E]'
-                        : c.courtType === 'hitting_wall' ? ' [H]'
+                    const name = c.courtName || c.courtId;
+                    const badgeLetter = c.courtType === 'gated' ? 'G'
+                        : c.courtType === 'edge' ? 'E'
+                        : c.courtType === 'hitting_wall' ? 'H'
                         : '';
-                    return (c.courtName || c.courtId) + badge;
+                    const badgeColor = c.courtType === 'gated' ? 'rgba(255,215,0,1)' : 'rgba(255,200,50,0.9)';
+                    if (!badgeLetter) return name;
+                    return `${name} <span style="color: ${badgeColor}; font-weight: bold;">${badgeLetter}</span>`;
                 }).join(', ');
             }
 
             // Builds an HTML card for a single alternative slot.  mode is
             // 'radio' (book-now section) or 'checkbox' (schedule section).
+            // Book-now cards with multiple courts render as expandable cards
+            // so the user can pick a specific court.
             function buildAltSlotCardHtml(alt, mode, isClubCard) {
                 const inputHtml = mode === 'radio'
                     ? `<input type="checkbox" data-bc-flex-now-check style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`
@@ -4590,20 +4595,57 @@
                     ? `<span style="color: ${clubColor}; font-weight: 500;">${alt.clubName}</span>`
                     : `${alt.fromTime}\u2013${alt.toTime}`;
                 const courtListStr = formatCourtList(alt.courts);
-                return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
+
+                // For book-now cards with multiple courts, build expandable
+                // court options so the user can choose a specific court.
+                // Courts are sorted best-first (gated > edge > hitting wall >
+                // standard) so the default auto-selection matches the first
+                // option shown.
+                let expandHtml = '';
+                if (mode === 'radio' && alt.courts.length > 1) {
+                    const typeOrder = { gated: 0, hitting_wall: 1, edge: 2, standard: 3 };
+                    const sorted = alt.courts.slice().sort((a, b) =>
+                        (typeOrder[a.courtType] || 3) - (typeOrder[b.courtType] || 3)
+                    );
+                    const courtOptions = sorted.map(c => {
+                        const typeBadge = c.courtType === 'gated' ? '<span style="color: rgba(255,215,0,1); font-size: 10px; font-weight: bold;">Gated</span>'
+                            : c.courtType === 'edge' ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Edge</span>'
+                            : c.courtType === 'hitting_wall' ? '<span style="color: rgba(255,200,50,0.9); font-size: 10px; font-weight: bold;">Hitting wall</span>'
+                            : '';
+                        return `<div data-bc-flex-court-option data-court-id="${c.courtId}" data-court-name="${c.courtName || ''}"
+                            style="padding: 5px 8px; margin: 2px 0; border-radius: 4px; cursor: pointer; font-size: 11px;
+                            background: rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;
+                            transition: background 0.15s;">
+                            <span style="color: white;">${c.courtName || c.courtId}</span>
+                            ${typeBadge}
+                        </div>`;
+                    }).join('');
+                    expandHtml = `<div data-bc-flex-court-expand style="display: none; margin-top: 6px;">
+                        ${courtOptions}
+                    </div>`;
+                }
+
+                // Summary line: show court count for multi-court cards, court
+                // name for single-court cards.
+                const summaryHtml = (mode === 'radio' && alt.courts.length > 1)
+                    ? `<span data-bc-flex-court-summary>${alt.courts.length} courts \u25BE</span>`
+                    : courtListStr;
+
+                return `<div data-bc-flex-alt-slot data-club-id="${alt.clubId}"
                     data-club-name="${alt.clubName || ''}"
                     data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
                     data-locked="${alt.locked ? '1' : '0'}"
                     data-from-time="${alt.fromTime}" data-to-time="${alt.toTime}"
-                    style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                    style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
                     background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
                     border: 1px solid transparent; transition: all 0.15s;">
                     ${inputHtml}
                     <div style="flex: 1;">
-                        <div style="font-size: 13px; color: white;">${titleHtml}</div>
-                        <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${courtListStr}</div>
+                        <div style="font-size: 15px; color: white;">${titleHtml}</div>
+                        <div style="font-size: 13px; color: rgba(255,255,255,0.7);">${summaryHtml}</div>
+                        ${expandHtml}
                     </div>
-                </label>`;
+                </div>`;
             }
 
             // Builds an HTML card for the selected-backups priority list with a
@@ -4621,8 +4663,8 @@
                     background: rgba(0,188,212,0.1); border: 1px solid rgba(0,188,212,0.4);
                     border-radius: 8px; cursor: grab; user-select: none; transition: all 0.15s;">
                     <span style="font-size: 16px; color: rgba(255,255,255,0.4); cursor: grab; touch-action: none;">\u2630</span>
-                    <span data-bc-flex-priority-num style="font-size: 12px; color: rgb(0,188,212); font-weight: 600; min-width: 18px;">${index + 1}.</span>
-                    <div style="flex: 1; font-size: 13px; color: white;">${clubLabel} ${timeLabel}</div>
+                    <span data-bc-flex-priority-num style="font-size: 14px; color: rgb(0,188,212); font-weight: 600; min-width: 18px;">${index + 1}.</span>
+                    <div style="flex: 1; font-size: 15px; color: white;">${clubLabel} ${timeLabel}</div>
                     <button data-bc-flex-priority-remove style="background: none; border: none; color: rgba(255,255,255,0.4); font-size: 16px; cursor: pointer; padding: 0 4px;">\u00d7</button>
                 </div>`;
             }
@@ -4633,6 +4675,7 @@
             // slots, checkboxes with drag-to-reorder priority list).
             function buildFlexibilityScreenHtml(slotInfo, lastFetchState) {
                 const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
+                const primaryClubColor = CLUB_COLUMN_COLORS[slotInfo.clubId] || '#aaa';
                 const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
                 const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -4658,7 +4701,7 @@
                     if (nowTimes.length > 0) {
                         const cards = nowTimes.map(a => buildAltSlotCardHtml(a, 'radio', false)).join('');
                         nowTimesHtml = `<div style="margin-bottom: 10px;">
-                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
+                            <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
                             <div data-bc-flex-now-times style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
                     }
@@ -4666,13 +4709,13 @@
                     if (nowClubs.length > 0) {
                         const cards = nowClubs.map(a => buildAltSlotCardHtml(a, 'radio', true)).join('');
                         nowClubsHtml = `<div style="margin-bottom: 10px;">
-                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Same time at other clubs</div>
+                            <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 6px;">Same time at other clubs</div>
                             <div data-bc-flex-now-clubs style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
                     }
-                    nowSection = `<div data-bc-flex-now-section style="margin-bottom: 20px;">
-                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 6px;">Book a different slot now</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 10px;">
+                    nowSection = `<div data-bc-flex-now-section style="margin-bottom: 24px;">
+                        <div style="font-size: 16px; color: white; font-weight: 500; margin-bottom: 8px;">Book a different slot now</div>
+                        <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 14px;">
                             These slots are open right now. Select one to book it immediately instead.
                         </div>
                         ${nowTimesHtml}${nowClubsHtml}
@@ -4687,7 +4730,7 @@
                     if (schedTimes.length > 0) {
                         const cards = schedTimes.map(a => buildAltSlotCardHtml(a, 'checkbox', false)).join('');
                         schedTimesHtml = `<div style="margin-bottom: 10px;">
-                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
+                            <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 6px;">Nearby times at ${slotInfo.clubName}</div>
                             <div data-bc-flex-sched-times style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
                     }
@@ -4695,18 +4738,18 @@
                     if (schedClubs.length > 0) {
                         const cards = schedClubs.map(a => buildAltSlotCardHtml(a, 'checkbox', true)).join('');
                         schedClubsHtml = `<div style="margin-bottom: 10px;">
-                            <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 6px;">Same time at other clubs</div>
+                            <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 6px;">Same time at other clubs</div>
                             <div data-bc-flex-sched-clubs style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
                         </div>`;
                     }
 
                     const fallbackNote = fallbackCourtCount > 0
-                        ? `For each slot, the system tries all ${fallbackCourtCount + 1} courts \u2014 gated first, then edge, then any available.`
+                        ? `For each slot, the system tries all available courts \u2014 gated first, then edge, then any available.`
                         : 'For each slot, the system tries gated courts first, then edge, then any available.';
 
-                    schedSection = `<div data-bc-flex-sched-section style="margin-bottom: 20px;">
-                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 6px;">Add backup slots</div>
-                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 10px;">
+                    schedSection = `<div data-bc-flex-sched-section style="margin-bottom: 24px;">
+                        <div style="font-size: 16px; color: white; font-weight: 500; margin-bottom: 8px;">Add backup slots</div>
+                        <div style="font-size: 14px; color: rgba(255,255,255,0.7); margin-bottom: 14px;">
                             If <em>every</em> court at ${slotInfo.clubName} ${slotInfo.fromTime}\u2013${slotInfo.toTime} is taken when the window opens, the system will try your backups in the order below. ${fallbackNote}
                         </div>
                         <div data-bc-flex-priority-list style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-height: 0;"></div>
@@ -4730,41 +4773,46 @@
 
                 const timeStepperHtml = (altTimes.length > 0 || altClubs.length > 0) ? `
                     <div data-bc-flex-time-stepper style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
-                        <span style="font-size: 12px; color: rgba(255,255,255,0.5);">Show times from</span>
+                        <span style="font-size: 14px; color: rgba(255,255,255,0.7);">Show times from</span>
                         <div style="display: inline-flex; align-items: center; background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden;">
-                            <button data-bc-flex-range-start-down style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
-                            <span data-bc-flex-range-start style="font-size: 13px; color: white; min-width: 70px; text-align: center;" data-minutes="${rangeStartMin}">${fmtMin(rangeStartMin)}</span>
-                            <button data-bc-flex-range-start-up style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
+                            <button data-bc-flex-range-start-down style="background: none; border: none; color: rgba(255,255,255,0.7); font-size: 16px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
+                            <span data-bc-flex-range-start style="font-size: 15px; color: white; min-width: 76px; text-align: center;" data-minutes="${rangeStartMin}">${fmtMin(rangeStartMin)}</span>
+                            <button data-bc-flex-range-start-up style="background: none; border: none; color: rgba(255,255,255,0.7); font-size: 16px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
                         </div>
-                        <span style="font-size: 12px; color: rgba(255,255,255,0.5);">to</span>
+                        <span style="font-size: 14px; color: rgba(255,255,255,0.7);">to</span>
                         <div style="display: inline-flex; align-items: center; background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden;">
-                            <button data-bc-flex-range-end-down style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
-                            <span data-bc-flex-range-end style="font-size: 13px; color: white; min-width: 70px; text-align: center;" data-minutes="${rangeEndMin}">${fmtMin(rangeEndMin)}</span>
-                            <button data-bc-flex-range-end-up style="background: none; border: none; color: rgba(255,255,255,0.6); font-size: 14px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
+                            <button data-bc-flex-range-end-down style="background: none; border: none; color: rgba(255,255,255,0.7); font-size: 16px; cursor: pointer; padding: 4px 8px;">\u25bc</button>
+                            <span data-bc-flex-range-end style="font-size: 15px; color: white; min-width: 76px; text-align: center;" data-minutes="${rangeEndMin}">${fmtMin(rangeEndMin)}</span>
+                            <button data-bc-flex-range-end-up style="background: none; border: none; color: rgba(255,255,255,0.7); font-size: 16px; cursor: pointer; padding: 4px 8px;">\u25b2</button>
                         </div>
                     </div>` : '';
 
                 // Divider between sections when both are present.
-                const divider = (hasNow && hasSched) ? `<div style="border-top: 1px solid rgba(255,255,255,0.1); margin-bottom: 20px;"></div>` : '';
+                const divider = (hasNow && hasSched) ? `<div style="border-top: 1px solid rgba(255,255,255,0.15); margin: 28px 0;"></div>` : '';
 
                 return `<div data-bc-flex-screen style="padding: 16px;">
-                    <div style="display: flex; align-items: center; margin-bottom: 16px;">
+                    <div style="display: flex; align-items: center; margin-bottom: 20px;">
                         <button data-bc-flex-back style="background: none; border: none; color: rgb(0,188,212); font-size: 14px; cursor: pointer; padding: 4px 8px; margin-right: 8px;">&#8592; Back</button>
-                        <div style="font-size: 18px; font-weight: 600; color: white;">Booking Preferences</div>
+                        <div style="font-size: 18px; font-weight: 600; color: white;">Scheduled Booking Preferences</div>
                     </div>
-                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                        <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
-                        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
-                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">We will attempt to book this for you when the booking window opens at ${fireAtLabel}.</div>
-                        ${fallbackCourtCount > 0 ? `<div style="font-size: 11px; color: rgba(0,188,212,0.7); margin-top: 4px;">If unavailable, we\u2019ll try the ${fallbackCourtCount} other court${fallbackCourtCount !== 1 ? 's' : ''} at this time and location.</div>` : ''}
+                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 14px; margin-bottom: 24px;">
+                        <div style="font-size: 16px; font-weight: 500;"><span style="color: ${primaryClubColor};">${slotInfo.clubName}</span> \u00b7 ${slotInfo.courtName}</div>
+                        <div style="font-size: 15px; color: rgba(255,255,255,0.85); margin-top: 6px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
+                        <div style="font-size: 14px; color: rgb(0,188,212); margin-top: 8px;">We will attempt to book this for you when the booking window opens at ${fireAtLabel}.</div>
+                        ${fallbackCourtCount > 0 ? `<div style="font-size: 14px; color: rgb(0,188,212); margin-top: 4px;">If unavailable, we\u2019ll try the ${fallbackCourtCount} other court${fallbackCourtCount !== 1 ? 's' : ''} currently open at this time and location.</div>` : ''}
                     </div>
+                    <div style="border-top: 1px solid rgba(255,255,255,0.15); margin-bottom: 24px;"></div>
                     ${timeStepperHtml}
                     ${nowSection}
                     ${divider}
                     ${schedSection}
-                    <div style="display: flex; justify-content: center; gap: 12px; align-items: center; margin-top: 20px;">
-                        <button data-bc-flex-next style="background: rgb(0,188,212); color: #1a2f3c; border: none; border-radius: 4px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: pointer;">Next \u2192</button>
-                        <button data-bc-flex-cancel style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 13px; cursor: pointer; text-decoration: underline;">Cancel</button>
+                    <div style="height: 70px;"></div>
+                </div>
+                <div data-bc-flex-bottom-bar style="position: fixed; bottom: 0; left: 0; right: 0; z-index: 10001;
+                    background: white; box-shadow: 0 -2px 8px rgba(0,0,0,0.15);">
+                    <div data-bc-flex-bottom-inner style="padding: 12px 16px 20px; display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
+                        <button data-bc-flex-cancel style="background: none; border: none; color: #666; font-size: 14px; cursor: pointer; text-decoration: underline;">Cancel</button>
+                        <button data-bc-flex-next style="background: rgb(0,188,212); color: white; border: none; border-radius: 4px; padding: 10px 24px; font-size: 15px; font-weight: 600; cursor: pointer;">Next \u2192</button>
                     </div>
                 </div>`;
             }
@@ -4776,7 +4824,22 @@
                 const priorityList = flexScreen.querySelector('[data-bc-flex-priority-list]');
                 const nowSection = flexScreen.querySelector('[data-bc-flex-now-section]');
                 const schedSection = flexScreen.querySelector('[data-bc-flex-sched-section]');
-                const nextBtn = flexScreen.querySelector('[data-bc-flex-next]');
+                // The bottom bar lives outside flexScreen as a fixed sibling,
+                // so query from document.
+                const bottomBar = document.querySelector('[data-bc-flex-bottom-bar]');
+                const nextBtn = bottomBar ? bottomBar.querySelector('[data-bc-flex-next]') : null;
+
+                // Align the bottom bar's inner container width with the flex
+                // screen so the Next button's right edge matches the slot
+                // cards' right edge.
+                if (bottomBar) {
+                    const inner = bottomBar.querySelector('[data-bc-flex-bottom-inner]');
+                    if (inner) {
+                        const rect = flexScreen.getBoundingClientRect();
+                        inner.style.maxWidth = rect.width + 'px';
+                        inner.style.marginLeft = rect.left + 'px';
+                    }
+                }
 
                 // -- Mutual exclusion: selecting a book-now checkbox disables the
                 //    schedule section and changes Next to "Book now"; unchecking
@@ -4788,7 +4851,7 @@
                         schedSection.style.pointerEvents = checkedNow ? 'none' : '';
                     }
                     if (nextBtn) {
-                        nextBtn.textContent = checkedNow ? 'Book now \u2192' : 'Next \u2192';
+                        nextBtn.textContent = 'Next \u2192';
                     }
                 }
 
@@ -4797,10 +4860,21 @@
                 if (nowSection) {
                     nowSection.addEventListener('change', (e) => {
                         if (!e.target.hasAttribute('data-bc-flex-now-check')) return;
-                        // Uncheck all other book-now checkboxes.
+                        // Uncheck all other book-now checkboxes and collapse
+                        // their court pickers.
                         nowSection.querySelectorAll('[data-bc-flex-now-check]').forEach(cb => {
-                            if (cb !== e.target) cb.checked = false;
+                            if (cb !== e.target) {
+                                cb.checked = false;
+                                const card = cb.closest('[data-bc-flex-alt-slot]');
+                                if (card) clearCourtSelection(card);
+                            }
                         });
+                        // When unchecking, also clear the court selection on
+                        // this card so no stale courtId is carried forward.
+                        if (!e.target.checked) {
+                            const card = e.target.closest('[data-bc-flex-alt-slot]');
+                            if (card) clearCourtSelection(card);
+                        }
                         // Update visual highlight on all cards.
                         nowSection.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
                             const cb = label.querySelector('[data-bc-flex-now-check]');
@@ -4809,6 +4883,84 @@
                         });
                         updateSectionStates();
                     });
+
+                    // -- Expand/collapse court picker on multi-court book-now
+                    //    cards.  Clicking a court option selects that card and
+                    //    records the chosen court.
+                    nowSection.addEventListener('click', (e) => {
+                        // Court option click — select this court and check the
+                        // parent card's checkbox.
+                        const courtOpt = e.target.closest('[data-bc-flex-court-option]');
+                        if (courtOpt) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const card = courtOpt.closest('[data-bc-flex-alt-slot]');
+                            if (!card) return;
+                            // Highlight the selected court option.
+                            card.querySelectorAll('[data-bc-flex-court-option]').forEach(opt => {
+                                opt.style.background = (opt === courtOpt) ? 'rgba(0,188,212,0.2)' : 'rgba(255,255,255,0.08)';
+                                opt.style.outline = (opt === courtOpt) ? '1px solid rgba(0,188,212,0.5)' : 'none';
+                            });
+                            // Store the selected court on the card element.
+                            card.setAttribute('data-selected-court-id', courtOpt.getAttribute('data-court-id'));
+                            card.setAttribute('data-selected-court-name', courtOpt.getAttribute('data-court-name'));
+                            // Update the summary to show the chosen court name.
+                            const summary = card.querySelector('[data-bc-flex-court-summary]');
+                            if (summary) {
+                                summary.textContent = courtOpt.getAttribute('data-court-name') + ' \u25BE';
+                            }
+                            // Check this card's checkbox and fire mutual exclusion.
+                            const cb = card.querySelector('[data-bc-flex-now-check]');
+                            if (cb && !cb.checked) {
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            return;
+                        }
+                        // Card header click — toggle expand/collapse for multi-court cards.
+                        const card = e.target.closest('[data-bc-flex-alt-slot]');
+                        if (!card) return;
+                        const expandEl = card.querySelector('[data-bc-flex-court-expand]');
+                        if (!expandEl) return;
+                        // Do not toggle if the click was on the checkbox itself
+                        // (the change handler above handles that).
+                        if (e.target.hasAttribute('data-bc-flex-now-check')) return;
+                        const isOpen = expandEl.style.display !== 'none';
+                        expandEl.style.display = isOpen ? 'none' : 'block';
+                        // When expanding a checked card that has no explicit
+                        // court selection, pre-highlight the first option
+                        // (best court by type) so the user sees which court
+                        // will be auto-selected.
+                        if (!isOpen && !card.hasAttribute('data-selected-court-id')) {
+                            const cb = card.querySelector('[data-bc-flex-now-check]');
+                            if (cb && cb.checked) {
+                                const firstOpt = expandEl.querySelector('[data-bc-flex-court-option]');
+                                if (firstOpt) {
+                                    firstOpt.click();
+                                }
+                            }
+                        }
+                    });
+                }
+
+                // Clears court selection state and collapses the court picker
+                // on a book-now card.
+                function clearCourtSelection(card) {
+                    card.removeAttribute('data-selected-court-id');
+                    card.removeAttribute('data-selected-court-name');
+                    const expandEl = card.querySelector('[data-bc-flex-court-expand]');
+                    if (expandEl) {
+                        expandEl.style.display = 'none';
+                        expandEl.querySelectorAll('[data-bc-flex-court-option]').forEach(opt => {
+                            opt.style.background = 'rgba(255,255,255,0.08)';
+                            opt.style.outline = 'none';
+                        });
+                    }
+                    const summary = card.querySelector('[data-bc-flex-court-summary]');
+                    if (summary) {
+                        const courtCount = card.querySelectorAll('[data-bc-flex-court-option]').length;
+                        if (courtCount > 0) summary.textContent = `${courtCount} courts \u25BE`;
+                    }
                 }
 
                 // -- Schedule section: checkbox adds/removes from priority list.
@@ -5054,19 +5206,26 @@
                     // Check if a book-now checkbox is selected.
                     const checkedNow = flexScreen.querySelector('[data-bc-flex-now-section] [data-bc-flex-now-check]:checked');
                     if (checkedNow) {
-                        const label = checkedNow.closest('[data-bc-flex-alt-slot]');
-                        const clubId = label.getAttribute('data-club-id');
-                        const fromMinutes = parseInt(label.getAttribute('data-from-minutes'), 10);
-                        const toMinutes = parseInt(label.getAttribute('data-to-minutes'), 10);
+                        const card = checkedNow.closest('[data-bc-flex-alt-slot]');
+                        const clubId = card.getAttribute('data-club-id');
+                        const fromMinutes = parseInt(card.getAttribute('data-from-minutes'), 10);
+                        const toMinutes = parseInt(card.getAttribute('data-to-minutes'), 10);
+                        // If the user explicitly picked a court from the
+                        // expandable list, pass it through so we book that
+                        // specific court rather than auto-selecting.
+                        const selectedCourtId = card.getAttribute('data-selected-court-id') || null;
+                        const selectedCourtName = card.getAttribute('data-selected-court-name') || null;
                         return {
                             bookNowSlot: {
                                 clubId,
-                                clubName: label.getAttribute('data-club-name'),
+                                clubName: card.getAttribute('data-club-name'),
                                 fromMinutes,
                                 toMinutes,
-                                fromTime: label.getAttribute('data-from-time'),
-                                toTime: label.getAttribute('data-to-time'),
+                                fromTime: card.getAttribute('data-from-time'),
+                                toTime: card.getAttribute('data-to-time'),
                                 courts: findCourtsForSlot(clubId, fromMinutes, toMinutes),
+                                courtId: selectedCourtId,
+                                courtName: selectedCourtName,
                             },
                             alternativeSlots: [],
                         };
@@ -5090,7 +5249,9 @@
 
                 // -- Navigation buttons.
                 flexScreen.querySelector('[data-bc-flex-back]')?.addEventListener('click', onBack);
-                flexScreen.querySelector('[data-bc-flex-cancel]')?.addEventListener('click', onBack);
+                if (bottomBar) {
+                    bottomBar.querySelector('[data-bc-flex-cancel]')?.addEventListener('click', onBack);
+                }
                 nextBtn?.addEventListener('click', () => {
                     const prefs = collectFlexibilityPrefs();
                     if (prefs.bookNowSlot) {
@@ -5107,6 +5268,7 @@
             function buildSchedulePanelHtml(slotInfo, players, photosByMemberId) {
                 const requiredPartners = getRequiredPartnerCount();
                 const partnerLabel = requiredPartners === 1 ? 'Select 1 partner' : `Select ${requiredPartners} partners`;
+                const panelClubColor = CLUB_COLUMN_COLORS[slotInfo.clubId] || '#aaa';
 
                 const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
@@ -5131,7 +5293,7 @@
                         <div style="font-size: 18px; font-weight: 600; color: white;">Schedule Booking</div>
                     </div>
                     <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                        <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
+                        <div style="font-size: 14px; font-weight: 500;"><span style="color: ${panelClubColor};">${slotInfo.clubName}</span> \u00b7 ${slotInfo.courtName}</div>
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
                         <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">We will attempt to book this for you when the booking window opens at ${fireAtLabel}.</div>
                     </div>
@@ -5413,21 +5575,40 @@
                 hostsToUse.forEach(host => {
                     const wrapper = document.createElement('div');
                     wrapper.innerHTML = flexHtml;
-                    host.appendChild(wrapper.firstElementChild);
+                    // Append only the flex-screen content into the host;
+                    // the fixed bottom bar is injected once below.
+                    const screen = wrapper.querySelector('[data-bc-flex-screen]');
+                    if (screen) host.appendChild(screen);
                 });
+                // Inject the fixed bottom bar once into the document body.
+                {
+                    const barWrapper = document.createElement('div');
+                    barWrapper.innerHTML = flexHtml;
+                    const bar = barWrapper.querySelector('[data-bc-flex-bottom-bar]');
+                    if (bar) document.body.appendChild(bar);
+                }
+
+                // Scroll to the top so the flexibility screen is visible
+                // regardless of where the user was scrolled on the slot grid.
+                window.scrollTo({ top: 0, behavior: 'smooth' });
 
                 // Bind interactions on the first (or only) flex screen instance.
                 const flexScreen = document.querySelector('[data-bc-flex-screen]');
                 if (flexScreen) {
-                    function returnToSlotGrid() {
+                    function removeFlexScreens() {
                         document.querySelectorAll('[data-bc-flex-screen]').forEach(f => f.remove());
+                        document.querySelectorAll('[data-bc-flex-bottom-bar]').forEach(f => f.remove());
+                    }
+
+                    function returnToSlotGrid() {
+                        removeFlexScreens();
                         document.querySelectorAll('.all-clubs-availability').forEach(el => { el.style.display = ''; });
                         if (nextButton) nextButton.style.display = '';
                         initNextButton();
                     }
 
                     function proceedToPartnerPicker(updatedSlotInfo) {
-                        document.querySelectorAll('[data-bc-flex-screen]').forEach(f => f.remove());
+                        removeFlexScreens();
                         injectPartnerPickerIntoHosts(hostsToUse, anchorElement, updatedSlotInfo, players, photosByMemberId);
                     }
 
@@ -5446,11 +5627,12 @@
                             slotInfo.toMinutes = bookNowSlot.toMinutes;
                             slotInfo.fromTime = bookNowSlot.fromTime;
                             slotInfo.toTime = bookNowSlot.toTime;
-                            // Set allCourts from the slot's court list so scheduleBooking
-                            // can pick the best primary and build fallbacks.
                             slotInfo.allCourts = bookNowSlot.courts || [];
-                            slotInfo.courtId = null;
-                            slotInfo.courtName = null;
+                            // Use the explicitly selected court if the user
+                            // picked one from the expandable list; otherwise
+                            // let scheduleBooking auto-select the best court.
+                            slotInfo.courtId = bookNowSlot.courtId || null;
+                            slotInfo.courtName = bookNowSlot.courtName || null;
                             slotInfo.flexibilityPrefs = { alternativeSlots: [] };
                             proceedToPartnerPicker(slotInfo);
                         },
@@ -5743,6 +5925,9 @@
                     document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
                         el.remove();
                     });
+                    document.querySelectorAll('[data-bc-flex-bottom-bar]').forEach(function (el) {
+                        el.remove();
+                    });
                     var bar = document.querySelector('.white-bg.p-2 .container');
                     if (bar) { bar.style.removeProperty('display'); }
                 }
@@ -5752,7 +5937,11 @@
                 const flexOverlay = createCvOverlay();
                 const flexWrapper = document.createElement('div');
                 flexWrapper.innerHTML = flexHtml;
-                flexOverlay.appendChild(flexWrapper.firstElementChild);
+                // Append both the flex-screen and the fixed bottom bar into
+                // the overlay.
+                while (flexWrapper.firstElementChild) {
+                    flexOverlay.appendChild(flexWrapper.firstElementChild);
+                }
                 document.body.appendChild(flexOverlay);
 
                 const flexScreen = flexOverlay.querySelector('[data-bc-flex-screen]');
@@ -5777,8 +5966,11 @@
                             slotInfo.fromTime = bookNowSlot.fromTime;
                             slotInfo.toTime = bookNowSlot.toTime;
                             slotInfo.allCourts = bookNowSlot.courts || [];
-                            slotInfo.courtId = null;
-                            slotInfo.courtName = null;
+                            // Use the explicitly selected court if the user
+                            // picked one from the expandable list; otherwise
+                            // let scheduleBooking auto-select the best court.
+                            slotInfo.courtId = bookNowSlot.courtId || null;
+                            slotInfo.courtName = bookNowSlot.courtName || null;
                             slotInfo.flexibilityPrefs = { alternativeSlots: [] };
                             proceedToPartnerPickerOverlay(slotInfo);
                         },
