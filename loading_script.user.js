@@ -5951,6 +5951,10 @@
                         'overflow-y:auto;background:#1a2f3c;box-sizing:border-box;',
                         'padding:72px 16px 40px;',
                     ].join('');
+                    // Hide the sticky column header while the overlay is up so
+                    // it does not float above the schedule/partner picker screen.
+                    var stickyBar = document.querySelector('[data-bc-sticky-header]');
+                    if (stickyBar) stickyBar.style.display = 'none';
                     return overlay;
                 }
 
@@ -5963,6 +5967,15 @@
                     });
                     var bar = document.querySelector('.white-bg.p-2 .container');
                     if (bar) { bar.style.removeProperty('display'); }
+                    // Restore the sticky header — `onScroll` will set the
+                    // correct display value on the next scroll event.  Force a
+                    // re-evaluation now so it reappears immediately if the
+                    // native headers are still scrolled out of view.
+                    var stickyBar = document.querySelector('[data-bc-sticky-header]');
+                    if (stickyBar) {
+                        stickyBar.style.display = '';
+                        window.dispatchEvent(new Event('scroll'));
+                    }
                 }
 
                 // Show the flexibility screen in the overlay first.
@@ -7444,7 +7457,13 @@
                 }
 
                 // Show/hide based on whether the native headers are scrolled out of view.
+                // Suppress the bar while a schedule/partner-picker overlay is open
+                // so it does not float above those screens.
                 function onScroll() {
+                    if (document.querySelector('[data-bc-cv-schedule-overlay]')) {
+                        bar.style.display = 'none';
+                        return;
+                    }
                     const firstHeader = cal.querySelector('div.booking-calendar-column-header');
                     if (!firstHeader) return;
                     const headerBottom = firstHeader.getBoundingClientRect().bottom;
@@ -8057,6 +8076,7 @@
         _bcTestExports.buildCourtViewBarLabel = buildCourtViewBarLabel;
         _bcTestExports.classifyCourtType = classifyCourtType;
         _bcTestExports.gatherAlternativeSlots = gatherAlternativeSlots;
+        _bcTestExports.getBookingStateService = getBookingStateService;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }

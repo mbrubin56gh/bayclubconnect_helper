@@ -1755,6 +1755,45 @@ test.describe('Court View native column features', () => {
         const opacity = await closedSlot.first().evaluate(el => parseFloat(getComputedStyle(el).opacity));
         expect(opacity).toBeLessThanOrEqual(0.3);
     });
+
+    test('sticky column header appears when scrolled past native headers', async () => {
+        requireAuth(test);
+
+        const stickyBar = page.locator('[data-bc-sticky-header]');
+        await expect(stickyBar).toBeAttached({ timeout: 15_000 });
+
+        // Scroll the page far enough that the native column headers are above
+        // the viewport.  The calendar grid is tall, so scrolling to the bottom
+        // of the page should be sufficient.
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.waitForTimeout(500);
+
+        // The sticky bar should now be visible.
+        const display = await stickyBar.evaluate(el => getComputedStyle(el).display);
+        expect(display).not.toBe('none');
+
+        // Scroll back to top so we leave the page in a clean state.
+        await page.evaluate(() => window.scrollTo(0, 0));
+    });
+
+    test('clicking a closed slot does not open the schedule panel', async () => {
+        requireAuth(test);
+
+        const closedSlot = page.locator('.booking-calendar-column-time-slot[data-bc-closed]');
+        const found = await closedSlot.first().isAttached({ timeout: 10_000 }).catch(() => false);
+        if (!found) {
+            test.skip(true, 'No data-bc-closed slots found — cannot test click prevention');
+        }
+
+        // Click the closed slot.  CSS pointer-events:none blocks normal clicks,
+        // but Playwright's click bypasses CSS — so this exercises the JS guard.
+        await closedSlot.first().click({ force: true });
+        await page.waitForTimeout(1000);
+
+        // No schedule overlay should have appeared.
+        const overlay = page.locator('[data-bc-cv-schedule-overlay]');
+        await expect(overlay).toHaveCount(0);
+    });
 });
 
 // ---------------------------------------------------------------------------

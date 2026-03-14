@@ -35,6 +35,7 @@ const {
     compareBookingsByReservationTime,
     formatPendingBookingDayLabel,
     SLOT_CHECK_STATUS,
+    getBookingStateService,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -554,5 +555,98 @@ describe('formatPendingBookingDayLabel', () => {
         const label = formatPendingBookingDayLabel('2026-03-01');
         expect(typeof label).toBe('string');
         expect(label.length).toBeGreaterThan(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// updateCourtsheetState
+//   Verifies that the courtsheet state patching on getBookingStateService()
+//   correctly updates date and courtsheetEventsByClubId on lastFetchState
+//   without replacing unrelated fields.
+// ---------------------------------------------------------------------------
+
+describe('updateCourtsheetState', () => {
+    it('updates date on lastFetchState.params', () => {
+        const svc = getBookingStateService();
+        svc.setLastFetchState({
+            transformed: { Morning: [] },
+            params: { date: '2026-03-10', categoryCode: 'PB' },
+            failedClubIds: [],
+            courtsheetEventsByClubId: {},
+        });
+
+        svc.updateCourtsheetState('2026-03-11');
+
+        const state = svc.getLastFetchState();
+        expect(state.params.date).toBe('2026-03-11');
+        // Other params fields are preserved.
+        expect(state.params.categoryCode).toBe('PB');
+        // courtsheetEventsByClubId is unchanged when not passed.
+        expect(state.courtsheetEventsByClubId).toEqual({});
+    });
+
+    it('updates courtsheetEventsByClubId when provided', () => {
+        const svc = getBookingStateService();
+        svc.setLastFetchState({
+            transformed: { Morning: [] },
+            params: { date: '2026-03-10' },
+            failedClubIds: [],
+            courtsheetEventsByClubId: {},
+        });
+
+        const newEvents = { [BROADWAY_ID]: [{ court: { courtId: 'c1' }, timeFromInMinutes: 420 }] };
+        svc.updateCourtsheetState('2026-03-12', newEvents);
+
+        const state = svc.getLastFetchState();
+        expect(state.params.date).toBe('2026-03-12');
+        expect(state.courtsheetEventsByClubId).toBe(newEvents);
+        // Unrelated fields are preserved.
+        expect(state.transformed).toEqual({ Morning: [] });
+    });
+
+    it('is a no-op when lastFetchState is null', () => {
+        const svc = getBookingStateService();
+        svc.clearLastFetchState();
+
+        // Should not throw.
+        svc.updateCourtsheetState('2026-03-15', { someClub: [] });
+
+        expect(svc.getLastFetchState()).toBeNull();
+    });
+
+    it('skips date update when date argument is falsy', () => {
+        const svc = getBookingStateService();
+        svc.setLastFetchState({
+            transformed: {},
+            params: { date: '2026-03-10' },
+            failedClubIds: [],
+            courtsheetEventsByClubId: {},
+        });
+
+        svc.updateCourtsheetState(null, { club1: [] });
+
+        const state = svc.getLastFetchState();
+        // Date is unchanged.
+        expect(state.params.date).toBe('2026-03-10');
+        // Events are updated.
+        expect(state.courtsheetEventsByClubId).toEqual({ club1: [] });
+    });
+
+    it('skips events update when courtsheetEventsByClubId is omitted', () => {
+        const svc = getBookingStateService();
+        const originalEvents = { [BROADWAY_ID]: [{ some: 'event' }] };
+        svc.setLastFetchState({
+            transformed: {},
+            params: { date: '2026-03-10' },
+            failedClubIds: [],
+            courtsheetEventsByClubId: originalEvents,
+        });
+
+        svc.updateCourtsheetState('2026-03-11');
+
+        const state = svc.getLastFetchState();
+        expect(state.params.date).toBe('2026-03-11');
+        // Original events are preserved.
+        expect(state.courtsheetEventsByClubId).toBe(originalEvents);
     });
 });
