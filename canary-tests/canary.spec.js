@@ -1847,12 +1847,17 @@ test.describe('Court View straddle prompt', () => {
             const slotCount = await allSlots.count();
             if (slotCount < 4) continue;
 
-            // Walk the column's slots and find the last available slot that is
-            // immediately followed by at least one locked slot.  With 90-min
-            // duration the booking would span 3 sub-slots, so we need the
-            // boundary within reach.
+            // Walk the column's slots and find the first available slot that is
+            // immediately followed by at least one locked slot, where the locked
+            // slot is before 9:30 PM (index 33).  Boundaries at or after 9:30 PM
+            // are likely court-close boundaries, not 3-day window boundaries, and
+            // straddle detection correctly ignores courts-closed slots.
+            const GRID_START = 300; // 5:00 AM in minutes.
+            const MAX_BOUNDARY_MINUTES = 21 * 60 + 30; // 9:30 PM.
             let boundaryIndex = -1;
             for (let si = 0; si < slotCount - 1; si++) {
+                const lockedSlotMinutes = GRID_START + (si + 1) * 30;
+                if (lockedSlotMinutes >= MAX_BOUNDARY_MINUTES) break;
                 const slot = allSlots.nth(si);
                 const nextSlot = allSlots.nth(si + 1);
                 const isAvailable = !(await slot.evaluate(

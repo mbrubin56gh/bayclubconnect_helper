@@ -4927,6 +4927,26 @@
                 if (slotIndex < 0) return;
                 const fromMinutes = COURT_VIEW_GRID_START_MINUTES + slotIndex * 30;
 
+                // Skip slots outside the court's operating hours (e.g. 5:00–6:00 AM
+                // on Saturday).  These are courts-closed, not window-locked.
+                const courtsOrderForHours = getBookingStateService().getMergedCourtsOrder() || [];
+                const courtEntryForHours = courtsOrderForHours.find(function (c) {
+                    return c.courtId === courtId;
+                });
+                if (courtEntryForHours && Array.isArray(courtEntryForHours.openingHours)) {
+                    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
+                        'Thursday', 'Friday', 'Saturday'][new Date(slotDate + 'T12:00:00').getDay()];
+                    const dayEntry = courtEntryForHours.openingHours.find(function (h) {
+                        return h.dayOfWeek === dayName;
+                    });
+                    const openHours = dayEntry && Array.isArray(dayEntry.openingHours) &&
+                        dayEntry.openingHours[0];
+                    if (openHours && (fromMinutes < openHours.fromInMinutes ||
+                        fromMinutes >= openHours.toInMinutes)) {
+                        return;
+                    }
+                }
+
                 // Skip slots that already have a booking or lesson event.
                 const clubEvents = lastFetchState.courtsheetEventsByClubId &&
                     lastFetchState.courtsheetEventsByClubId[clubId];
@@ -5021,8 +5041,11 @@
                         document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
                             el.remove();
                         });
+                        // Remove the stale bottom bar selection so Angular can recreate
+                        // it cleanly on the next native slot click.  Using display:none
+                        // would permanently suppress the bar until a full page reload.
                         var bar = document.querySelector('.white-bg.p-2 .container');
-                        if (bar) { bar.style.display = 'none'; }
+                        if (bar) { bar.style.removeProperty('display'); }
                     });
                 }
 
@@ -5567,6 +5590,24 @@
                                 ev.timeToInMinutes > lockedFrom;
                         });
                         if (coveredByEvent) return; // Let Angular show its native error.
+
+                        // Slots outside the court's operating hours (e.g. 5:00–6:00 AM
+                        // on Saturday at RWS) are shaded unavailable but have no event.
+                        // Do not intercept these — let Angular handle them.
+                        const lockedCourtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
+                        const lockedCourtEntry = lockedCourtsOrder.find(function (c) {
+                            return c.courtId === lockedCourtId;
+                        });
+                        const lockedSlotDate = lockedFetchState && lockedFetchState.params &&
+                            lockedFetchState.params.date;
+                        const lockedOpenHours = lockedCourtEntry && lockedSlotDate
+                            ? getCourtOpenHoursForDate(lockedCourtEntry, lockedSlotDate)
+                            : null;
+                        if (lockedOpenHours &&
+                            (lockedFrom < lockedOpenHours.fromInMinutes ||
+                             lockedFrom >= lockedOpenHours.toInMinutes)) {
+                            return; // Outside operating hours — not a bookable slot.
+                        }
                     }
                     // Stop propagation in capture phase so Angular's slot-level listener
                     // never fires and never shows its native "slot unavailable" error.
@@ -5742,18 +5783,20 @@
                     clearLockedSlotHover();
                 }
 
-                // Removes Angular's add-tile and hides the bottom bar, producing a
+                // Removes Angular's add-tile and resets the bottom bar, producing a
                 // fully clean slate.  Used by Cancel, Schedule, Book now, and backdrop.
                 function dismissAndClearNativeSelection() {
                     dismiss();
                     // Angular may have injected a .booking-calendar-add-tile from a
-                    // prior hover or from the desktop mouseover path.  Remove it and
-                    // hide the bottom bar so no stale native selection lingers.
+                    // prior hover or from the desktop mouseover path.  Remove it so
+                    // no stale native selection lingers.  Clear any inline display
+                    // style on the bottom bar so Angular can manage it normally on
+                    // the next native slot click.
                     col.querySelectorAll('.booking-calendar-add-tile').forEach(function (tile) {
                         tile.remove();
                     });
                     var bottomBar = document.querySelector('.white-bg.p-2 .container');
-                    if (bottomBar) { bottomBar.style.display = 'none'; }
+                    if (bottomBar) { bottomBar.style.removeProperty('display'); }
                 }
 
                 btnBook.addEventListener('click', function () {
