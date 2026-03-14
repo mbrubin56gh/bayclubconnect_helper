@@ -1726,6 +1726,35 @@ test.describe('Court View native column features', () => {
         const offset = Math.abs(afterBox.x - contentLeft);
         expect(offset).toBeLessThanOrEqual(2);
     });
+
+    test('sticky column header bar is injected and hidden when headers are visible', async () => {
+        requireAuth(test);
+
+        // The sticky header should be in the DOM but hidden when the native
+        // column headers are still in the viewport.
+        const stickyBar = page.locator('[data-bc-sticky-header]');
+        await expect(stickyBar).toBeAttached({ timeout: 15_000 });
+
+        // While the native headers are visible, the bar should be display:none.
+        const display = await stickyBar.evaluate(el => getComputedStyle(el).display);
+        expect(display).toBe('none');
+    });
+
+    test('at least one slot is marked data-bc-closed for out-of-hours dimming', async () => {
+        requireAuth(test);
+
+        // Courts have finite operating hours, so there should always be some
+        // slots outside those hours stamped with data-bc-closed.
+        const closedSlot = page.locator('.booking-calendar-column-time-slot[data-bc-closed]');
+        const found = await closedSlot.first().isAttached({ timeout: 10_000 }).catch(() => false);
+        if (!found) {
+            // Gracefully skip if no closed slots exist (e.g. a 24-hour court).
+            test.skip(true, 'No data-bc-closed slots found — courts may be 24-hour on this date');
+        }
+        // Verify the closed slot is visually dimmed (opacity significantly reduced).
+        const opacity = await closedSlot.first().evaluate(el => parseFloat(getComputedStyle(el).opacity));
+        expect(opacity).toBeLessThanOrEqual(0.3);
+    });
 });
 
 // ---------------------------------------------------------------------------

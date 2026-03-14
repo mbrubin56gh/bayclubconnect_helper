@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.16
+// @version      1.17
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -132,6 +132,22 @@
                 lastFetchState = null;
             }
 
+            // Patch courtsheet-specific fields on `lastFetchState` without
+            // replacing the whole object.  Called from the courtsheet /courts
+            // and events intercepts on date change so `tagColumns` sees the
+            // current date.  `courtsheetEventsByClubId` is optional — the
+            // /courts intercept fires before the events response arrives and
+            // only needs to update the date.
+            function updateCourtsheetState(date, courtsheetEventsByClubId) {
+                if (!lastFetchState) return;
+                if (date && lastFetchState.params) {
+                    lastFetchState.params.date = date;
+                }
+                if (courtsheetEventsByClubId) {
+                    lastFetchState.courtsheetEventsByClubId = courtsheetEventsByClubId;
+                }
+            }
+
             function setPendingSlotBooking(booking) {
                 pendingSlotBooking = booking;
             }
@@ -173,6 +189,7 @@
                 setLastFetchState,
                 getLastFetchState,
                 clearLastFetchState,
+                updateCourtsheetState,
                 setPendingSlotBooking,
                 getPendingSlotBooking,
                 clearPendingSlotBooking,
@@ -687,6 +704,12 @@
                                     };
                                 })
                             );
+                            // Update the date on lastFetchState immediately so
+                            // tagColumns (fired by MutationObserver when Angular
+                            // renders these columns) uses the correct date for
+                            // operating-hours dimming.  The events intercept
+                            // will update courtsheetEventsByClubId later.
+                            getBookingStateService().updateCourtsheetState(params.date);
                             applyMergedPayloadToXhr(capturedXhrRef, nativeData);
                         } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
@@ -736,12 +759,22 @@
                     ).then(function (results) {
                         try {
                             if (!Array.isArray(nativeData.events)) nativeData.events = [];
-                            results.forEach(function (r) {
+                            // Build a fresh courtsheetEventsByClubId map so
+                            // lastFetchState stays current after date changes.
+                            const freshEventsByClub = {};
+                            freshEventsByClub[nativeClubId] = nativeData.events.slice();
+                            results.forEach(function (r, idx) {
                                 if (r.status !== 'fulfilled') return;
-                                (r.value.events || []).forEach(function (ev) {
+                                const fetchedClubId = otherClubIds[idx];
+                                const clubEvents = r.value.events || [];
+                                freshEventsByClub[fetchedClubId] = clubEvents;
+                                clubEvents.forEach(function (ev) {
                                     nativeData.events.push(ev);
                                 });
                             });
+                            // Update lastFetchState so tagColumns and click
+                            // handlers see the correct date and events.
+                            getBookingStateService().updateCourtsheetState(date, freshEventsByClub);
                             applyMergedPayloadToXhr(capturedXhrRef, nativeData);
                         } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
@@ -6368,6 +6401,7 @@
                 const podConflicts = lastFetchState
                     ? computePodConflicts(lastFetchState.params.date, lastFetchState)
                     : {};
+                const viewDate = lastFetchState && lastFetchState.params && lastFetchState.params.date;
 
                 // On Firefox Android, Angular keeps two app-booking-calendar elements
                 // (one off-screen at translateX(590px), one visible).  Both contain
@@ -6378,25 +6412,27 @@
                     const columns = cal.querySelectorAll('app-booking-calendar-column');
                     columns.forEach((col, i) => {
                         if (i >= courtsOrder.length) return;
-                        tagOneColumn(col, i, courtsOrder, podConflicts);
+                        tagOneColumn(col, i, courtsOrder, podConflicts, viewDate);
                     });
                 });
 
                 injectWeatherStrip();
                 injectClubNavStrip();
+                injectStickyColumnHeader();
             }
 
-            function tagOneColumn(col, i, courtsOrder, podConflicts) {
-                const clubId = courtsOrder[i].clubId;
+            function tagOneColumn(col, i, courtsOrder, podConflicts, viewDate) {
+                const courtEntry = courtsOrder[i];
+                const clubId = courtEntry.clubId;
                 col.setAttribute('data-bc-club-id', clubId);
-                col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
+                col.setAttribute('data-bc-court-id', courtEntry.courtId);
 
                 // Use the API court name as the canonical source of truth.
                 // Angular abbreviates names ("PB1", "2", bare "Pickleball")
                 // but the API returns the full form ("Pickleball 1") that
                 // matches our badge lookup tables.  Trim to handle Santa
                 // Clara's occasional trailing spaces.
-                const canonicalName = (courtsOrder[i].courtName || '').trim();
+                const canonicalName = (courtEntry.courtName || '').trim();
                 const badges = [];
                 if (isCourtGated(canonicalName, clubId))      badges.push('G');
                 if (isCourtEdge(canonicalName, clubId))       badges.push('E');
@@ -6425,6 +6461,23 @@
                 } else {
                     col.removeAttribute('data-bc-pod-conflict');
                 }
+
+                // Mark slots outside the court's operating hours with
+                // data-bc-closed so CSS can dim them.  This makes the
+                // boundary between "closed" and "locked but bookable"
+                // visually obvious.
+                if (viewDate) {
+                    const hours = getCourtOpenHoursForDate(courtEntry, viewDate);
+                    const allSlots = col.querySelectorAll('.booking-calendar-column-time-slot');
+                    allSlots.forEach(function (slot, si) {
+                        const slotFrom = COURT_VIEW_GRID_START_MINUTES + si * 30;
+                        if (hours && (slotFrom < hours.fromInMinutes || slotFrom >= hours.toInMinutes)) {
+                            slot.setAttribute('data-bc-closed', '');
+                        } else {
+                            slot.removeAttribute('data-bc-closed');
+                        }
+                    });
+                }
             }
 
             // When a non-home-club native slot is clicked, Angular's bottom bar will render
@@ -6439,6 +6492,10 @@
                     '.booking-calendar-column-time-slot.booking-calendar-column-time-slot-unavailable'
                 );
                 if (lockedSlot) {
+                    // Slots marked closed are outside operating hours — never
+                    // intercept them regardless of other checks.
+                    if (lockedSlot.hasAttribute('data-bc-closed')) return;
+
                     // Only intercept if the slot is window-locked (no courtsheet event
                     // covers it).  If a class, existing booking, or other event makes it
                     // unavailable, let Angular handle the click so it can show its native
@@ -6787,7 +6844,13 @@
                     'box-sizing:border-box !important;}' +
                     'div.booking-calendar-time-slot span{font-size:10px !important;' +
                     'white-space:nowrap !important;}';
-                style.textContent = rules + podConflictRule + badgeRule + lockedHoverRule + weatherCalRule;
+                // Dim slots outside the court's operating hours so "closed"
+                // is visually distinct from "locked but bookable later".
+                const closedSlotRule =
+                    '.booking-calendar-column-time-slot[data-bc-closed]' +
+                    '{opacity:0.25 !important;pointer-events:none !important;}';
+
+                style.textContent = rules + podConflictRule + badgeRule + lockedHoverRule + weatherCalRule + closedSlotRule;
                 document.head.appendChild(style);
             }
 
@@ -6977,6 +7040,9 @@
                     return;
                 }
 
+                // Slots marked closed are outside operating hours — skip hover.
+                if (lockedSlot.hasAttribute('data-bc-closed')) return;
+
                 const column = lockedSlot.closest('app-booking-calendar-column[data-bc-club-id]');
                 if (!column) return;
 
@@ -7041,22 +7107,27 @@
                 const effectiveLastIndex = Math.min(lastIndex, courtCloseIndex);
 
                 // Phase 1: extend downward from hover until duration is filled, a booked
-                // slot is hit, or the court's last open slot is reached.
+                // slot is hit, a closed slot is hit, or the court's last open slot
+                // is reached.
                 let endIndex = hoverIndex;
                 while (
                     endIndex < effectiveLastIndex &&
                     endIndex - hoverIndex + 1 < durationSlots &&
-                    !bookedIndices.has(endIndex + 1)
+                    !bookedIndices.has(endIndex + 1) &&
+                    !allSlots[endIndex + 1].hasAttribute('data-bc-closed')
                 ) {
                     endIndex++;
                 }
 
                 // Phase 2: if the downward window is shorter than the full duration,
-                // extend upward to fill the shortfall.
+                // extend upward to fill the shortfall.  Stop at booked slots and
+                // at courts-closed slots (data-bc-closed) so the highlight never
+                // reaches into hours when the court is not open.
                 let startIndex = hoverIndex;
                 const remaining = durationSlots - (endIndex - hoverIndex + 1);
                 for (let filled = 0; filled < remaining; filled++) {
                     if (startIndex <= 0 || bookedIndices.has(startIndex - 1)) break;
+                    if (allSlots[startIndex - 1].hasAttribute('data-bc-closed')) break;
                     startIndex--;
                 }
 
@@ -7299,6 +7370,119 @@
                 });
             }
 
+            // Injects a sticky header bar that mirrors the column names and
+            // appears when the native column headers scroll out of view.
+            // Uses a scroll listener on the window to toggle visibility and
+            // syncs horizontal scroll with the floating-scroll driver.
+            let stickyHeaderCleanup = null;
+            function injectStickyColumnHeader() {
+                // Only inject once per Court View session.
+                if (document.querySelector('[data-bc-sticky-header]')) return;
+
+                const cal = findVisibleCalendar();
+                if (!cal) return;
+                const courtsOrder = getBookingStateService().getMergedCourtsOrder();
+                if (!courtsOrder || courtsOrder.length === 0) return;
+
+                // Build the sticky bar with a label for each column.
+                const bar = document.createElement('div');
+                bar.setAttribute('data-bc-sticky-header', '1');
+                bar.style.cssText = [
+                    'position:fixed;top:0;left:0;right:0;z-index:10000;',
+                    'background:#1a2f3c;box-shadow:0 2px 6px rgba(0,0,0,0.4);',
+                    'display:none;overflow:hidden;height:44px;',
+                ].join('');
+
+                // Inner container scrolls horizontally in sync with the columns.
+                const inner = document.createElement('div');
+                inner.setAttribute('data-bc-sticky-inner', '1');
+                inner.style.cssText = 'display:flex;white-space:nowrap;height:100%;';
+
+                courtsOrder.forEach(function (entry) {
+                    const label = document.createElement('div');
+                    const clubColor = CLUB_COLUMN_COLORS[entry.clubId] || '#aaa';
+                    const canonicalName = (entry.courtName || '').trim();
+                    const clubName = CLUB_SHORT_NAMES[entry.clubId] || '';
+                    label.style.cssText = [
+                        'display:flex;flex-direction:column;justify-content:center;',
+                        'align-items:center;flex-shrink:0;font-size:13px;',
+                        'border-right:1px solid rgba(255,255,255,0.08);',
+                        'padding:2px 4px;box-sizing:border-box;',
+                    ].join('');
+                    label.innerHTML =
+                        '<span style="font-size:10px;font-weight:600;color:' + clubColor + ';line-height:1.2;">' + clubName + '</span>' +
+                        '<span style="color:white;font-size:13px;line-height:1.2;">' + canonicalName + '</span>';
+                    inner.appendChild(label);
+                });
+
+                bar.appendChild(inner);
+                document.body.appendChild(bar);
+
+                // Measure native columns to match widths.
+                function syncWidths() {
+                    const columns = cal.querySelectorAll('app-booking-calendar-column');
+                    const labels = inner.children;
+                    for (let i = 0; i < labels.length && i < columns.length; i++) {
+                        const w = columns[i].getBoundingClientRect().width;
+                        labels[i].style.width = w + 'px';
+                    }
+                }
+
+                // Sync horizontal scroll position with the column container.
+                function syncScroll() {
+                    const contentEl = cal.querySelector('.booking-calendar-columns-floating-scroll');
+                    if (!contentEl) return;
+                    inner.style.transform = 'translateX(' + (-contentEl.scrollLeft) + 'px)';
+                }
+
+                // Align the inner container's left edge with the first column.
+                function syncLeft() {
+                    const contentEl = cal.querySelector('.booking-calendar-columns-floating-scroll');
+                    if (contentEl) {
+                        inner.style.marginLeft = contentEl.getBoundingClientRect().left + 'px';
+                    }
+                }
+
+                // Show/hide based on whether the native headers are scrolled out of view.
+                function onScroll() {
+                    const firstHeader = cal.querySelector('div.booking-calendar-column-header');
+                    if (!firstHeader) return;
+                    const headerBottom = firstHeader.getBoundingClientRect().bottom;
+                    bar.style.display = (headerBottom < 0) ? 'block' : 'none';
+                }
+
+                syncWidths();
+                syncLeft();
+                syncScroll();
+                onScroll();
+
+                window.addEventListener('scroll', onScroll, { passive: true });
+
+                // Listen for horizontal scroll on the floating-scroll driver.
+                const floatingScroll = document.querySelector('.floating-scroll');
+                if (floatingScroll) {
+                    floatingScroll.addEventListener('scroll', syncScroll, { passive: true });
+                }
+                // Also listen on the content container for mobile.
+                const contentEl = cal.querySelector('.booking-calendar-columns-floating-scroll');
+                if (contentEl) {
+                    contentEl.addEventListener('scroll', syncScroll, { passive: true });
+                }
+
+                // Store cleanup so clear() can tear down listeners.
+                stickyHeaderCleanup = function () {
+                    window.removeEventListener('scroll', onScroll);
+                    if (floatingScroll) {
+                        floatingScroll.removeEventListener('scroll', syncScroll);
+                    }
+                    if (contentEl) {
+                        contentEl.removeEventListener('scroll', syncScroll);
+                    }
+                    bar.remove();
+                    stickyHeaderCleanup = null;
+                };
+            }
+
             // Un-hides the native calendar and wires a MutationObserver to re-tag
             // columns whenever Angular re-renders them (e.g. on date change).
             // Safe to call on every reconcile pass — the observer and click listener
@@ -7344,6 +7528,8 @@
                     calendarClickTarget = null;
                 }
                 clearLockedSlotHover();
+                if (stickyHeaderCleanup) stickyHeaderCleanup();
+                document.querySelectorAll('[data-bc-sticky-header]').forEach(el => el.remove());
                 document.querySelectorAll('[data-bc-cv-club-nav]').forEach(el => el.remove());
                 document.querySelectorAll('[data-bc-badge-legend]').forEach(el => el.remove());
                 document.querySelectorAll('style[data-bc-col-colors]').forEach(el => el.remove());
