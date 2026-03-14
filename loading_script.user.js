@@ -4637,7 +4637,7 @@
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
                 const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
                 const fireAtLabel = fireAtIsToday
-                    ? `today at ${fireAtTimeLabel}`
+                    ? `${fireAtTimeLabel} today`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
                 // Count fallback courts at the primary time/club (excluding the primary court).
@@ -4755,7 +4755,7 @@
                     <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
                         <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
-                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
+                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">We will attempt to book this for you when the booking window opens at ${fireAtLabel}.</div>
                         ${fallbackCourtCount > 0 ? `<div style="font-size: 11px; color: rgba(0,188,212,0.7); margin-top: 4px;">If unavailable, we\u2019ll try the ${fallbackCourtCount} other court${fallbackCourtCount !== 1 ? 's' : ''} at this time and location.</div>` : ''}
                     </div>
                     ${timeStepperHtml}
@@ -5112,7 +5112,7 @@
                 const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
                 const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
                 const fireAtLabel = fireAtIsToday
-                    ? `today at ${fireAtTimeLabel}`
+                    ? `${fireAtTimeLabel} today`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
                 const selfProfile = getLocalStorageService().getJson(STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile');
@@ -5133,7 +5133,7 @@
                     <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
                         <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
-                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
+                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">We will attempt to book this for you when the booking window opens at ${fireAtLabel}.</div>
                     </div>
                     <div data-bc-buddy-vis-toggle data-checked="true" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-top: 1px solid rgba(0,188,212,0.3); border-bottom: 1px solid rgba(0,188,212,0.3); margin-bottom: 12px; cursor: pointer;">
                         <span style="font-size: 13px; color: rgba(255,255,255,0.85);">Show to Buddy List</span>
