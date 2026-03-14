@@ -4640,6 +4640,10 @@
                     ? `today at ${fireAtTimeLabel}`
                     : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+                // Count fallback courts at the primary time/club (excluding the primary court).
+                const fallbackCourtCount = (slotInfo.allCourts || [])
+                    .filter(c => c.courtId !== slotInfo.courtId).length;
+
                 // Split alternatives into available-now and locked.
                 const nowTimes = altTimes.filter(a => !a.locked);
                 const nowClubs = altClubs.filter(a => !a.locked);
@@ -4677,8 +4681,6 @@
 
                 // "Schedule as backup" section — checkboxes with priority reorder.
                 const hasSched = schedTimes.length > 0 || schedClubs.length > 0;
-                const fallbackCourtCount = (slotInfo.allCourts || [])
-                    .filter(c => c.courtId !== slotInfo.courtId).length;
                 let schedSection = '';
                 if (hasSched) {
                     let schedTimesHtml = '';
@@ -4754,6 +4756,7 @@
                         <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
                         <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
                         <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
+                        ${fallbackCourtCount > 0 ? `<div style="font-size: 11px; color: rgba(0,188,212,0.7); margin-top: 4px;">If unavailable, we\u2019ll try the ${fallbackCourtCount} other court${fallbackCourtCount !== 1 ? 's' : ''} at this time and location.</div>` : ''}
                     </div>
                     ${timeStepperHtml}
                     ${nowSection}
