@@ -50,6 +50,7 @@ const {
     COURT_VIEW_COLORS,
     buildCourtViewBarLabel,
     classifyCourtType,
+    gatherAlternativeSlots,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -580,15 +581,15 @@ describe('buildCourtViewBarLabel', () => {
     });
 });
 
-describe('classifyCourtType', () => {
+// Club UUIDs from the userscript constants.
+const CLUBS = {
+    broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
+    redwoodShores: '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',
+    santaClara: '3bc78448-ec6b-49e1-a2ae-64abd68e646b',
+    southSF: 'ce7e7607-09e6-4d16-8197-1fffb70db776',
+};
 
-    // Club UUIDs from the userscript constants.
-    const CLUBS = {
-        broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
-        redwoodShores: '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',
-        santaClara: '3bc78448-ec6b-49e1-a2ae-64abd68e646b',
-        southSF: 'ce7e7607-09e6-4d16-8197-1fffb70db776',
-    };
+describe('classifyCourtType', () => {
 
     it('returns gated for a Santa Clara gated court', () => {
         expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 1')).toBe('gated');
@@ -622,5 +623,127 @@ describe('classifyCourtType', () => {
     it('gated takes priority over edge for Santa Clara courts that are both', () => {
         // Pickleball 1 at Santa Clara is in both GATED_COURTS and EDGE_COURTS.
         expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 1')).toBe('gated');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// gatherAlternativeSlots
+// ---------------------------------------------------------------------------
+
+describe('gatherAlternativeSlots', () => {
+    const primaryClubId = CLUBS.broadway;
+
+    function makeTransformed(clubs) {
+        // Wrap club entries into the Morning/Afternoon/Evening structure.
+        return { Morning: clubs, Afternoon: [], Evening: [] };
+    }
+
+    it('returns nearby times at the same club within ±2 hours', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: primaryClubId,
+                    shortName: 'Broadway',
+                    availabilities: [
+                        { fromInMinutes: 420, toInMinutes: 510, fromHumanTime: '7:00 AM', toHumanTime: '8:30 AM', courts: [{ courtId: 'c1' }] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c2' }] },
+                        { fromInMinutes: 540, toInMinutes: 630, fromHumanTime: '9:00 AM', toHumanTime: '10:30 AM', courts: [{ courtId: 'c3' }] },
+                        { fromInMinutes: 720, toInMinutes: 810, fromHumanTime: '12:00 PM', toHumanTime: '1:30 PM', courts: [{ courtId: 'c4' }] },
+                    ],
+                },
+            ]),
+        };
+
+        const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
+
+        // 7:00 AM (60 min away) and 9:00 AM (60 min away) are within ±2h.
+        // 12:00 PM (240 min away) is outside ±2h. The primary slot (8:00 AM) is excluded.
+        expect(altTimes.length).toBe(2);
+        expect(altTimes[0].fromMinutes).toBe(420);
+        expect(altTimes[1].fromMinutes).toBe(540);
+        expect(altClubs.length).toBe(0);
+    });
+
+    it('returns same-time slots at other clubs', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: primaryClubId,
+                    shortName: 'Broadway',
+                    availabilities: [
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c1' }] },
+                    ],
+                },
+                {
+                    clubId: CLUBS.southSF,
+                    shortName: 'South SF',
+                    availabilities: [
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 's1' }, { courtId: 's2' }] },
+                    ],
+                },
+            ]),
+        };
+
+        const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
+
+        expect(altTimes.length).toBe(0);
+        expect(altClubs.length).toBe(1);
+        expect(altClubs[0].clubId).toBe(CLUBS.southSF);
+        expect(altClubs[0].courtCount).toBe(2);
+    });
+
+    it('excludes the primary slot from results', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: primaryClubId,
+                    shortName: 'Broadway',
+                    availabilities: [
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c1' }] },
+                    ],
+                },
+            ]),
+        };
+
+        const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
+
+        expect(altTimes.length).toBe(0);
+        expect(altClubs.length).toBe(0);
+    });
+
+    it('returns empty arrays when no fetch state', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, null);
+        expect(altTimes).toEqual([]);
+        expect(altClubs).toEqual([]);
+    });
+
+    it('sorts altTimes by distance from primary slot', () => {
+        const slotInfo = { clubId: primaryClubId, fromMinutes: 480, toMinutes: 570, date: '2026-03-20' };
+        const lastFetchState = {
+            transformed: makeTransformed([
+                {
+                    clubId: primaryClubId,
+                    shortName: 'Broadway',
+                    availabilities: [
+                        { fromInMinutes: 360, toInMinutes: 450, fromHumanTime: '6:00 AM', toHumanTime: '7:30 AM', courts: [{ courtId: 'c1' }] },
+                        { fromInMinutes: 450, toInMinutes: 540, fromHumanTime: '7:30 AM', toHumanTime: '9:00 AM', courts: [{ courtId: 'c2' }] },
+                        { fromInMinutes: 480, toInMinutes: 570, fromHumanTime: '8:00 AM', toHumanTime: '9:30 AM', courts: [{ courtId: 'c3' }] },
+                        { fromInMinutes: 510, toInMinutes: 600, fromHumanTime: '8:30 AM', toHumanTime: '10:00 AM', courts: [{ courtId: 'c4' }] },
+                    ],
+                },
+            ]),
+        };
+
+        const { altTimes } = gatherAlternativeSlots(slotInfo, lastFetchState);
+
+        // 8:30 AM (30 min), 7:30 AM (30 min), 6:00 AM (120 min) — sorted by abs distance.
+        expect(altTimes.length).toBe(3);
+        expect(altTimes[0].fromMinutes).toBe(450); // 30 min
+        expect(altTimes[1].fromMinutes).toBe(510); // 30 min
+        expect(altTimes[2].fromMinutes).toBe(360); // 120 min
     });
 });

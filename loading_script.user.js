@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.13
+// @version      1.14
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1998,16 +1998,33 @@
                     // Court type of the primary court so the Worker's availability
                     // check can prefer same-type fallbacks when auto-switching.
                     primaryCourtType: classifyCourtType(slotInfo.clubId, slotInfo.courtName),
-                    // Courts sorted by preference (gated > edge > neither), excluding the
-                    // primary. The Worker tries them in order if the primary POST fails.
-                    // Each entry is tagged with courtType for type-aware fallback selection.
-                    fallbackCourts: (slotInfo.allCourts || [])
-                        .filter(c => c.courtId !== slotInfo.courtId)
-                        .map(c => ({
-                            courtId: c.courtId,
-                            courtName: c.courtName || null,
-                            courtType: classifyCourtType(slotInfo.clubId, c.courtName),
-                        })),
+                    // Courts sorted by preference, excluding the primary.  When the user
+                    // has expressed a court type preference via the flexibility screen, sort
+                    // by that preference first; otherwise fall back to the default gated >
+                    // edge > standard ordering.
+                    fallbackCourts: (() => {
+                        const courtTypePref = slotInfo.flexibilityPrefs && slotInfo.flexibilityPrefs.courtTypePref;
+                        const tagged = (slotInfo.allCourts || [])
+                            .filter(c => c.courtId !== slotInfo.courtId)
+                            .map(c => ({
+                                courtId: c.courtId,
+                                courtName: c.courtName || null,
+                                courtType: classifyCourtType(slotInfo.clubId, c.courtName),
+                            }));
+                        if (courtTypePref && courtTypePref !== 'any') {
+                            // Preferred type first, then the rest in existing order.
+                            tagged.sort((a, b) => {
+                                const aMatch = a.courtType === courtTypePref ? 0 : 1;
+                                const bMatch = b.courtType === courtTypePref ? 0 : 1;
+                                return aMatch - bMatch;
+                            });
+                        }
+                        return tagged;
+                    })(),
+                    // User-selected alternative time/club slots from the flexibility screen.
+                    // The Worker tries these (in order) if the primary slot and all fallback
+                    // courts are taken at fire time.
+                    alternativeSlots: (slotInfo.flexibilityPrefs && slotInfo.flexibilityPrefs.alternativeSlots) || [],
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
                     partnerEmails,
                     notificationEmail: await fetchNotificationEmail(),
@@ -3782,6 +3799,70 @@
         return 'standard';
     }
 
+    // Bay Club booking window in days.  Used by gatherAlternativeSlots to
+    // determine whether an alternative slot is locked (beyond the window).
+    const BOOKING_WINDOW_DAYS = 3;
+
+    // Gathers alternative time slots and clubs from the last fetched
+    // availability data.  Returns { altTimes, altClubs } where each entry
+    // has enough information to render a selectable card on the flexibility
+    // screen and to reconstruct a booking body later.
+    function gatherAlternativeSlots(slotInfo, lastFetchState) {
+        const altTimes = [];
+        const altClubs = [];
+        const transformed = lastFetchState && lastFetchState.transformed;
+        if (!transformed) return { altTimes, altClubs };
+
+        const now = Date.now();
+        const windowMs = BOOKING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+        for (const todSlots of Object.values(transformed)) {
+            for (const clubEntry of todSlots) {
+                for (const slot of (clubEntry.availabilities || [])) {
+                    const isSameClub = clubEntry.clubId === slotInfo.clubId;
+                    const isSameTime = slot.fromInMinutes === slotInfo.fromMinutes &&
+                        slot.toInMinutes === slotInfo.toMinutes;
+                    const isPrimarySlot = isSameClub && isSameTime;
+                    if (isPrimarySlot) continue;
+
+                    // Determine if this slot is locked (beyond booking window).
+                    const slotMs = pacificSlotTimeMs(slotInfo.date, slot.fromInMinutes);
+                    const isLocked = (slotMs - now) > windowMs;
+
+                    const entry = {
+                        clubId: clubEntry.clubId,
+                        clubName: CLUB_SHORT_NAMES[clubEntry.clubId] || clubEntry.shortName,
+                        fromMinutes: slot.fromInMinutes,
+                        toMinutes: slot.toInMinutes,
+                        fromTime: slot.fromHumanTime,
+                        toTime: slot.toHumanTime,
+                        courtCount: slot.courts.length,
+                        courts: slot.courts,
+                        locked: isLocked,
+                    };
+
+                    if (isSameClub) {
+                        // Nearby times at the same club (within ±2 hours).
+                        const timeDiff = Math.abs(slot.fromInMinutes - slotInfo.fromMinutes);
+                        if (timeDiff <= 120) {
+                            altTimes.push(entry);
+                        }
+                    } else if (isSameTime) {
+                        // Same time slot at a different club.
+                        altClubs.push(entry);
+                    }
+                }
+            }
+        }
+
+        // Sort nearby times by distance from primary slot.
+        altTimes.sort((a, b) =>
+            Math.abs(a.fromMinutes - slotInfo.fromMinutes) - Math.abs(b.fromMinutes - slotInfo.fromMinutes)
+        );
+
+        return { altTimes, altClubs };
+    }
+
     function computeSlotLockState(slot, fetchDate, limitDate) {
         const slotTimeMs = pacificSlotTimeMs(fetchDate, slot.fromInMinutes);
         const slotLocked = slotTimeMs > limitDate.getTime();
@@ -4470,6 +4551,197 @@
                 </div>`;
             }
 
+            // Builds the HTML for the flexibility preferences screen shown between
+            // locked-slot selection and the partner picker.
+            function buildFlexibilityScreenHtml(slotInfo, lastFetchState) {
+                const { altTimes, altClubs } = gatherAlternativeSlots(slotInfo, lastFetchState);
+                const primaryCourtType = classifyCourtType(slotInfo.clubId, slotInfo.courtName);
+
+                const fireAt = new Date(getScheduledBookingService().computeFireAtMs(slotInfo.date, slotInfo.fromMinutes));
+                const fireAtIsToday = fireAt.toDateString() === new Date().toDateString();
+                const fireAtTimeLabel = fireAt.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
+                const fireAtLabel = fireAtIsToday
+                    ? `today at ${fireAtTimeLabel}`
+                    : fireAt.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+                // Court type preference pills.
+                const courtTypes = [
+                    { value: 'gated', label: 'Gated' },
+                    { value: 'edge', label: 'Edge' },
+                    { value: 'any', label: 'Any court' },
+                ];
+                const defaultPref = (primaryCourtType === 'gated' || primaryCourtType === 'edge')
+                    ? primaryCourtType : 'any';
+                const courtTypePillsHtml = courtTypes.map(ct => {
+                    const isActive = ct.value === defaultPref;
+                    return `<button data-bc-flex-court-type="${ct.value}" style="
+                        padding: 6px 14px; border-radius: 16px; border: 1px solid rgba(0,188,212,0.4);
+                        font-size: 13px; cursor: pointer; transition: all 0.15s;
+                        background: ${isActive ? 'rgb(0,188,212)' : 'transparent'};
+                        color: ${isActive ? '#1a2f3c' : 'rgba(255,255,255,0.7)'};
+                        font-weight: ${isActive ? '600' : '400'};
+                    ">${ct.label}</button>`;
+                }).join('');
+
+                // Alternative time slot cards.
+                let altTimesHtml = '';
+                if (altTimes.length > 0) {
+                    const cards = altTimes.map(alt => {
+                        const lockIcon = alt.locked ? ' \ud83d\uddd3' : '';
+                        return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
+                            data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
+                            data-locked="${alt.locked ? '1' : '0'}"
+                            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                            background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
+                            border: 1px solid transparent; transition: all 0.15s;">
+                            <input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">
+                            <div style="flex: 1;">
+                                <div style="font-size: 13px; color: white;">${alt.fromTime}\u2013${alt.toTime}${lockIcon}</div>
+                                <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${alt.courtCount} court${alt.courtCount !== 1 ? 's' : ''} available</div>
+                            </div>
+                        </label>`;
+                    }).join('');
+                    altTimesHtml = `
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Nearby times at ${slotInfo.clubName}</div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                        </div>`;
+                }
+
+                // Alternative club cards.
+                let altClubsHtml = '';
+                if (altClubs.length > 0) {
+                    const cards = altClubs.map(alt => {
+                        const lockIcon = alt.locked ? ' \ud83d\uddd3' : '';
+                        const clubColor = CLUB_COLUMN_COLORS[alt.clubId] || '#aaa';
+                        return `<label data-bc-flex-alt-slot data-club-id="${alt.clubId}"
+                            data-from-minutes="${alt.fromMinutes}" data-to-minutes="${alt.toMinutes}"
+                            data-locked="${alt.locked ? '1' : '0'}"
+                            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+                            background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer;
+                            border: 1px solid transparent; transition: all 0.15s;">
+                            <input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">
+                            <div style="flex: 1;">
+                                <div style="font-size: 13px; color: white;">
+                                    <span style="color: ${clubColor}; font-weight: 500;">${alt.clubName}</span>${lockIcon}
+                                </div>
+                                <div style="font-size: 11px; color: rgba(255,255,255,0.5);">${alt.courtCount} court${alt.courtCount !== 1 ? 's' : ''} available</div>
+                            </div>
+                        </label>`;
+                    }).join('');
+                    altClubsHtml = `
+                        <div style="margin-bottom: 16px;">
+                            <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Same time at other clubs</div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">${cards}</div>
+                        </div>`;
+                }
+
+                // If there are no alternatives at all, show a simpler message.
+                const hasAlternatives = altTimes.length > 0 || altClubs.length > 0;
+                const alternativesSection = hasAlternatives
+                    ? `<div data-bc-flex-alternatives style="margin-bottom: 16px;">
+                        <div style="font-size: 14px; color: white; font-weight: 500; margin-bottom: 12px;">Add backup slots</div>
+                        <div style="font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 12px;">
+                            If your primary slot is taken when the window opens, the system will try these in order.
+                        </div>
+                        ${altTimesHtml}
+                        ${altClubsHtml}
+                    </div>`
+                    : '';
+
+                return `<div data-bc-flex-screen style="padding: 16px;">
+                    <div style="display: flex; align-items: center; margin-bottom: 16px;">
+                        <button data-bc-flex-back style="background: none; border: none; color: rgb(0,188,212); font-size: 14px; cursor: pointer; padding: 4px 8px; margin-right: 8px;">&#8592; Back</button>
+                        <div style="font-size: 18px; font-weight: 600; color: white;">Booking Preferences</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                        <div style="font-size: 14px; color: white; font-weight: 500;">${slotInfo.clubName} \u00b7 ${slotInfo.courtName}</div>
+                        <div style="font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px;">${slotInfo.fromTime}\u2013${slotInfo.toTime} \u00b7 ${slotInfo.dateLabel}</div>
+                        <div style="font-size: 12px; color: rgb(0,188,212); margin-top: 6px;">Opens ${fireAtLabel} \u2014 books automatically</div>
+                    </div>
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 8px;">Court preference</div>
+                        <div data-bc-flex-court-pref style="display: flex; gap: 8px; flex-wrap: wrap;">${courtTypePillsHtml}</div>
+                    </div>
+                    ${alternativesSection}
+                    <div style="display: flex; justify-content: center; gap: 12px; align-items: center; margin-top: 20px;">
+                        <button data-bc-flex-next style="background: rgb(0,188,212); color: #1a2f3c; border: none; border-radius: 4px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: pointer;">Next \u2192</button>
+                        <button data-bc-flex-cancel style="background: none; border: none; color: rgba(255,255,255,0.85); font-size: 13px; cursor: pointer; text-decoration: underline;">Cancel</button>
+                    </div>
+                </div>`;
+            }
+
+            // Wires interactions on the flexibility screen: court type pills,
+            // alternative slot checkboxes, and navigation buttons.
+            function bindFlexibilityScreenInteractions(flexScreen, onNext, onBack) {
+                // Court type preference pill mutual exclusion.
+                const pillContainer = flexScreen.querySelector('[data-bc-flex-court-pref]');
+                if (pillContainer) {
+                    pillContainer.addEventListener('click', (e) => {
+                        const pill = e.target.closest('[data-bc-flex-court-type]');
+                        if (!pill) return;
+                        pillContainer.querySelectorAll('[data-bc-flex-court-type]').forEach(p => {
+                            p.style.background = 'transparent';
+                            p.style.color = 'rgba(255,255,255,0.7)';
+                            p.style.fontWeight = '400';
+                        });
+                        pill.style.background = 'rgb(0,188,212)';
+                        pill.style.color = '#1a2f3c';
+                        pill.style.fontWeight = '600';
+                    });
+                }
+
+                // Alternative slot checkbox visual feedback.
+                flexScreen.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
+                    const checkbox = label.querySelector('input[type="checkbox"]');
+                    if (checkbox) {
+                        checkbox.addEventListener('change', () => {
+                            label.style.borderColor = checkbox.checked
+                                ? 'rgba(0,188,212,0.6)' : 'transparent';
+                            label.style.background = checkbox.checked
+                                ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
+                        });
+                    }
+                });
+
+                // Collect flexibility preferences from the screen state.
+                function collectFlexibilityPrefs() {
+                    const activePill = flexScreen.querySelector('[data-bc-flex-court-type][style*="rgb(0,188,212)"]');
+                    // Fall back to checking fontWeight since inline style serialization varies across browsers.
+                    const courtTypePref = activePill
+                        ? activePill.getAttribute('data-bc-flex-court-type')
+                        : (function () {
+                            const allPills = flexScreen.querySelectorAll('[data-bc-flex-court-type]');
+                            for (const p of allPills) {
+                                if (p.style.fontWeight === '600') return p.getAttribute('data-bc-flex-court-type');
+                            }
+                            return 'any';
+                        })();
+
+                    const alternativeSlots = [];
+                    flexScreen.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
+                        const checkbox = label.querySelector('input[type="checkbox"]');
+                        if (checkbox && checkbox.checked) {
+                            alternativeSlots.push({
+                                clubId: label.getAttribute('data-club-id'),
+                                fromMinutes: parseInt(label.getAttribute('data-from-minutes'), 10),
+                                toMinutes: parseInt(label.getAttribute('data-to-minutes'), 10),
+                                locked: label.getAttribute('data-locked') === '1',
+                            });
+                        }
+                    });
+
+                    return { courtTypePref, alternativeSlots };
+                }
+
+                // Navigation buttons.
+                flexScreen.querySelector('[data-bc-flex-back]')?.addEventListener('click', onBack);
+                flexScreen.querySelector('[data-bc-flex-cancel]')?.addEventListener('click', onBack);
+                flexScreen.querySelector('[data-bc-flex-next]')?.addEventListener('click', () => {
+                    onNext(collectFlexibilityPrefs());
+                });
+            }
+
             function buildSchedulePanelHtml(slotInfo, players, photosByMemberId) {
                 const requiredPartners = getRequiredPartnerCount();
                 const partnerLabel = requiredPartners === 1 ? 'Select 1 partner' : `Select ${requiredPartners} partners`;
@@ -4636,6 +4908,70 @@
                 });
             }
 
+            // Injects the partner picker panel into the given hosts and fetches
+            // any missing photos.  Extracted so both the direct path and the
+            // flexibility-screen-to-partner-picker transition share one implementation.
+            async function injectPartnerPickerIntoHosts(hostsToUse, anchorElement, slotInfo, players, photosByMemberId, onReturnExtra) {
+                const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
+                hostsToUse.forEach(host => {
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = panelHtml;
+                    host.appendChild(wrapper.firstElementChild);
+                    const hostPanel = host.querySelector('[data-bc-schedule-panel]');
+                    if (hostPanel) {
+                        bindSchedulePanelInteractions(hostPanel, anchorElement, slotInfo, onReturnExtra);
+                    }
+                });
+
+                // Fetch fresh photos as needed.  The logged-in user is never in the
+                // possible players list, so their photo must be fetched separately.
+                const selfProfileForPhoto = getLocalStorageService().getJson(STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile');
+                const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
+                const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
+                const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
+
+                let freshPhotos = null;
+                if (!hasCachedPhotosForPlayers) {
+                    const playersForPhotos = selfMemberId ? players.concat([{ memberId: selfMemberId }]) : players;
+                    freshPhotos = await getScheduledBookingService().fetchPhotos(playersForPhotos);
+                } else if (selfPhotoMissing) {
+                    freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
+                }
+
+                if (freshPhotos) {
+                    document.querySelectorAll('[data-bc-schedule-panel] .bc-player-card').forEach(card => {
+                        const memberId = card.dataset.memberId;
+                        const photoInfo = freshPhotos[memberId];
+                        if (!photoInfo || !photoInfo.photoId) return;
+                        const initialsEl = card.querySelector('[data-bc-initials]');
+                        if (!initialsEl) return;
+                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(memberId, freshPhotos);
+                        const img = document.createElement('img');
+                        img.src = photoUrl;
+                        img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                        img.alt = card.dataset.firstName || '';
+                        initialsEl.replaceWith(img);
+                    });
+                    if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
+                        const selfCard = document.querySelector('[data-bc-schedule-panel] [data-bc-self-card]');
+                        if (selfCard && selfMemberId) {
+                            const photoInfo = freshPhotos[selfMemberId];
+                            const initialsEl = selfCard.querySelector('[data-bc-initials]');
+                            if (photoInfo && photoInfo.photoId && initialsEl) {
+                                const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(selfMemberId, freshPhotos);
+                                if (photoUrl) {
+                                    const img = document.createElement('img');
+                                    img.src = photoUrl;
+                                    img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
+                                    img.alt = (selfProfileForPhoto && selfProfileForPhoto.firstName) || '';
+                                    initialsEl.replaceWith(img);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             async function handleLockedSlotClick(anchorElement, el) {
                 let players, photosByMemberId;
                 try {
@@ -4707,73 +5043,33 @@
                     .find(btn => btn.textContent.trim().includes('NEXT'));
                 if (nextButton) nextButton.style.display = 'none';
 
-                // Inject the panel into every active time slot host so it remains visible
-                // when the browser is resized across the Bootstrap responsive breakpoint.
-                const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
                 const allHosts = getBookingDomQueryService().getTimeSlotHosts();
                 const hostsToUse = allHosts.length > 0 ? allHosts : [anchorElement];
+
+                // Show the flexibility preferences screen first.
+                const flexHtml = buildFlexibilityScreenHtml(slotInfo, lastFetchState);
                 hostsToUse.forEach(host => {
                     const wrapper = document.createElement('div');
-                    wrapper.innerHTML = panelHtml;
+                    wrapper.innerHTML = flexHtml;
                     host.appendChild(wrapper.firstElementChild);
-                    const hostPanel = host.querySelector('[data-bc-schedule-panel]');
-                    if (hostPanel) {
-                        bindSchedulePanelInteractions(hostPanel, anchorElement, slotInfo);
-                    }
                 });
 
-                // Fetch fresh photos as needed. The logged-in user is never in the possible
-                // players list (you cannot invite yourself), so their photo must be fetched
-                // separately even when other player photos are already cached.
-                const selfProfileForPhoto = getLocalStorageService().getJson(STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile');
-                const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
-                const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
-                const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
-
-                let freshPhotos = null;
-                if (!hasCachedPhotosForPlayers) {
-                    // Cache is empty: fetch photos for all players and the logged-in user together.
-                    const playersForPhotos = selfMemberId ? players.concat([{ memberId: selfMemberId }]) : players;
-                    freshPhotos = await getScheduledBookingService().fetchPhotos(playersForPhotos);
-                } else if (selfPhotoMissing) {
-                    // Player photos are cached but the logged-in user's photo is absent: fetch only self.
-                    freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
-                }
-
-                if (freshPhotos) {
-                    // Swap initials to photos for partner cards across all panel instances.
-                    document.querySelectorAll('[data-bc-schedule-panel] .bc-player-card').forEach(card => {
-                        const memberId = card.dataset.memberId;
-                        const photoInfo = freshPhotos[memberId];
-                        if (!photoInfo || !photoInfo.photoId) return;
-                        const initialsEl = card.querySelector('[data-bc-initials]');
-                        if (!initialsEl) return;
-                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(memberId, freshPhotos);
-                        const img = document.createElement('img');
-                        img.src = photoUrl;
-                        img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
-                        img.alt = card.dataset.firstName || '';
-                        initialsEl.replaceWith(img);
-                    });
-                    // Swap initials to photo for the self card — fetched above since self
-                    // is never in the possible players list.
-                    if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
-                        const selfCard = document.querySelector('[data-bc-schedule-panel] [data-bc-self-card]');
-                        if (selfCard && selfMemberId) {
-                            const photoInfo = freshPhotos[selfMemberId];
-                            const initialsEl = selfCard.querySelector('[data-bc-initials]');
-                            if (photoInfo && photoInfo.photoId && initialsEl) {
-                                const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(selfMemberId, freshPhotos);
-                                if (photoUrl) {
-                                    const img = document.createElement('img');
-                                    img.src = photoUrl;
-                                    img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
-                                    img.alt = (selfProfileForPhoto && selfProfileForPhoto.firstName) || '';
-                                    initialsEl.replaceWith(img);
-                                }
-                            }
-                        }
+                // Bind interactions on the first (or only) flex screen instance.
+                const flexScreen = document.querySelector('[data-bc-flex-screen]');
+                if (flexScreen) {
+                    function returnToSlotGrid() {
+                        document.querySelectorAll('[data-bc-flex-screen]').forEach(f => f.remove());
+                        document.querySelectorAll('.all-clubs-availability').forEach(el => { el.style.display = ''; });
+                        if (nextButton) nextButton.style.display = '';
+                        initNextButton();
                     }
+
+                    bindFlexibilityScreenInteractions(flexScreen, function onNext(flexibilityPrefs) {
+                        // Remove the flexibility screen and inject the partner picker.
+                        document.querySelectorAll('[data-bc-flex-screen]').forEach(f => f.remove());
+                        slotInfo.flexibilityPrefs = flexibilityPrefs;
+                        injectPartnerPickerIntoHosts(hostsToUse, anchorElement, slotInfo, players, photosByMemberId);
+                    }, returnToSlotGrid);
                 }
             }
 
@@ -5044,90 +5340,48 @@
                     return;
                 }
 
-                // Inject the schedule panel as a fixed full-viewport overlay on body so
-                // we never touch app-booking-calendar's display — hiding it would fire the
+                // Court View uses a fixed full-viewport overlay on body so we never
+                // touch app-booking-calendar's display — hiding it would fire the
                 // MutationObserver reconcile and immediately clear our content.
-                const panelHtml = buildSchedulePanelHtml(slotInfo, players, photosByMemberId);
-                const overlay = document.createElement('div');
-                overlay.setAttribute('data-bc-cv-schedule-overlay', '1');
-                overlay.style.cssText = [
-                    'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;',
-                    'overflow-y:auto;background:#1a2f3c;box-sizing:border-box;',
-                    'padding:72px 16px 40px;',
-                ].join('');
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = panelHtml;
-                overlay.appendChild(wrapper.firstElementChild);
-                document.body.appendChild(overlay);
-
-                const hostPanel = overlay.querySelector('[data-bc-schedule-panel]');
-                if (hostPanel) {
-                    // onReturnExtra removes the overlay wrapper after the standard panel
-                    // cleanup removes the inner [data-bc-schedule-panel] node.  Also hides
-                    // the bottom bar — if this flow was triggered by a straddle prompt,
-                    // Angular advanced its state on the original click and the bar still
-                    // shows the stale selection.
-                    bindSchedulePanelInteractions(hostPanel, null, slotInfo, function () {
-                        document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
-                            el.remove();
-                        });
-                        // Remove the stale bottom bar selection so Angular can recreate
-                        // it cleanly on the next native slot click.  Using display:none
-                        // would permanently suppress the bar until a full page reload.
-                        var bar = document.querySelector('.white-bg.p-2 .container');
-                        if (bar) { bar.style.removeProperty('display'); }
-                    });
+                function createCvOverlay() {
+                    const overlay = document.createElement('div');
+                    overlay.setAttribute('data-bc-cv-schedule-overlay', '1');
+                    overlay.style.cssText = [
+                        'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;',
+                        'overflow-y:auto;background:#1a2f3c;box-sizing:border-box;',
+                        'padding:72px 16px 40px;',
+                    ].join('');
+                    return overlay;
                 }
 
-                // Fetch any missing photos using the same post-injection logic as Hour View.
-                const selfProfileForPhoto = getLocalStorageService().getJson(
-                    STORAGE_KEYS.SELF_PROFILE, '[bc] failed to parse self profile'
-                );
-                const selfMemberId = selfProfileForPhoto && selfProfileForPhoto.memberId;
-                const selfPhotoMissing = selfMemberId && !photosByMemberId[selfMemberId];
-                const hasCachedPhotosForPlayers = Object.keys(photosByMemberId).length > 0;
-
-                let freshPhotos = null;
-                if (!hasCachedPhotosForPlayers) {
-                    const playersForPhotos = selfMemberId
-                        ? players.concat([{ memberId: selfMemberId }])
-                        : players;
-                    freshPhotos = await getScheduledBookingService().fetchPhotos(playersForPhotos);
-                } else if (selfPhotoMissing) {
-                    freshPhotos = await getScheduledBookingService().fetchPhotos([{ memberId: selfMemberId }]);
+                function removeCvOverlays() {
+                    document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
+                        el.remove();
+                    });
+                    var bar = document.querySelector('.white-bg.p-2 .container');
+                    if (bar) { bar.style.removeProperty('display'); }
                 }
 
-                if (freshPhotos) {
-                    document.querySelectorAll('[data-bc-schedule-panel] .bc-player-card').forEach(card => {
-                        const memberId = card.dataset.memberId;
-                        const photoInfo = freshPhotos[memberId];
-                        if (!photoInfo || !photoInfo.photoId) return;
-                        const initialsEl = card.querySelector('[data-bc-initials]');
-                        if (!initialsEl) return;
-                        const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(memberId, freshPhotos);
-                        const img = document.createElement('img');
-                        img.src = photoUrl;
-                        img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
-                        img.alt = card.dataset.firstName || '';
-                        initialsEl.replaceWith(img);
-                    });
-                    if (selfPhotoMissing || !hasCachedPhotosForPlayers) {
-                        const selfCard = document.querySelector('[data-bc-schedule-panel] [data-bc-self-card]');
-                        if (selfCard && selfMemberId) {
-                            const photoInfo = freshPhotos[selfMemberId];
-                            const initialsEl = selfCard.querySelector('[data-bc-initials]');
-                            if (photoInfo && photoInfo.photoId && initialsEl) {
-                                const photoUrl = getScheduledBookingService().getPlayerPhotoUrl(selfMemberId, freshPhotos);
-                                if (photoUrl) {
-                                    const img = document.createElement('img');
-                                    img.src = photoUrl;
-                                    img.style.cssText = 'width: 56px; height: 56px; border-radius: 50%; object-fit: cover;';
-                                    img.alt = (selfProfileForPhoto && selfProfileForPhoto.firstName) || '';
-                                    initialsEl.replaceWith(img);
-                                }
-                            }
-                        }
-                    }
+                // Show the flexibility screen in the overlay first.
+                const flexHtml = buildFlexibilityScreenHtml(slotInfo, lastFetchState);
+                const flexOverlay = createCvOverlay();
+                const flexWrapper = document.createElement('div');
+                flexWrapper.innerHTML = flexHtml;
+                flexOverlay.appendChild(flexWrapper.firstElementChild);
+                document.body.appendChild(flexOverlay);
+
+                const flexScreen = flexOverlay.querySelector('[data-bc-flex-screen]');
+                if (flexScreen) {
+                    bindFlexibilityScreenInteractions(flexScreen, function onNext(flexibilityPrefs) {
+                        // Remove the flexibility overlay and inject the partner picker overlay.
+                        removeCvOverlays();
+                        slotInfo.flexibilityPrefs = flexibilityPrefs;
+
+                        const pickerOverlay = createCvOverlay();
+                        document.body.appendChild(pickerOverlay);
+
+                        injectPartnerPickerIntoHosts([pickerOverlay], null, slotInfo, players, photosByMemberId, removeCvOverlays);
+                    }, removeCvOverlays);
                 }
             }
 
@@ -7023,6 +7277,7 @@
         _bcTestExports.COURT_VIEW_COLORS = COURT_VIEW_COLORS;
         _bcTestExports.buildCourtViewBarLabel = buildCourtViewBarLabel;
         _bcTestExports.classifyCourtType = classifyCourtType;
+        _bcTestExports.gatherAlternativeSlots = gatherAlternativeSlots;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }

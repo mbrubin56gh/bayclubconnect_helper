@@ -57,6 +57,14 @@ const STATUS_FIRING = 'firing';
 const STATUS_SUCCEEDED = 'succeeded';
 const STATUS_FAILED = 'failed';
 
+// Maps club UUIDs to short display names for emails and the dashboard.
+const CLUB_SHORT_NAMES = {
+    '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63': 'Broadway',
+    '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18': 'Redwood Shores',
+    'ce7e7607-09e6-4d16-8197-1fffb70db776': 'South SF',
+    '3bc78448-ec6b-49e1-a2ae-64abd68e646b': 'Santa Clara',
+};
+
 // CORS headers allowing the extension (running on bayclubconnect.com) to call
 // this Worker from its fetch() calls in the page context.
 const CORS_HEADERS = {
@@ -276,9 +284,56 @@ async function fireBooking(booking, env) {
         }
     }
 
-    // All courts exhausted — throw with a summary that includes the original error.
+    // Try alternative slots (different time/club) if the user selected any
+    // on the flexibility screen.
+    const altSlots = booking.alternativeSlots || [];
+    for (const altSlot of altSlots) {
+        try {
+            // Fetch fresh availability for this alternative time/club.
+            const altBookingStub = {
+                bookingBody: Object.assign({}, booking.bookingBody, {
+                    clubId: altSlot.clubId,
+                    timeFromInMinutes: altSlot.fromMinutes,
+                    timeToInMinutes: altSlot.toMinutes,
+                }),
+            };
+            const snapshot = await fetchAvailabilitySnapshot(altBookingStub, headers);
+            if (snapshot.availableCourtIds.size === 0) continue;
+
+            // Try each available court at this alternative slot.
+            for (const courtId of snapshot.availableCourtIds) {
+                const altBody = Object.assign({}, booking.bookingBody, {
+                    clubId: altSlot.clubId,
+                    courtId: courtId,
+                    timeFromInMinutes: altSlot.fromMinutes,
+                    timeToInMinutes: altSlot.toMinutes,
+                });
+                try {
+                    await attemptCourtBooking(altBody, booking.confirmBody, headers);
+                    const clubName = CLUB_SHORT_NAMES[altSlot.clubId] || altSlot.clubId;
+                    return {
+                        bookedCourtId: courtId,
+                        bookedCourtName: null,
+                        usedAlternativeSlot: true,
+                        alternativeClubName: clubName,
+                        alternativeFromMinutes: altSlot.fromMinutes,
+                        alternativeToMinutes: altSlot.toMinutes,
+                    };
+                } catch (err) {
+                    lastError = err;
+                }
+            }
+        } catch (_err) {
+            // Availability fetch failed for this alternative — skip it.
+        }
+    }
+
+    // All courts and alternatives exhausted.
     const fallbackCount = (booking.fallbackCourts || []).length;
-    const extra = fallbackCount > 0 ? ` (tried ${fallbackCount} fallback court${fallbackCount === 1 ? '' : 's'})` : '';
+    const altCount = altSlots.length;
+    let extra = '';
+    if (fallbackCount > 0) extra += ` (tried ${fallbackCount} fallback court${fallbackCount === 1 ? '' : 's'})`;
+    if (altCount > 0) extra += ` (tried ${altCount} alternative slot${altCount === 1 ? '' : 's'})`;
     throw new Error((lastError && lastError.message ? lastError.message : String(lastError)) + extra);
 }
 
@@ -315,11 +370,18 @@ async function sendEmailNotification(booking, env) {
     const succeeded = booking.status === STATUS_SUCCEEDED;
     const partners = (booking.partnerNames || []).join(', ') || 'none';
 
-    // Build a substitution note shown when the Worker booked a fallback court instead
-    // of the originally scheduled one (e.g. primary court was snagged first).
-    const substitutionNote = (succeeded && booking.usedFallback && booking.originalCourtName && booking.bookedCourtName)
-        ? `<p style="color:#b45309;"><strong>Note:</strong> ${booking.originalCourtName} was unavailable — you were booked on ${booking.bookedCourtName} instead.</p>`
-        : '';
+    // Build a substitution note shown when the Worker booked a different court or
+    // alternative slot instead of the originally scheduled one.
+    let substitutionNote = '';
+    if (succeeded && booking.usedAlternativeSlot) {
+        const altClub = booking.alternativeClubName || 'another club';
+        const altTime = (booking.alternativeFromMinutes != null && booking.alternativeToMinutes != null)
+            ? `${formatMinutesTime(booking.alternativeFromMinutes)}\u2013${formatMinutesTime(booking.alternativeToMinutes)}`
+            : '';
+        substitutionNote = `<p style="color:#b45309;"><strong>Note:</strong> Your preferred slot was unavailable — you were booked at ${altClub}${altTime ? ' ' + altTime : ''} instead.</p>`;
+    } else if (succeeded && booking.usedFallback && booking.originalCourtName && booking.bookedCourtName) {
+        substitutionNote = `<p style="color:#b45309;"><strong>Note:</strong> ${booking.originalCourtName} was unavailable — you were booked on ${booking.bookedCourtName} instead.</p>`;
+    }
 
     // Notify the scheduler.
     if (booking.notificationEmail) {
@@ -523,14 +585,18 @@ async function runCronTick(env) {
     // Fire each booking and record the result.
     for (const booking of due) {
         try {
-            const { bookedCourtId, bookedCourtName } = await fireBooking(booking, env);
+            const result = await fireBooking(booking, env);
             booking.status = STATUS_SUCCEEDED;
             // Track which court was actually booked so the email can mention a substitution.
-            booking.bookedCourtId = bookedCourtId;
-            booking.bookedCourtName = bookedCourtName;
-            booking.usedFallback = bookedCourtId !== booking.bookingBody.courtId;
-            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now(),
-                booking.usedFallback ? bookedCourtName : null);
+            booking.bookedCourtId = result.bookedCourtId;
+            booking.bookedCourtName = result.bookedCourtName;
+            booking.usedFallback = result.bookedCourtId !== booking.bookingBody.courtId;
+            booking.usedAlternativeSlot = result.usedAlternativeSlot || false;
+            booking.alternativeClubName = result.alternativeClubName || null;
+            booking.alternativeFromMinutes = result.alternativeFromMinutes || null;
+            booking.alternativeToMinutes = result.alternativeToMinutes || null;
+            const historyCourtName = booking.usedFallback ? result.bookedCourtName : null;
+            await appendToHistory(env, booking, STATUS_SUCCEEDED, null, Date.now(), historyCourtName);
         } catch (error) {
             booking.status = STATUS_FAILED;
             booking.failureReason = error.message || String(error);
@@ -1052,14 +1118,6 @@ function escHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 }
-
-// Maps club UUIDs to short display names for the dashboard.
-const CLUB_SHORT_NAMES = {
-    '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63': 'Broadway',
-    '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18': 'Redwood Shores',
-    'ce7e7607-09e6-4d16-8197-1fffb70db776': 'South SF',
-    '3bc78448-ec6b-49e1-a2ae-64abd68e646b': 'Santa Clara',
-};
 
 // Formats minutes-since-midnight to a display time string like "7:00 AM".
 function formatMinutesTime(minutes) {

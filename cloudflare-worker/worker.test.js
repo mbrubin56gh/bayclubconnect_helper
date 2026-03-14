@@ -1421,3 +1421,99 @@ describe('GET /availability-history', () => {
         expect(res.status).toBe(401);
     });
 });
+
+describe('runCronTick with alternativeSlots', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('tries alternative slots when primary and all fallbacks fail', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            fallbackCourts: [],
+            alternativeSlots: [
+                { clubId: 'alt-club', fromMinutes: 540, toMinutes: 630 },
+            ],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+
+        // Sequence: auth → primary POST fails (409) → availability fetch for alt
+        // → alt POST succeeds → alt confirm PUT succeeds.
+        vi.stubGlobal('fetch', vi.fn()
+            // Auth.
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            // Primary court POST fails.
+            .mockResolvedValueOnce(new Response('Court already booked', { status: 409 }))
+            // Availability fetch for alternative slot.
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({
+                    clubsAvailabilities: [{
+                        courts: [
+                            { courtId: 'alt-c1', courtName: 'Alt Court 1', courtSetupVersionId: 'v-alt-c1' },
+                        ],
+                        availableTimeSlots: [
+                            { fromInMinutes: 540, toInMinutes: 630, courtsVersionsIds: ['v-alt-c1'] },
+                        ],
+                    }],
+                }),
+                { status: 200 },
+            ))
+            // Alt court POST succeeds.
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ courtBookingId: 'cbi-alt' }),
+                { status: 200 },
+            ))
+            // Alt court confirm PUT succeeds.
+            .mockResolvedValueOnce(new Response('', { status: 200 })),
+        );
+
+        await runCronTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].status).toBe('succeeded');
+        expect(saved[0].usedAlternativeSlot).toBe(true);
+    });
+
+    it('fails when primary, fallbacks, and all alternatives are exhausted', async () => {
+        const booking = makeBooking({
+            status: 'pending',
+            fireAtMs: Date.now() - 1000,
+            fallbackCourts: [],
+            alternativeSlots: [
+                { clubId: 'alt-club', fromMinutes: 540, toMinutes: 630 },
+            ],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+
+        vi.stubGlobal('fetch', vi.fn()
+            // Auth.
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                { status: 200 },
+            ))
+            // Primary fails.
+            .mockResolvedValueOnce(new Response('Court already booked', { status: 409 }))
+            // Alt availability returns no courts.
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ clubsAvailabilities: [{ courts: [], availableTimeSlots: [] }] }),
+                { status: 200 },
+            )),
+        );
+
+        await runCronTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].status).toBe('failed');
+        expect(saved[0].failureReason).toContain('alternative slot');
+    });
+});
