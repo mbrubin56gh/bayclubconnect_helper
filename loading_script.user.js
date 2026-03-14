@@ -4583,7 +4583,7 @@
             // 'radio' (book-now section) or 'checkbox' (schedule section).
             function buildAltSlotCardHtml(alt, mode, isClubCard) {
                 const inputHtml = mode === 'radio'
-                    ? `<input type="radio" name="bc-flex-book-now" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`
+                    ? `<input type="checkbox" data-bc-flex-now-check style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`
                     : `<input type="checkbox" style="accent-color: rgb(0,188,212); width: 16px; height: 16px; flex-shrink: 0;">`;
                 const clubColor = CLUB_COLUMN_COLORS[alt.clubId] || '#aaa';
                 const titleHtml = isClubCard
@@ -4775,28 +4775,34 @@
                 const schedSection = flexScreen.querySelector('[data-bc-flex-sched-section]');
                 const nextBtn = flexScreen.querySelector('[data-bc-flex-next]');
 
-                // -- Mutual exclusion: selecting a book-now radio disables schedule
-                //    section and changes Next to "Book now"; deselecting re-enables.
+                // -- Mutual exclusion: selecting a book-now checkbox disables the
+                //    schedule section and changes Next to "Book now"; unchecking
+                //    re-enables everything.
                 function updateSectionStates() {
-                    const selectedRadio = flexScreen.querySelector('[data-bc-flex-now-section] input[type="radio"]:checked');
+                    const checkedNow = flexScreen.querySelector('[data-bc-flex-now-section] [data-bc-flex-now-check]:checked');
                     if (schedSection) {
-                        schedSection.style.opacity = selectedRadio ? '0.35' : '1';
-                        schedSection.style.pointerEvents = selectedRadio ? 'none' : '';
+                        schedSection.style.opacity = checkedNow ? '0.35' : '1';
+                        schedSection.style.pointerEvents = checkedNow ? 'none' : '';
                     }
                     if (nextBtn) {
-                        nextBtn.textContent = selectedRadio ? 'Book now \u2192' : 'Next \u2192';
+                        nextBtn.textContent = checkedNow ? 'Book now \u2192' : 'Next \u2192';
                     }
                 }
 
-                // -- Book-now radio selection visual feedback.
+                // -- Book-now checkbox with mutual exclusion: only one can be
+                //    checked at a time, and unchecking is allowed.
                 if (nowSection) {
                     nowSection.addEventListener('change', (e) => {
-                        if (e.target.type !== 'radio') return;
-                        // Highlight the selected card, unhighlight others.
+                        if (!e.target.hasAttribute('data-bc-flex-now-check')) return;
+                        // Uncheck all other book-now checkboxes.
+                        nowSection.querySelectorAll('[data-bc-flex-now-check]').forEach(cb => {
+                            if (cb !== e.target) cb.checked = false;
+                        });
+                        // Update visual highlight on all cards.
                         nowSection.querySelectorAll('[data-bc-flex-alt-slot]').forEach(label => {
-                            const radio = label.querySelector('input[type="radio"]');
-                            label.style.borderColor = (radio && radio.checked) ? 'rgba(0,188,212,0.6)' : 'transparent';
-                            label.style.background = (radio && radio.checked) ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
+                            const cb = label.querySelector('[data-bc-flex-now-check]');
+                            label.style.borderColor = (cb && cb.checked) ? 'rgba(0,188,212,0.6)' : 'transparent';
+                            label.style.background = (cb && cb.checked) ? 'rgba(0,188,212,0.1)' : 'rgba(255,255,255,0.05)';
                         });
                         updateSectionStates();
                     });
@@ -5042,10 +5048,10 @@
 
                 // -- Collect the final preferences from the screen state.
                 function collectFlexibilityPrefs() {
-                    // Check if a book-now radio is selected.
-                    const selectedRadio = flexScreen.querySelector('[data-bc-flex-now-section] input[type="radio"]:checked');
-                    if (selectedRadio) {
-                        const label = selectedRadio.closest('[data-bc-flex-alt-slot]');
+                    // Check if a book-now checkbox is selected.
+                    const checkedNow = flexScreen.querySelector('[data-bc-flex-now-section] [data-bc-flex-now-check]:checked');
+                    if (checkedNow) {
+                        const label = checkedNow.closest('[data-bc-flex-alt-slot]');
                         const clubId = label.getAttribute('data-club-id');
                         const fromMinutes = parseInt(label.getAttribute('data-from-minutes'), 10);
                         const toMinutes = parseInt(label.getAttribute('data-to-minutes'), 10);
