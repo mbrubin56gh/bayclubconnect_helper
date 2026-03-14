@@ -10,7 +10,9 @@
       "Bash(node smoke-court-view.js)",
       "Bash(npm run:*)",
       "Bash(git stash:*)",
-      "Bash(npx wrangler:*)"
+      "Bash(npx wrangler:*)",
+      "Bash(npm test:*)",
+      "Bash(npx dotenv:*)"
     ]
   }
 }
