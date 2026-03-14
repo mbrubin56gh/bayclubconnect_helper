@@ -650,6 +650,40 @@ test.describe('By-club / by-time view toggle', () => {
             container.locator('[data-tod-col]').first()
         ).toBeAttached({ timeout: 5_000 });
     });
+
+    test('by-time view shows empty-state message when no slots match the time range', async () => {
+        requireAuth(test);
+
+        const container = page.locator('.all-clubs-availability:visible').first();
+        // Switch to by-time mode.
+        await container.locator('.bc-view-toggle [data-view="by-time"]').click();
+        await expect(container.locator('[data-time-group]').first()).toBeAttached({ timeout: 5_000 });
+
+        // Set an impossibly narrow time range (5:00–5:30 AM) so all time groups
+        // are filtered out, then toggle the indoor-only checkbox twice to force
+        // applyFilters to run with the new range.
+        await page.evaluate(() => {
+            localStorage.setItem('bc_time_range', JSON.stringify({ startMinutes: 300, endMinutes: 330 }));
+        });
+        const checkbox = container.locator('.bc-indoor-checkbox');
+        await checkbox.click();
+        await page.waitForTimeout(300);
+        await checkbox.click();
+        await page.waitForTimeout(300);
+
+        const msg = page.locator('[data-bc-time-filter-message]');
+        await expect(msg).toBeVisible({ timeout: 5_000 });
+        const text = await msg.textContent();
+        expect(text).toContain('No courts are available');
+
+        // Restore full range so subsequent tests are not affected.
+        await page.evaluate(() => {
+            localStorage.setItem('bc_time_range', JSON.stringify({ startMinutes: 360, endMinutes: 1320 }));
+        });
+        await checkbox.click();
+        await page.waitForTimeout(300);
+        await checkbox.click();
+    });
 });
 
 // ---------------------------------------------------------------------------

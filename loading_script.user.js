@@ -4077,6 +4077,11 @@
             </div>
         </div>`;
         }
+        // Hidden by default; shown by collapseEmptyTimeGroups when every time
+        // group is filtered out by the time range or indoor-only filter.
+        // Placeholder for the empty-state message; text is set dynamically by
+        // collapseEmptyTimeGroups based on which filters are active.
+        html += `<div data-bc-time-filter-message style="display: none; color: rgba(255,255,255,0.4); font-size: 12px; padding: 20px 0; text-align: center;"></div>`;
         return html;
     }
 
@@ -4140,11 +4145,50 @@
             }
 
             function collapseEmptyTimeGroups() {
+                let anyGroupVisible = false;
                 document.querySelectorAll('[data-time-group]').forEach(group => {
                     const anyVisible = [...group.querySelectorAll('[data-slot-wrapper]')]
                         .some(el => el.style.display !== 'none');
                     group.style.display = anyVisible ? '' : 'none';
+                    if (anyVisible) anyGroupVisible = true;
                 });
+                // Show or hide the "no availability" message for the by-time view.
+                // Tailor the message based on what the user can do to see more results.
+                const msg = document.querySelector('[data-bc-time-filter-message]');
+                if (!msg) return;
+                if (anyGroupVisible) {
+                    msg.style.display = 'none';
+                    return;
+                }
+                const indoorOnly = getShowIndoorClubsOnly();
+                let text = 'No courts are available in the selected time range.';
+                if (indoorOnly) {
+                    // Check whether outdoor clubs have slots visible in the
+                    // current time range.  filterSlotsByTimeRange already hid
+                    // out-of-range wrappers, so any wrapper still in-range but
+                    // hidden by filterOutdoorSlotsFromTimeGroups belongs to an
+                    // outdoor club.  Walk the wrappers and check from-minutes
+                    // against the time range to find outdoor-only hidden slots.
+                    const hasOutdoorInRange = [...document.querySelectorAll('[data-time-group] [data-slot-wrapper]')]
+                        .some(function (w) {
+                            if (w.style.display !== 'none') return false;
+                            const opt = w.querySelector('.bc-court-option');
+                            if (!opt || INDOOR_CLUBS.has(opt.dataset.clubId)) return false;
+                            // Verify it is hidden by indoor filter, not time range.
+                            // Time-range-hidden wrappers have from-minutes outside
+                            // the slider; indoor-hidden ones are in-range.
+                            const savedRange = getLocalStorageService().getJson(STORAGE_KEYS.TIME_RANGE) || {};
+                            const lo = savedRange.startMinutes || 0;
+                            const hi = savedRange.endMinutes || 1440;
+                            const from = parseInt(w.dataset.fromMinutes);
+                            return from >= lo && from < hi;
+                        });
+                    if (hasOutdoorInRange) {
+                        text = 'No indoor courts are available in the selected time range. Uncheck the Indoor courts only checkbox to see available outdoor courts.';
+                    }
+                }
+                msg.textContent = text;
+                msg.style.display = '';
             }
 
             function updateByClubViewVisibility() {

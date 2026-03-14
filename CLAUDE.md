@@ -164,7 +164,7 @@ The script uses a booking-flow monitor with lifecycle management:
 - **Hourly weather**: Fetches hourly forecast from Open-Meteo API; shows the relevant emoji below each hour label on the time range slider; rain emojis are accompanied by a centred rain-probability percentage
   Weather data and cache are encapsulated in an in-file `getWeatherService()` closure with a narrow API (`whenReady`, `emojiForHour`, `rainPctForHour`).
 - **Hour View auto-select**: Automatically clicks "HOUR VIEW" button on first render (marked with `data-bc-auto-selected` to avoid re-firing)
-- **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage
+- **By-club / By-time toggle**: Two-button toggle switches between grouping slots by club (default) or by time slot; persisted to localStorage. In by-time mode, when all time groups are filtered out, `collapseEmptyTimeGroups()` shows a context-aware empty-state message via `[data-bc-time-filter-message]`: if indoor-only is on and outdoor courts exist in range, the message tells the user to uncheck the filter; otherwise it simply states no courts are available
 - **Duration and player preference auto-select**: Native selection controls are re-applied from localStorage through a dedicated `getPreferenceAutoSelectService()` closure so temporary fallback-suppression state stays internal.
 - **Scheduled bookings**: Locked slots (beyond the 3-day booking window) are clickable. Clicking one opens an inline partner picker built entirely by the helper — no Angular state machine involvement. After the user selects partners and taps Schedule, the helper persists the booking to localStorage and fires the two-step booking API (`POST courtbookings` → `PUT courtbookings/{id}/confirm`) at the exact moment the window opens. A "Pending Bookings" section on `/bookings` shows countdown, scheduled time, and a Cancel button for each pending booking. Failed attempts show with a red error row and a Dismiss button.
 - **Debug mode panel**: When debug mode is enabled, the injected availability UI includes a compact panel with a toggle plus `Copy logs`, `Email logs`, `Download logs`, and `Clear logs` controls for support troubleshooting.
@@ -241,7 +241,7 @@ Server-side component that executes scheduled bookings without requiring the bro
 - `cloudflare-worker/worker.js` — Cloudflare Worker source.
 - `cloudflare-worker/wrangler.toml` — Worker configuration (KV binding, D1 binding, cron schedule).
 - `cloudflare-worker/CLOUDFLARE.md` — Detailed setup, architecture, and dev workflow notes for the Worker, written for someone new to Cloudflare.
-- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (77 tests) run against the live site.
+- `canary-tests/canary.spec.js` — Playwright end-to-end canary suite (78 tests) run against the live site.
 - `canary-tests/playwright.config.js` — Playwright configuration (Chromium, Firefox, and mobile-chromium projects; single worker, auth state, timeouts).
 - `canary-tests/global-setup.js` — Logs in with BC_EMAIL/BC_PASSWORD from `.env` and saves auth state before the suite runs.
 
