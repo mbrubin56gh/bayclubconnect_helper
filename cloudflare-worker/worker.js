@@ -25,6 +25,7 @@
 // Cron triggers:
 //   * * * * *   — fires every minute, executes any booking whose fireAtMs has passed
 //   0 16 * * 1  — fires every Monday at 16:00 UTC (≈ 8 AM Pacific), sends weekly summary email
+//   0 */6 * * * — fires every 6 hours, checks slot availability for pending bookings
 //
 // Secrets (set via `wrangler secret put`):
 //   WORKER_SECRET  — required on all write endpoints (X-Worker-Secret header)
@@ -44,6 +45,8 @@ function tokenKvKey(userId) {
 }
 // Cron expression for the weekly summary trigger — must match wrangler.toml exactly.
 const WEEKLY_SUMMARY_CRON = '0 16 * * 1';
+// Cron expression for the periodic slot availability check.
+const SLOT_CHECK_CRON = '0 */6 * * *';
 
 const KV_BOOKINGS = 'scheduled_bookings';
 const KV_LAST_REFRESH = 'last_token_refresh';
@@ -78,6 +81,10 @@ export default {
     async scheduled(event, env, ctx) {
         if (event.cron === WEEKLY_SUMMARY_CRON) {
             ctx.waitUntil(sendWeeklySummaryEmail(env));
+            return;
+        }
+        if (event.cron === SLOT_CHECK_CRON) {
+            ctx.waitUntil(runSlotCheckTick(env));
             return;
         }
         ctx.waitUntil(runCronTick(env));
@@ -543,6 +550,212 @@ async function runCronTick(env) {
 
 // #endregion Cron tick.
 
+// #region Slot availability check.
+
+// Minimum interval between checks for the same booking.  Set slightly below
+// the 6-hour cron so back-to-back ticks do not skip a booking.
+const SLOT_CHECK_INTERVAL_MS = 5 * 60 * 60 * 1000;
+
+function groupBy(arr, keyFn) {
+    const result = {};
+    for (const item of arr) {
+        const key = keyFn(item);
+        if (!result[key]) result[key] = [];
+        result[key].push(item);
+    }
+    return result;
+}
+
+// Fetches the availability API for a booking's club and date, then returns
+// the set of court IDs available at the booking's time window.
+async function fetchAvailableCourtIds(booking, headers) {
+    const body = booking.bookingBody;
+    const dateValue = (body.date && body.date.value) || body.date;
+    const params = new URLSearchParams({
+        clubId: body.clubId,
+        date: dateValue,
+        categoryCode: body.categoryCode || 'pickleball',
+        categoryOptionsId: body.categoryOptionsId || '',
+        timeSlotId: body.timeSlotId || '',
+    });
+    const url = `${BOOKING_API_BASE}/availability?${params.toString()}`;
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+        throw new Error(`Availability check failed: HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const clubAvail = (data.clubsAvailabilities || [])[0];
+    if (!clubAvail) return new Set();
+
+    // Build lookup maps mirroring the userscript pattern: courtById and
+    // courtByVersionId so we can resolve courtsVersionsIds to real court IDs.
+    const courtById = {};
+    const courtByVersionId = {};
+    for (const court of (clubAvail.courts || [])) {
+        courtById[court.courtId] = court;
+        if (court.courtSetupVersionId) {
+            courtByVersionId[court.courtSetupVersionId] = court;
+        }
+    }
+
+    const available = new Set();
+    for (const slot of (clubAvail.availableTimeSlots || [])) {
+        if (slot.fromInMinutes === body.timeFromInMinutes &&
+            slot.toInMinutes === body.timeToInMinutes) {
+            const versionIds = (slot.courtsVersionsIds && slot.courtsVersionsIds.length > 0)
+                ? slot.courtsVersionsIds
+                : (slot.courtId ? [slot.courtId] : []);
+            for (const vid of versionIds) {
+                const court = courtById[vid] || courtByVersionId[vid];
+                if (court) {
+                    available.add(court.courtId);
+                }
+            }
+        }
+    }
+    return available;
+}
+
+// Picks the best available fallback court, preferring the same type as the
+// primary court.  Falls back to the existing sort order (gated > edge >
+// standard) established at scheduling time for backward compatibility with
+// bookings that lack courtType tags.
+function pickBestFallback(fallbackCourts, availableCourtIds, primaryType) {
+    const available = (fallbackCourts || []).filter(
+        c => availableCourtIds.has(c.courtId)
+    );
+    if (available.length === 0) return null;
+    if (primaryType) {
+        const sameType = available.filter(c => c.courtType === primaryType);
+        if (sameType.length > 0) return sameType[0];
+    }
+    // Fall back to existing sort order.
+    return available[0];
+}
+
+// Updates the court segment in the slot label.  The label format is
+// "Club · Court · Time · Date", so index 1 is the court name.
+function rebuildSlotLabel(booking) {
+    const parts = (booking.slotLabel || '').split(' \u00b7 ');
+    if (parts.length >= 4) {
+        parts[1] = booking.originalCourtName || parts[1];
+        return parts.join(' \u00b7 ');
+    }
+    return booking.slotLabel || '';
+}
+
+// Sends a notification email about the slot availability check result.
+// Type is 'switched' (auto-switched to fallback) or 'taken' (no fallbacks).
+async function sendSlotCheckEmail(env, booking, type, fallback) {
+    if (!env.RESEND_API_KEY || !booking.notificationEmail) return;
+
+    const recipients = [booking.notificationEmail, ...(booking.partnerEmails || [])]
+        .filter((e, i, arr) => e && arr.indexOf(e) === i);
+
+    let subject;
+    let html;
+    if (type === 'switched') {
+        subject = `Court change: ${booking.slotLabel}`;
+        html = [
+            '<p>Your scheduled court <strong>' + escHtml(booking.switchedFromCourtName || 'unknown') + '</strong>',
+            ' is currently taken by another member.</p>',
+            '<p>We have automatically switched your booking to <strong>' + escHtml(fallback.courtName || 'another court') + '</strong>.</p>',
+            '<p>The booking will still fire at the scheduled time.',
+            ' You can cancel and reschedule if you prefer a different court.</p>',
+            '<p><strong>' + escHtml(booking.slotLabel) + '</strong></p>',
+        ].join('');
+    } else {
+        subject = 'Court unavailable: ' + booking.slotLabel;
+        html = [
+            '<p>Your scheduled court is currently taken by another member,',
+            ' and no fallback courts are available at this time.</p>',
+            '<p>The booking will still attempt to fire at the scheduled time,',
+            ' but it is unlikely to succeed unless a court opens up.</p>',
+            '<p>You can cancel and reschedule for a different time if needed.</p>',
+            '<p><strong>' + escHtml(booking.slotLabel) + '</strong></p>',
+        ].join('');
+    }
+
+    for (const email of recipients) {
+        await sendResendEmail(env, email, subject, html).catch(() => {});
+    }
+}
+
+// Runs every 6 hours.  For each pending booking whose fire time is still in
+// the future, checks whether the scheduled court is still available.  If taken,
+// auto-switches to the best available fallback and notifies the user.
+async function runSlotCheckTick(env) {
+    const now = Date.now();
+    const bookings = await loadBookings(env);
+
+    const candidates = bookings.filter(b =>
+        b.status === STATUS_PENDING &&
+        b.fireAtMs > now &&
+        (!b.lastSlotCheckMs || (now - b.lastSlotCheckMs) > SLOT_CHECK_INTERVAL_MS)
+    );
+
+    if (candidates.length === 0) return;
+
+    // Group by user so we only rotate one refresh token per user per cycle.
+    const byUser = groupBy(candidates, b => b.notificationEmail);
+
+    for (const [userEmail, userBookings] of Object.entries(byUser)) {
+        let accessToken;
+        try {
+            accessToken = await refreshAccessToken(env, userEmail);
+        } catch (_err) {
+            // Cannot authenticate this user — skip their bookings this cycle.
+            continue;
+        }
+        const headers = buildApiHeaders(accessToken, crypto.randomUUID());
+
+        for (const booking of userBookings) {
+            try {
+                const availableCourtIds = await fetchAvailableCourtIds(booking, headers);
+                booking.lastSlotCheckMs = now;
+
+                if (availableCourtIds.has(booking.bookingBody.courtId)) {
+                    // Primary court is still available.
+                    booking.slotCheckStatus = 'available';
+                } else {
+                    // Primary court is taken.  Try to auto-switch.
+                    const best = pickBestFallback(
+                        booking.fallbackCourts,
+                        availableCourtIds,
+                        booking.primaryCourtType
+                    );
+                    if (best) {
+                        booking.switchedFromCourtName = booking.originalCourtName;
+                        booking.originalCourtName = best.courtName;
+                        booking.bookingBody.courtId = best.courtId;
+                        booking.fallbackCourts = (booking.fallbackCourts || [])
+                            .filter(c => c.courtId !== best.courtId);
+                        booking.slotCheckStatus = 'switched';
+                        booking.slotLabel = rebuildSlotLabel(booking);
+                        await sendSlotCheckEmail(env, booking, 'switched', best);
+                        booking.slotCheckNotifiedAt = now;
+                    } else {
+                        booking.slotCheckStatus = 'taken';
+                        // Only send the "taken" notification once per check cycle.
+                        if (!booking.slotCheckNotifiedAt ||
+                            booking.slotCheckNotifiedAt < (booking.lastSlotCheckMs || 0)) {
+                            await sendSlotCheckEmail(env, booking, 'taken', null);
+                            booking.slotCheckNotifiedAt = now;
+                        }
+                    }
+                }
+            } catch (_err) {
+                // Availability check failed (network, API error) — skip this
+                // booking and try again next cycle.
+            }
+        }
+    }
+
+    await saveBookings(env, bookings);
+}
+
+// #endregion Slot availability check.
+
 // #region HTTP request handler.
 
 function jsonResponse(data, status) {
@@ -823,6 +1036,11 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
             const fallbackCell = fallbackNames.length > 0
                 ? `<td style="font-size:12px;color:#555;">${fallbackNames.join(', ')}</td>`
                 : `<td style="color:#bbb;font-size:12px;">—</td>`;
+            // Slot availability check status badge.
+            const checkStatus = b.slotCheckStatus || 'unknown';
+            const checkColors = { available: '#2e7d32', taken: '#c62828', switched: '#1565c0', unknown: '#999' };
+            const checkLabels = { available: '✓ Available', taken: '⚠ Taken', switched: '↩ Switched', unknown: '—' };
+            const checkCell = `<td style="font-size:12px;color:${checkColors[checkStatus] || '#999'};">${checkLabels[checkStatus] || checkStatus}</td>`;
             // Only pending bookings can be cancelled — firing means the API call is already in-flight.
             const cancelCell = b.status === STATUS_PENDING
                 ? `<td id="cancel-cell-${escHtml(b.id)}"><button onclick="cancelBooking('${escHtml(b.id)}')" style="background:#c62828;color:#fff;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-size:12px;">Cancel</button></td>`
@@ -834,12 +1052,13 @@ function renderDashboardHtml(activeBookings, historyRows, statsRows, totalHistor
                 <td>${escHtml(partners)}</td>
                 <td>${ptTime(b.fireAtMs)}</td>
                 <td>${countdown(b.fireAtMs)}</td>
+                ${checkCell}
                 ${fallbackCell}
                 ${cancelCell}
             </tr>`;
         }).join('');
         activeHtml = `<table><thead><tr>
-            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Opens At (PT)</th><th>In</th><th>Fallbacks</th><th></th>
+            <th>Status</th><th>Slot</th><th>User</th><th>Partners</th><th>Opens At (PT)</th><th>In</th><th>Slot Check</th><th>Fallbacks</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
@@ -987,4 +1206,9 @@ export {
     checkSecretFlexible,
     handleRequest,
     runCronTick,
+    runSlotCheckTick,
+    fetchAvailableCourtIds,
+    pickBestFallback,
+    rebuildSlotLabel,
+    groupBy,
 };

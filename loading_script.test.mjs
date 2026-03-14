@@ -49,6 +49,7 @@ const {
     COURT_BLOCKED_CLASS,
     COURT_VIEW_COLORS,
     buildCourtViewBarLabel,
+    classifyCourtType,
 } = require('./loading_script.user.js');
 
 // ---------------------------------------------------------------------------
@@ -576,5 +577,50 @@ describe('buildCourtViewBarLabel', () => {
     it('leaves the label unchanged when the home club name does not appear in the text', () => {
         expect(buildCourtViewBarLabel('Court 5 7:00 AM', 'Redwood Shores', 'Santa Clara'))
             .toBe('Santa Clara · Court 5 7:00 AM');
+    });
+});
+
+describe('classifyCourtType', () => {
+
+    // Club UUIDs from the userscript constants.
+    const CLUBS = {
+        broadway: '9a2ab1e6-bc97-4250-ac42-8cc8d97f9c63',
+        redwoodShores: '95eb0299-b5cf-4a9f-8b35-e4b3bd505f18',
+        santaClara: '3bc78448-ec6b-49e1-a2ae-64abd68e646b',
+        southSF: 'ce7e7607-09e6-4d16-8197-1fffb70db776',
+    };
+
+    it('returns gated for a Santa Clara gated court', () => {
+        expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 1')).toBe('gated');
+        expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 6')).toBe('gated');
+    });
+
+    it('returns hitting_wall for a Santa Clara hitting wall court', () => {
+        expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 9')).toBe('hitting_wall');
+        expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 10')).toBe('hitting_wall');
+    });
+
+    it('returns edge for an edge court', () => {
+        expect(classifyCourtType(CLUBS.broadway, 'Pickleball 1')).toBe('edge');
+        expect(classifyCourtType(CLUBS.southSF, 'Pickleball 5')).toBe('edge');
+    });
+
+    it('returns edge for Redwood Shores (wildcard — all courts are edge)', () => {
+        expect(classifyCourtType(CLUBS.redwoodShores, 'Pickleball 1')).toBe('edge');
+        expect(classifyCourtType(CLUBS.redwoodShores, 'Pickleball 4')).toBe('edge');
+    });
+
+    it('returns standard for a non-special court', () => {
+        expect(classifyCourtType(CLUBS.broadway, 'Pickleball 3')).toBe('standard');
+        expect(classifyCourtType(CLUBS.broadway, 'Pickleball 4')).toBe('standard');
+    });
+
+    it('returns standard for an unknown club', () => {
+        expect(classifyCourtType('unknown-uuid', 'Pickleball 1')).toBe('standard');
+    });
+
+    it('gated takes priority over edge for Santa Clara courts that are both', () => {
+        // Pickleball 1 at Santa Clara is in both GATED_COURTS and EDGE_COURTS.
+        expect(classifyCourtType(CLUBS.santaClara, 'Pickleball 1')).toBe('gated');
     });
 });

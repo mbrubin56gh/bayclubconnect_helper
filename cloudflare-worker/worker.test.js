@@ -17,6 +17,11 @@ import workerDefault, {
     checkSecretFlexible,
     handleRequest,
     runCronTick,
+    runSlotCheckTick,
+    fetchAvailableCourtIds,
+    pickBestFallback,
+    rebuildSlotLabel,
+    groupBy,
 } from './worker.js';
 
 // ---------------------------------------------------------------------------
@@ -924,5 +929,345 @@ describe('GET /allowed', () => {
         const res = await handleRequest(req, makeEnv({ kv }));
         const data = await res.json();
         expect(data.allowed).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Pure helpers: slot check
+// ---------------------------------------------------------------------------
+
+describe('pickBestFallback', () => {
+    it('returns null when no fallback courts are available', () => {
+        const fallbacks = [
+            { courtId: 'c-1', courtName: 'Court 1', courtType: 'gated' },
+            { courtId: 'c-2', courtName: 'Court 2', courtType: 'edge' },
+        ];
+        const result = pickBestFallback(fallbacks, new Set(['c-99']), 'gated');
+        expect(result).toBeNull();
+    });
+
+    it('prefers same court type as primary', () => {
+        const fallbacks = [
+            { courtId: 'c-1', courtName: 'Court 1', courtType: 'edge' },
+            { courtId: 'c-2', courtName: 'Court 2', courtType: 'gated' },
+            { courtId: 'c-3', courtName: 'Court 3', courtType: 'edge' },
+        ];
+        const available = new Set(['c-1', 'c-2', 'c-3']);
+        const result = pickBestFallback(fallbacks, available, 'gated');
+        expect(result.courtId).toBe('c-2');
+    });
+
+    it('falls back to existing sort order when no same-type court is available', () => {
+        const fallbacks = [
+            { courtId: 'c-1', courtName: 'Court 1', courtType: 'edge' },
+            { courtId: 'c-2', courtName: 'Court 2', courtType: 'standard' },
+        ];
+        const available = new Set(['c-1', 'c-2']);
+        const result = pickBestFallback(fallbacks, available, 'gated');
+        expect(result.courtId).toBe('c-1');
+    });
+
+    it('works without courtType tags (backward compatibility)', () => {
+        const fallbacks = [
+            { courtId: 'c-1', courtName: 'Court 1' },
+            { courtId: 'c-2', courtName: 'Court 2' },
+        ];
+        const result = pickBestFallback(fallbacks, new Set(['c-2']), undefined);
+        expect(result.courtId).toBe('c-2');
+    });
+});
+
+describe('rebuildSlotLabel', () => {
+    it('replaces the court segment in a four-part label', () => {
+        const booking = {
+            slotLabel: 'Broadway \u00b7 Court 1 \u00b7 7:00\u20138:00 AM \u00b7 Mon Mar 9',
+            originalCourtName: 'Court 5',
+        };
+        expect(rebuildSlotLabel(booking)).toBe(
+            'Broadway \u00b7 Court 5 \u00b7 7:00\u20138:00 AM \u00b7 Mon Mar 9'
+        );
+    });
+
+    it('returns the original label when format is unexpected', () => {
+        const booking = { slotLabel: 'some weird label', originalCourtName: 'Court 2' };
+        expect(rebuildSlotLabel(booking)).toBe('some weird label');
+    });
+});
+
+describe('groupBy', () => {
+    it('groups items by the key function', () => {
+        const items = [
+            { name: 'a', group: 1 },
+            { name: 'b', group: 2 },
+            { name: 'c', group: 1 },
+        ];
+        const result = groupBy(items, i => i.group);
+        expect(Object.keys(result)).toEqual(['1', '2']);
+        expect(result['1']).toHaveLength(2);
+        expect(result['2']).toHaveLength(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// runSlotCheckTick
+// ---------------------------------------------------------------------------
+
+describe('runSlotCheckTick', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    // Builds a booking with the extra fields needed for slot check tests.
+    function makeCheckBooking(overrides = {}) {
+        return makeBooking({
+            fireAtMs: Date.now() + 3600_000,
+            bookingBody: {
+                clubId: 'club-1',
+                courtId: 'court-1',
+                date: { value: '2026-03-17' },
+                timeFromInMinutes: 420,
+                timeToInMinutes: 510,
+                categoryCode: 'pickleball',
+                categoryOptionsId: 'opt-1',
+                timeSlotId: 'ts-90',
+            },
+            originalCourtName: 'Pickleball 1',
+            primaryCourtType: 'gated',
+            fallbackCourts: [
+                { courtId: 'court-2', courtName: 'Pickleball 2', courtType: 'edge' },
+                { courtId: 'court-3', courtName: 'Pickleball 3', courtType: 'gated' },
+            ],
+            ...overrides,
+        });
+    }
+
+    // Builds a mock availability API response with the given available court IDs.
+    function makeAvailabilityResponse(availableCourtIds, fromMinutes = 420, toMinutes = 510) {
+        return {
+            clubsAvailabilities: [{
+                club: { id: 'club-1', shortName: 'Test Club' },
+                courts: availableCourtIds.map(id => ({
+                    courtId: id,
+                    courtName: 'Court ' + id,
+                    courtSetupVersionId: 'v-' + id,
+                })),
+                availableTimeSlots: availableCourtIds.map(id => ({
+                    fromInMinutes: fromMinutes,
+                    toInMinutes: toMinutes,
+                    timeOfDay: 'Morning',
+                    courtId: null,
+                    courtsVersionsIds: ['v-' + id],
+                })),
+            }],
+        };
+    }
+
+    // Builds a mock fetch that handles auth + availability API calls.
+    function makeSlotCheckFetch(availabilityResponse) {
+        return vi.fn().mockImplementation((url) => {
+            if (typeof url === 'string' && url.includes('authentication2-api')) {
+                return Promise.resolve(new Response(
+                    JSON.stringify({ access_token: 'at-xyz', refresh_token: 'rt-new' }),
+                    { status: 200 },
+                ));
+            }
+            if (typeof url === 'string' && url.includes('/availability')) {
+                return Promise.resolve(new Response(
+                    JSON.stringify(availabilityResponse),
+                    { status: 200 },
+                ));
+            }
+            if (typeof url === 'string' && url.includes('resend.com')) {
+                return Promise.resolve(new Response('{}', { status: 200 }));
+            }
+            return Promise.resolve(new Response('', { status: 200 }));
+        });
+    }
+
+    it('sets slotCheckStatus to available when primary court is open', async () => {
+        const booking = makeCheckBooking();
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-1', 'court-2', 'court-3'])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotCheckStatus).toBe('available');
+        expect(saved[0].bookingBody.courtId).toBe('court-1');
+    });
+
+    it('auto-switches to best fallback when primary is taken', async () => {
+        const booking = makeCheckBooking();
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        // court-1 is NOT in the available list; court-3 is gated (same type).
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-2', 'court-3'])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotCheckStatus).toBe('switched');
+        // Should prefer court-3 (gated, same type as primary).
+        expect(saved[0].bookingBody.courtId).toBe('court-3');
+        expect(saved[0].originalCourtName).toBe('Pickleball 3');
+        expect(saved[0].switchedFromCourtName).toBe('Pickleball 1');
+        // court-3 should be removed from fallbacks.
+        expect(saved[0].fallbackCourts.map(c => c.courtId)).toEqual(['court-2']);
+    });
+
+    it('sends notification email when switching courts', async () => {
+        const booking = makeCheckBooking({
+            notificationEmail: 'mark@test.com',
+            partnerEmails: ['jane@test.com'],
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:mark@test.com': 'rt-initial',
+        });
+        const mockFetch = makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-2', 'court-3'])
+        );
+        vi.stubGlobal('fetch', mockFetch);
+
+        await runSlotCheckTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const resendCalls = mockFetch.mock.calls.filter(([url]) =>
+            typeof url === 'string' && url.includes('resend.com')
+        );
+        // Two emails: scheduler + partner.
+        expect(resendCalls.length).toBe(2);
+        const subjects = resendCalls.map(([, opts]) => JSON.parse(opts.body).subject);
+        expect(subjects[0]).toMatch(/Court change/);
+    });
+
+    it('sets slotCheckStatus to taken when no fallbacks are available', async () => {
+        const booking = makeCheckBooking();
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        // No courts available at all.
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse([])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotCheckStatus).toBe('taken');
+        expect(saved[0].bookingBody.courtId).toBe('court-1');
+    });
+
+    it('skips bookings checked recently (within 5 hours)', async () => {
+        const booking = makeCheckBooking({
+            lastSlotCheckMs: Date.now() - 3600_000,
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        vi.stubGlobal('fetch', vi.fn());
+
+        await runSlotCheckTick(makeEnv({ kv }));
+
+        // Should not have fetched anything — booking was checked 1 hour ago.
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('skips bookings whose fireAtMs has already passed', async () => {
+        const booking = makeCheckBooking({ fireAtMs: Date.now() - 1000 });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        vi.stubGlobal('fetch', vi.fn());
+
+        await runSlotCheckTick(makeEnv({ kv }));
+
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('skips user when token refresh fails', async () => {
+        const booking = makeCheckBooking();
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            // No token stored — refreshAccessToken will throw.
+        });
+        vi.stubGlobal('fetch', vi.fn());
+
+        await runSlotCheckTick(makeEnv({ kv }));
+
+        // Booking should remain unchanged.
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotCheckStatus).toBeUndefined();
+    });
+
+    it('re-switches when newly switched court is also taken on next check', async () => {
+        // Simulate a booking that was already switched to court-3.
+        const booking = makeCheckBooking({
+            bookingBody: {
+                clubId: 'club-1',
+                courtId: 'court-3',
+                date: { value: '2026-03-17' },
+                timeFromInMinutes: 420,
+                timeToInMinutes: 510,
+                categoryCode: 'pickleball',
+                categoryOptionsId: 'opt-1',
+                timeSlotId: 'ts-90',
+            },
+            originalCourtName: 'Pickleball 3',
+            primaryCourtType: 'gated',
+            slotCheckStatus: 'switched',
+            switchedFromCourtName: 'Pickleball 1',
+            fallbackCourts: [
+                { courtId: 'court-2', courtName: 'Pickleball 2', courtType: 'edge' },
+            ],
+            lastSlotCheckMs: Date.now() - 6 * 3600_000,
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        // court-3 is now also taken; only court-2 is available.
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-2'])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv, resendKey: 'resend-key' }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotCheckStatus).toBe('switched');
+        expect(saved[0].bookingBody.courtId).toBe('court-2');
+        expect(saved[0].switchedFromCourtName).toBe('Pickleball 3');
+        expect(saved[0].fallbackCourts).toEqual([]);
+    });
+
+    it('updates slotLabel when switching courts', async () => {
+        const booking = makeCheckBooking({
+            slotLabel: 'Broadway \u00b7 Pickleball 1 \u00b7 7:00\u20138:30 AM \u00b7 Tue Mar 17',
+        });
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-3'])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv }));
+
+        const saved = JSON.parse(kv._store.get('scheduled_bookings'));
+        expect(saved[0].slotLabel).toBe(
+            'Broadway \u00b7 Pickleball 3 \u00b7 7:00\u20138:30 AM \u00b7 Tue Mar 17'
+        );
     });
 });

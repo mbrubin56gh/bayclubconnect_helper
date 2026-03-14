@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.11
+// @version      1.12
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -1694,6 +1694,7 @@
                 UNKNOWN: 'unknown',
                 AVAILABLE: 'available',
                 TAKEN: 'taken',
+                SWITCHED: 'switched',
             });
 
             // Local cache of bookings fetched from the Worker. Reads use this
@@ -1994,11 +1995,19 @@
                     // The original court name is stored separately so the Worker can mention
                     // it in the email if a fallback court is used instead.
                     originalCourtName: slotInfo.courtName || null,
+                    // Court type of the primary court so the Worker's availability
+                    // check can prefer same-type fallbacks when auto-switching.
+                    primaryCourtType: classifyCourtType(slotInfo.clubId, slotInfo.courtName),
                     // Courts sorted by preference (gated > edge > neither), excluding the
                     // primary. The Worker tries them in order if the primary POST fails.
+                    // Each entry is tagged with courtType for type-aware fallback selection.
                     fallbackCourts: (slotInfo.allCourts || [])
                         .filter(c => c.courtId !== slotInfo.courtId)
-                        .map(c => ({ courtId: c.courtId, courtName: c.courtName || null })),
+                        .map(c => ({
+                            courtId: c.courtId,
+                            courtName: c.courtName || null,
+                            courtType: classifyCourtType(slotInfo.clubId, c.courtName),
+                        })),
                     partnerNames: selectedPartners.map(p => `${p.firstName} ${p.lastName}`),
                     partnerEmails,
                     notificationEmail: await fetchNotificationEmail(),
@@ -2815,8 +2824,15 @@
 
             function buildPendingBookingRowHtml(booking, isScheduler) {
                 const partnerList = (booking.partnerNames || []).join(', ') || 'No partners';
-                const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
+                const checkStatus = booking.slotCheckStatus || 'unknown';
+                const STATUSES = getScheduledBookingService().SLOT_CHECK_STATUS;
+                const isTaken = checkStatus === STATUSES.TAKEN;
+                const isSwitched = checkStatus === STATUSES.SWITCHED;
                 const warningStyle = isTaken ? '' : 'display: none;';
+                const switchedStyle = isSwitched ? '' : 'display: none;';
+                const switchedMsg = booking.switchedFromCourtName
+                    ? `Switched from ${booking.switchedFromCourtName}`
+                    : 'Court was auto-switched';
                 const scheduledBy = isScheduler ? '' : `<div style="font-size: 12px; color: rgba(255,255,255,0.45); margin-top: 4px;">Scheduled by ${booking.userName || 'a partner'}</div>`;
                 const cancelButton = isScheduler
                     ? `<button data-bc-cancel-booking="${booking.id}" style="background: none; border: 1px solid rgba(239,83,80,0.5); color: #ef5350; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;">Cancel</button>`
@@ -2826,7 +2842,8 @@
                         <div style="font-size: 14px; font-weight: 500; color: white;">${booking.slotLabel}</div>
                         <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 4px;">Partners: ${partnerList}</div>
                         ${scheduledBy}
-                        <div data-bc-slot-warning style="font-size: 12px; color: #ffb74d; margin-top: 4px; ${warningStyle}">\u26a0\ufe0f The court was booked by someone else</div>
+                        <div data-bc-slot-warning style="font-size: 12px; color: #ffb74d; margin-top: 4px; ${warningStyle}">\u26a0\ufe0f Court is currently taken by another member. No fallback courts are available.</div>
+                        <div data-bc-slot-switched style="font-size: 12px; color: #4fc3f7; margin-top: 4px; ${switchedStyle}">\ud83d\udd04 ${switchedMsg}</div>
                         <div data-bc-countdown style="font-size: 12px; color: rgb(0,188,212); margin-top: 4px;">${formatCountdown(booking.fireAtMs)}</div>
                     </div>
                     ${cancelButton}
@@ -3063,10 +3080,14 @@
                         if (row) {
                             const countdown = row.querySelector('[data-bc-countdown]');
                             if (countdown) countdown.textContent = formatCountdown(booking.fireAtMs);
+                            const STATUSES = getScheduledBookingService().SLOT_CHECK_STATUS;
                             const warning = row.querySelector('[data-bc-slot-warning]');
                             if (warning) {
-                                const isTaken = booking.slotCheckStatus === getScheduledBookingService().SLOT_CHECK_STATUS.TAKEN;
-                                warning.style.display = isTaken ? '' : 'none';
+                                warning.style.display = booking.slotCheckStatus === STATUSES.TAKEN ? '' : 'none';
+                            }
+                            const switched = row.querySelector('[data-bc-slot-switched]');
+                            if (switched) {
+                                switched.style.display = booking.slotCheckStatus === STATUSES.SWITCHED ? '' : 'none';
                             }
                         }
                     });
@@ -3750,6 +3771,15 @@
 
     function courtHasHittingWall(courtName, clubId) {
         return (HITTING_WALL_COURTS[clubId] || []).includes(courtName);
+    }
+
+    // Returns a court type tag for storage in booking records so the Worker
+    // can prefer same-type fallback courts during availability checks.
+    function classifyCourtType(clubId, courtName) {
+        if (isCourtGated(courtName, clubId)) return 'gated';
+        if (courtHasHittingWall(courtName, clubId)) return 'hitting_wall';
+        if (isCourtEdge(courtName, clubId)) return 'edge';
+        return 'standard';
     }
 
     function computeSlotLockState(slot, fetchDate, limitDate) {
@@ -6992,6 +7022,7 @@
         _bcTestExports.COURT_BLOCKED_CLASS = COURT_BLOCKED_CLASS;
         _bcTestExports.COURT_VIEW_COLORS = COURT_VIEW_COLORS;
         _bcTestExports.buildCourtViewBarLabel = buildCourtViewBarLabel;
+        _bcTestExports.classifyCourtType = classifyCourtType;
         // eslint-disable-next-line no-undef
         module.exports = _bcTestExports;
     }
