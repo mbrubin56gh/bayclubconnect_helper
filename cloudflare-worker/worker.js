@@ -567,12 +567,15 @@ function groupBy(arr, keyFn) {
 }
 
 // Fetches the availability API for a booking's club and date, then returns
-// the set of court IDs available at the booking's time window.
-async function fetchAvailableCourtIds(booking, headers) {
+// a snapshot with the set of available court IDs and metadata for recording.
+async function fetchAvailabilitySnapshot(booking, headers) {
     const body = booking.bookingBody;
     const dateValue = (body.date && body.date.value) || body.date;
+    const clubId = body.clubId;
+    const timeFrom = body.timeFromInMinutes;
+    const timeTo = body.timeToInMinutes;
     const params = new URLSearchParams({
-        clubId: body.clubId,
+        clubId,
         date: dateValue,
         categoryCode: body.categoryCode || 'pickleball',
         categoryOptionsId: body.categoryOptionsId || '',
@@ -585,7 +588,18 @@ async function fetchAvailableCourtIds(booking, headers) {
     }
     const data = await response.json();
     const clubAvail = (data.clubsAvailabilities || [])[0];
-    if (!clubAvail) return new Set();
+    if (!clubAvail) {
+        return {
+            availableCourtIds: new Set(),
+            totalCourts: 0,
+            clubId,
+            date: dateValue,
+            timeFrom,
+            timeTo,
+        };
+    }
+
+    const totalCourts = (clubAvail.courts || []).length;
 
     // Build lookup maps mirroring the userscript pattern: courtById and
     // courtByVersionId so we can resolve courtsVersionsIds to real court IDs.
@@ -598,22 +612,49 @@ async function fetchAvailableCourtIds(booking, headers) {
         }
     }
 
-    const available = new Set();
+    const availableCourtIds = new Set();
     for (const slot of (clubAvail.availableTimeSlots || [])) {
-        if (slot.fromInMinutes === body.timeFromInMinutes &&
-            slot.toInMinutes === body.timeToInMinutes) {
+        if (slot.fromInMinutes === timeFrom &&
+            slot.toInMinutes === timeTo) {
             const versionIds = (slot.courtsVersionsIds && slot.courtsVersionsIds.length > 0)
                 ? slot.courtsVersionsIds
                 : (slot.courtId ? [slot.courtId] : []);
             for (const vid of versionIds) {
                 const court = courtById[vid] || courtByVersionId[vid];
                 if (court) {
-                    available.add(court.courtId);
+                    availableCourtIds.add(court.courtId);
                 }
             }
         }
     }
-    return available;
+    return {
+        availableCourtIds,
+        totalCourts,
+        clubId,
+        date: dateValue,
+        timeFrom,
+        timeTo,
+    };
+}
+
+// Records an availability snapshot to D1 for historical analysis.
+async function recordAvailabilitySnapshot(env, snapshot, checkedAtMs) {
+    if (!env.DB) return;
+    const courtIdsJson = JSON.stringify([...snapshot.availableCourtIds]);
+    await env.DB.prepare(
+        `INSERT INTO availability_snapshots
+         (checked_at_ms, club_id, date, time_from, time_to, total_courts, available_courts, available_court_ids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+        checkedAtMs,
+        snapshot.clubId,
+        snapshot.date,
+        snapshot.timeFrom,
+        snapshot.timeTo,
+        snapshot.totalCourts,
+        snapshot.availableCourtIds.size,
+        courtIdsJson
+    ).run();
 }
 
 // Picks the best available fallback court, preferring the same type as the
@@ -711,7 +752,9 @@ async function runSlotCheckTick(env) {
 
         for (const booking of userBookings) {
             try {
-                const availableCourtIds = await fetchAvailableCourtIds(booking, headers);
+                const snapshot = await fetchAvailabilitySnapshot(booking, headers);
+                await recordAvailabilitySnapshot(env, snapshot, now);
+                const availableCourtIds = snapshot.availableCourtIds;
                 booking.lastSlotCheckMs = now;
 
                 if (availableCourtIds.has(booking.bookingBody.courtId)) {
@@ -834,6 +877,21 @@ async function handleRequest(request, env) {
         try {
             const result = await env.DB.prepare(
                 'SELECT * FROM booking_history ORDER BY completed_at_ms DESC LIMIT 200'
+            ).all();
+            return jsonResponse(result.results);
+        } catch (_e) {
+            return jsonResponse([]);
+        }
+    }
+
+    if (method === 'GET' && path === '/availability-history') {
+        if (!checkSecretFlexible(request, env)) {
+            return new Response('Unauthorized', { status: 401 });
+        }
+        if (!env.DB) return jsonResponse([]);
+        try {
+            const result = await env.DB.prepare(
+                'SELECT * FROM availability_snapshots ORDER BY checked_at_ms DESC LIMIT 200'
             ).all();
             return jsonResponse(result.results);
         } catch (_e) {
@@ -1207,7 +1265,8 @@ export {
     handleRequest,
     runCronTick,
     runSlotCheckTick,
-    fetchAvailableCourtIds,
+    fetchAvailabilitySnapshot,
+    recordAvailabilitySnapshot,
     pickBestFallback,
     rebuildSlotLabel,
     groupBy,

@@ -82,7 +82,7 @@ booking's owner.
 
 ---
 
-## D1 Database (Booking History)
+## D1 Database (Booking History and Availability Snapshots)
 
 Cloudflare D1 is a SQLite-compatible database that runs in Cloudflare's cloud.
 Unlike KV (which only stores raw values), D1 lets you run SQL queries, which
@@ -115,6 +115,35 @@ CREATE TABLE IF NOT EXISTS booking_history (
     fire_at_ms      INTEGER  NOT NULL DEFAULT 0,     -- when it was supposed to fire
     completed_at_ms INTEGER  NOT NULL DEFAULT 0      -- when the outcome was recorded
 );
+```
+
+### Availability Snapshots Table
+
+The slot check cron records an availability snapshot to D1 every time it fetches
+the availability API for a scheduled booking. This provides ambient historical
+data about court availability with zero extra API calls — the data comes from
+checks the Worker is already making.
+
+```sql
+CREATE TABLE IF NOT EXISTS availability_snapshots (
+    id               INTEGER  PRIMARY KEY AUTOINCREMENT,
+    checked_at_ms    INTEGER  NOT NULL,
+    club_id          TEXT     NOT NULL,
+    date             TEXT     NOT NULL,
+    time_from        INTEGER  NOT NULL,
+    time_to          INTEGER  NOT NULL,
+    total_courts     INTEGER  NOT NULL,
+    available_courts INTEGER  NOT NULL,
+    available_court_ids TEXT  NOT NULL DEFAULT '[]'  -- JSON array of court UUIDs
+);
+```
+
+Query via the `/availability-history` endpoint or directly:
+
+```bash
+wrangler d1 execute bayclubconnect-history \
+  --command "SELECT * FROM availability_snapshots ORDER BY checked_at_ms DESC LIMIT 20;" \
+  --remote
 ```
 
 ### How It Was Set Up (One-Time Steps)
@@ -232,6 +261,7 @@ that origin).
 | `DELETE /bookings/{id}` | Yes | Removes a booking. Called on Cancel or Dismiss. |
 | `PUT /token` | Yes | Stores a new refresh token in KV. Called automatically by the extension whenever it sees the Bay Club app renew its token. |
 | `GET /history` | Yes | Returns the last 100 rows from the D1 `booking_history` table as JSON. |
+| `GET /availability-history` | Yes | Returns the last 200 availability snapshots from D1 as JSON. |
 | `GET /dashboard` | Yes | Renders a self-refreshing HTML monitoring page showing active bookings and history. |
 
 "Auth required" means the request must include the `X-Worker-Secret` header with

@@ -18,7 +18,8 @@ import workerDefault, {
     handleRequest,
     runCronTick,
     runSlotCheckTick,
-    fetchAvailableCourtIds,
+    fetchAvailabilitySnapshot,
+    recordAvailabilitySnapshot,
     pickBestFallback,
     rebuildSlotLabel,
     groupBy,
@@ -46,7 +47,9 @@ function makeMockD1(rows = []) {
     const run = vi.fn(() => Promise.resolve());
     const all = vi.fn(() => Promise.resolve({ results: rows }));
     const bind = vi.fn(() => ({ run, all }));
-    const prepare = vi.fn(() => ({ bind }));
+    // Expose all and run directly on prepare() return too, since some D1
+    // queries skip .bind() (e.g. parameterless SELECTs).
+    const prepare = vi.fn(() => ({ bind, all, run }));
     return { prepare, _run: run, _all: all };
 }
 
@@ -1269,5 +1272,152 @@ describe('runSlotCheckTick', () => {
         expect(saved[0].slotLabel).toBe(
             'Broadway \u00b7 Pickleball 3 \u00b7 7:00\u20138:30 AM \u00b7 Tue Mar 17'
         );
+    });
+
+    it('records availability snapshots to D1 during slot check', async () => {
+        const booking = makeCheckBooking();
+        const kv = makeMockKv({
+            scheduled_bookings: JSON.stringify([booking]),
+            'refresh_token:user@example.com': 'rt-initial',
+        });
+        const db = makeMockD1();
+        vi.stubGlobal('fetch', makeSlotCheckFetch(
+            makeAvailabilityResponse(['court-1', 'court-2'])
+        ));
+
+        await runSlotCheckTick(makeEnv({ kv, db }));
+
+        // D1 should have received one INSERT for the snapshot.
+        expect(db.prepare).toHaveBeenCalled();
+        const prepareCall = db.prepare.mock.calls.find(
+            ([sql]) => sql.includes('availability_snapshots')
+        );
+        expect(prepareCall).toBeTruthy();
+    });
+});
+
+describe('fetchAvailabilitySnapshot', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('returns snapshot with available court IDs and metadata', async () => {
+        const booking = {
+            bookingBody: {
+                clubId: 'club-1',
+                courtId: 'court-1',
+                date: { value: '2026-03-17' },
+                timeFromInMinutes: 420,
+                timeToInMinutes: 510,
+                categoryCode: 'pickleball',
+                categoryOptionsId: 'opt-1',
+                timeSlotId: 'ts-90',
+            },
+        };
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(
+            JSON.stringify({
+                clubsAvailabilities: [{
+                    courts: [
+                        { courtId: 'c1', courtName: 'Court 1', courtSetupVersionId: 'v-c1' },
+                        { courtId: 'c2', courtName: 'Court 2', courtSetupVersionId: 'v-c2' },
+                        { courtId: 'c3', courtName: 'Court 3', courtSetupVersionId: 'v-c3' },
+                    ],
+                    availableTimeSlots: [
+                        { fromInMinutes: 420, toInMinutes: 510, courtsVersionsIds: ['v-c1', 'v-c3'] },
+                    ],
+                }],
+            }),
+            { status: 200 },
+        ))));
+
+        const snapshot = await fetchAvailabilitySnapshot(booking, {});
+        expect(snapshot.totalCourts).toBe(3);
+        expect(snapshot.availableCourtIds.size).toBe(2);
+        expect(snapshot.availableCourtIds.has('c1')).toBe(true);
+        expect(snapshot.availableCourtIds.has('c3')).toBe(true);
+        expect(snapshot.clubId).toBe('club-1');
+        expect(snapshot.date).toBe('2026-03-17');
+        expect(snapshot.timeFrom).toBe(420);
+        expect(snapshot.timeTo).toBe(510);
+    });
+
+    it('returns empty snapshot when no club availability', async () => {
+        const booking = {
+            bookingBody: {
+                clubId: 'club-1',
+                courtId: 'court-1',
+                date: '2026-03-17',
+                timeFromInMinutes: 420,
+                timeToInMinutes: 510,
+            },
+        };
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(
+            JSON.stringify({ clubsAvailabilities: [] }),
+            { status: 200 },
+        ))));
+
+        const snapshot = await fetchAvailabilitySnapshot(booking, {});
+        expect(snapshot.totalCourts).toBe(0);
+        expect(snapshot.availableCourtIds.size).toBe(0);
+        expect(snapshot.clubId).toBe('club-1');
+    });
+});
+
+describe('recordAvailabilitySnapshot', () => {
+    it('inserts a row into D1 availability_snapshots', async () => {
+        const db = makeMockD1();
+        const env = { DB: db };
+        const snapshot = {
+            availableCourtIds: new Set(['c1', 'c2']),
+            totalCourts: 4,
+            clubId: 'club-1',
+            date: '2026-03-17',
+            timeFrom: 420,
+            timeTo: 510,
+        };
+
+        await recordAvailabilitySnapshot(env, snapshot, 1700000000000);
+
+        expect(db.prepare).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO availability_snapshots')
+        );
+        expect(db._run).toHaveBeenCalled();
+    });
+
+    it('skips gracefully when D1 is not available', async () => {
+        const env = {};
+        const snapshot = {
+            availableCourtIds: new Set(),
+            totalCourts: 0,
+            clubId: 'club-1',
+            date: '2026-03-17',
+            timeFrom: 420,
+            timeTo: 510,
+        };
+
+        // Should not throw.
+        await recordAvailabilitySnapshot(env, snapshot, 1700000000000);
+    });
+});
+
+describe('GET /availability-history', () => {
+    it('returns snapshots from D1', async () => {
+        const rows = [
+            { id: 1, checked_at_ms: 1700000000000, club_id: 'club-1', date: '2026-03-17', time_from: 420, time_to: 510, total_courts: 4, available_courts: 2, available_court_ids: '["c1","c2"]' },
+        ];
+        const db = makeMockD1(rows);
+        const env = makeEnv({ db });
+        const req = makeRequest('GET', '/availability-history');
+        const res = await handleRequest(req, env);
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data).toEqual(rows);
+    });
+
+    it('returns 401 without secret', async () => {
+        const env = makeEnv();
+        const req = new Request('https://worker.test/availability-history');
+        const res = await handleRequest(req, env);
+        expect(res.status).toBe(401);
     });
 });
