@@ -1744,3 +1744,132 @@ test.describe('Court View mobile touch', () => {
         // If we got here without a page error, the mobile scroll path works.
     });
 });
+
+// ---------------------------------------------------------------------------
+// Court View straddle prompt (3-day window boundary)
+//   Navigates to Court View on the date exactly 3 days from now so some slots
+//   are within the booking window and some are locked.  Dynamically finds the
+//   boundary and clicks a slot whose 90-minute duration straddles it.
+//   Skips gracefully when the boundary falls outside court hours (e.g. very
+//   early morning or late evening in Pacific time).
+// ---------------------------------------------------------------------------
+
+test.describe('Court View straddle prompt', () => {
+    test.describe.configure({ timeout: 120_000 });
+
+    let context;
+    let page;
+    // Set by beforeAll: the slot element to click and the column it belongs to.
+    let straddleSlot = null;
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(120_000);
+        if (!isAuthenticated) return;
+
+        context = await createContextWithScript(browser);
+
+        // Pre-seed 90-minute duration to maximize the straddle window.
+        // Must be set before the page loads so the script's auto-select picks it up.
+        await context.addInitScript(`
+            (function() {
+                localStorage.setItem('bc_duration', '90');
+            })();
+        `);
+
+        page = await context.newPage();
+        await navigateToCourtView(page, 3);
+    });
+
+    test.afterAll(async () => {
+        if (page) await page.close();
+        if (context) await context.close();
+    });
+
+    test('straddle prompt appears when clicking a slot at the 3-day boundary', async () => {
+        requireAuth(test);
+
+        // Find a column with both available and locked slots — that is where the
+        // 3-day boundary falls.  Walk columns until we find one with a clear
+        // available→locked transition.
+        const columns = page.locator('app-booking-calendar-column[data-bc-club-id]');
+        await columns.first().waitFor({ timeout: 20_000 });
+        const colCount = await columns.count();
+
+        for (let ci = 0; ci < colCount; ci++) {
+            const col = columns.nth(ci);
+            const allSlots = col.locator('.booking-calendar-column-time-slot');
+            const slotCount = await allSlots.count();
+            if (slotCount < 4) continue;
+
+            // Walk the column's slots and find the last available slot that is
+            // immediately followed by at least one locked slot.  With 90-min
+            // duration the booking would span 3 sub-slots, so we need the
+            // boundary within reach.
+            let boundaryIndex = -1;
+            for (let si = 0; si < slotCount - 1; si++) {
+                const slot = allSlots.nth(si);
+                const nextSlot = allSlots.nth(si + 1);
+                const isAvailable = !(await slot.evaluate(
+                    el => el.classList.contains('booking-calendar-column-time-slot-unavailable')
+                ));
+                const nextIsLocked = await nextSlot.evaluate(
+                    el => el.classList.contains('booking-calendar-column-time-slot-unavailable')
+                );
+                if (isAvailable && nextIsLocked) {
+                    boundaryIndex = si;
+                    break;
+                }
+            }
+
+            if (boundaryIndex < 0) continue;
+
+            // Click the boundary slot — its 90-min duration will extend into
+            // the locked zone, triggering straddle detection.
+            straddleSlot = allSlots.nth(boundaryIndex);
+
+            // Scroll the slot into view and click it.
+            await straddleSlot.scrollIntoViewIfNeeded();
+            await straddleSlot.click({ timeout: 5_000 });
+            break;
+        }
+
+        if (!straddleSlot) {
+            test.skip(true, 'No available→locked boundary found — 3-day window may be outside court hours');
+            return;
+        }
+
+        // The straddle prompt overlay should appear.
+        await expect(
+            page.locator('[data-bc-straddle-prompt]')
+        ).toBeVisible({ timeout: 10_000 });
+    });
+
+    test('straddle prompt has Book now, Schedule, and Cancel buttons', async () => {
+        requireAuth(test);
+        if (!straddleSlot) test.skip(true, 'Straddle prompt did not appear');
+
+        const prompt = page.locator('[data-bc-straddle-prompt]');
+        await expect(prompt).toBeVisible({ timeout: 5_000 });
+
+        await expect(prompt.locator('[data-bc-straddle-book]')).toBeAttached();
+        await expect(prompt.locator('[data-bc-straddle-schedule]')).toBeAttached();
+        await expect(prompt.locator('[data-bc-straddle-cancel]')).toBeAttached();
+    });
+
+    test('Cancel dismisses the prompt and clears highlights', async () => {
+        requireAuth(test);
+        if (!straddleSlot) test.skip(true, 'Straddle prompt did not appear');
+
+        const prompt = page.locator('[data-bc-straddle-prompt]');
+        await expect(prompt).toBeVisible({ timeout: 5_000 });
+
+        await prompt.locator('[data-bc-straddle-cancel]').click();
+
+        // Prompt should be gone.
+        await expect(prompt).toBeHidden({ timeout: 5_000 });
+
+        // Straddle highlight attributes should be cleared.
+        const straddleActive = page.locator('[data-bc-straddle-active]');
+        await expect(straddleActive).toHaveCount(0, { timeout: 5_000 });
+    });
+});

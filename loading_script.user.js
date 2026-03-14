@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         Bay Club Connect Pickleball Court Reservation Helper
 // @namespace    https://github.com/mbrubin56gh
-// @version      1.09
+// @version      1.10
 // @description  Shows pickleball court booking slots across multiple clubs
 // @author       Mark Rubin
 // @match        https://bayclubconnect.com/*
@@ -5667,6 +5667,7 @@
                     'background:rgba(0,188,212,0.18);border:1px solid rgba(0,188,212,0.5);',
                     'border-radius:6px;color:#e8edf0;font-size:13px;cursor:pointer;text-align:left;',
                 ].join('');
+                btnBook.setAttribute('data-bc-straddle-book', '1');
                 btnBook.innerHTML = '<strong>Book ' + partialFrom + '\u2013' + partialTo + ' now</strong>';
 
                 const btnSchedule = document.createElement('button');
@@ -5675,6 +5676,7 @@
                     'background:rgba(255,160,0,0.15);border:1px solid rgba(255,160,0,0.45);',
                     'border-radius:6px;color:#e8edf0;font-size:13px;cursor:pointer;text-align:left;',
                 ].join('');
+                btnSchedule.setAttribute('data-bc-straddle-schedule', '1');
                 btnSchedule.innerHTML = '<strong>Schedule ' + partialFrom + '\u2013' + fullTo + '</strong>' +
                     '<div style="font-size:11px;color:rgba(255,160,0,0.85);margin-top:3px;">Books at ' + fireLabel + '</div>';
 
@@ -5684,6 +5686,7 @@
                     'background:transparent;border:1px solid rgba(255,255,255,0.45);',
                     'border-radius:6px;color:#e8edf0;font-size:12px;cursor:pointer;',
                 ].join('');
+                btnCancel.setAttribute('data-bc-straddle-cancel', '1');
                 btnCancel.textContent = 'Cancel';
 
                 // Base dismiss: remove the overlay and clear our straddle highlight.
