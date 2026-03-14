@@ -12,7 +12,10 @@
       "Bash(git stash:*)",
       "Bash(npx wrangler:*)",
       "Bash(npm test:*)",
-      "Bash(npx dotenv:*)"
+      "Bash(npx dotenv:*)",
+      "Bash(ls *.test.* *.spec.*)",
+      "Bash(ls *.test.*)",
+      "Bash(wrangler d1:*)"
     ]
   }
 }

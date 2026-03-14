@@ -96,7 +96,11 @@ When going through the booking flow, before you get to the availability listings
 
 ### Scheduled bookings
 
-Bay Club opens the booking window 3 days in advance, to the half hour. For example, a 7:30 AM slot on Saturday opens on Wednesday at 7:30 AM. Slots beyond that window are locked by the native web page. With this extension, you can select a slot beyond the window and choose to schedule a booking to be attempted when the 3 day window first opens up. A service running elsewhere will wait for the window to open up, attempt to schedule a booking, and email you and your selected partner with the result. If the court you selected is not available, it will try to find another court at the same time at the same club. Bookings pending to be scheduled appear in your `/bookings` page and on your dashboard.
+Bay Club opens the booking window 3 days in advance, to the half hour. For example, a 7:30 AM slot on Saturday opens on Wednesday at 7:30 AM. Slots beyond that window are locked by the native web page. With this extension, you can select a slot beyond the window and choose to schedule a booking to be attempted when the 3 day window first opens up. When the booking window opens, an attempt will be made to schedule your booking, and email you and your selected partner with the result. If the court you selected is not available, another court at the same time at the same club will be tried. And if you want to schedule further backup options for times around the time you're looking for, you can ask for them to be attempted as backups, too!
+
+![Scheduled booking](screenshots/scheduled_booking.png)
+
+Bookings pending to be scheduled appear in your `/bookings` page and on your dashboard.
 
 ### Bookings page enhancements
 
