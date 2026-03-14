@@ -10,7 +10,7 @@
       "Bash(node smoke-court-view.js)",
       "Bash(npm run:*)",
       "Bash(git stash:*)",
-      "Bash(git rebase:*)"
+      "Bash(npx wrangler:*)"
     ]
   }
 }

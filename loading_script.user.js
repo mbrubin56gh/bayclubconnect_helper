@@ -640,7 +640,6 @@
                         return;
                     }
 
-                    console.log('[bc] courts intercepted: nativeItems', nativeData.items?.length, '| url', url);
 
                     // Step 3: fetch all other clubs in parallel and merge their full items arrays.
                     const parsedUrl = new URL(url);
@@ -4860,7 +4859,9 @@
             // fireAtFromMinutesOverride: when set, used instead of fromMinutes to compute
             // the fire time — needed for straddling slots whose last locked sub-slot opens
             // later than the booking start.
-            async function handleCourtViewLockedSlotClick(slot, fireAtFromMinutesOverride) {
+            // toMinutesOverride: when set, used instead of fromMinutes + durationMinutes —
+            // needed for straddle "Book now" where only the available fragment is booked.
+            async function handleCourtViewLockedSlotClick(slot, fireAtFromMinutesOverride, toMinutesOverride) {
                 const column = slot.closest('app-booking-calendar-column[data-bc-club-id]');
                 if (!column) return;
 
@@ -4898,7 +4899,7 @@
                     ? CLUB_MAX_TIMESLOT[clubId]
                     : rawTimeSlotId;
                 const durationMinutes = effectiveTimeSlotId === TIMESLOTS.min90 ? 90 : 60;
-                const toMinutes = fromMinutes + durationMinutes;
+                const toMinutes = toMinutesOverride || (fromMinutes + durationMinutes);
 
                 const courtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
                 const courtEntry = courtsOrder.find(function (c) { return c.courtId === courtId; });
@@ -4968,11 +4969,16 @@
                 const hostPanel = overlay.querySelector('[data-bc-schedule-panel]');
                 if (hostPanel) {
                     // onReturnExtra removes the overlay wrapper after the standard panel
-                    // cleanup removes the inner [data-bc-schedule-panel] node.
+                    // cleanup removes the inner [data-bc-schedule-panel] node.  Also hides
+                    // the bottom bar — if this flow was triggered by a straddle prompt,
+                    // Angular advanced its state on the original click and the bar still
+                    // shows the stale selection.
                     bindSchedulePanelInteractions(hostPanel, null, slotInfo, function () {
                         document.querySelectorAll('[data-bc-cv-schedule-overlay]').forEach(function (el) {
                             el.remove();
                         });
+                        var bar = document.querySelector('.white-bg.p-2 .container');
+                        if (bar) { bar.style.display = 'none'; }
                     });
                 }
 
@@ -5551,10 +5557,11 @@
                     if (slotIndex >= 0) {
                         const straddle = computeStraddleInfo(col, slotIndex, slotDate, lastFetchState);
                         if (straddle) {
-                            // Do NOT stopPropagation — let Angular see the original trusted
-                            // click so its state machine advances and Next becomes enabled.
-                            // The overlay just offers the user a choice; "Book now" only
-                            // needs to override pendingSlotBooking and fix the bar label.
+                            // Stop propagation — Angular rejects straddle clicks because
+                            // the full duration extends into locked territory.  Both "Book
+                            // now" and "Schedule" bypass Angular and open the partner picker
+                            // directly via handleCourtViewLockedSlotClick.
+                            event.stopPropagation();
 
                             // On mobile there is no preceding mouseover, so the straddle
                             // highlight has not been applied yet.  Apply it now so the user
@@ -5679,6 +5686,8 @@
                 ].join('');
                 btnCancel.textContent = 'Cancel';
 
+                // Base dismiss: remove the overlay and clear our straddle highlight.
+                // Does NOT touch Angular's add-tile — callers decide how to handle it.
                 function dismiss() {
                     overlay.remove();
                     // Clean up straddle highlight attributes that were applied by
@@ -5686,48 +5695,34 @@
                     clearLockedSlotHover();
                 }
 
-                btnBook.addEventListener('click', function () {
+                // Removes Angular's add-tile and hides the bottom bar, producing a
+                // fully clean slate.  Used by Cancel, Schedule, Book now, and backdrop.
+                function dismissAndClearNativeSelection() {
                     dismiss();
-                    // Build a partial slotInfo for the available fragment only.
-                    const clubId = col.getAttribute('data-bc-club-id');
-                    const courtId = col.getAttribute('data-bc-court-id');
-                    const courtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
-                    const courtEntry = courtsOrder.find(function (c) { return c.courtId === courtId; });
-                    const courtName = (courtEntry && courtEntry.courtName) || 'Court';
-                    const partialSlotInfo = {
-                        clubId,
-                        courtId,
-                        courtName,
-                        date: slotDate,
-                        fromMinutes,
-                        toMinutes: straddle.partialToMinutes,
-                    };
-                    // Store partial duration so the XHR interceptor rewrites the POST body
-                    // with the truncated toMinutes rather than the full selected duration.
-                    // Angular already advanced its state from the original trusted slot click,
-                    // so no re-click is needed — Next is already enabled.
-                    getBookingStateService().setPendingSlotBooking(partialSlotInfo);
-                    // Override Angular's bar label — it will show the home club name, but
-                    // we need the actual booking club and the truncated time range.
-                    if (cancelBarUpdate) { cancelBarUpdate(); }
-                    const slotLabel = CLUB_SHORT_NAMES[clubId] + ' \u00b7 ' + courtName +
-                        ' @ ' + minutesToHumanTime(fromMinutes) + '\u2013' + minutesToHumanTime(straddle.partialToMinutes);
-                    const barDeadline = Date.now() + 6000;
-                    const barInterval = setInterval(function () {
-                        const bottomBar = document.querySelector('.white-bg.p-2 .container');
-                        if (!bottomBar) { if (Date.now() > barDeadline) { clearInterval(barInterval); } return; }
-                        const infoHolder = getOrCreateSelectedBookingInfoHolder(bottomBar);
-                        const nativeInfo = bottomBar.querySelector('.row .col-12.col-md-auto:not(.bc-injected-info)');
-                        if (nativeInfo) { nativeInfo.style.display = 'none'; }
-                        infoHolder.textContent = slotLabel;
-                        clearInterval(barInterval);
-                        if (Date.now() > barDeadline) { clearInterval(barInterval); }
-                    }, 150);
-                    cancelBarUpdate = function () { clearInterval(barInterval); };
+                    // Angular may have injected a .booking-calendar-add-tile from a
+                    // prior hover or from the desktop mouseover path.  Remove it and
+                    // hide the bottom bar so no stale native selection lingers.
+                    col.querySelectorAll('.booking-calendar-add-tile').forEach(function (tile) {
+                        tile.remove();
+                    });
+                    var bottomBar = document.querySelector('.white-bg.p-2 .container');
+                    if (bottomBar) { bottomBar.style.display = 'none'; }
+                }
+
+                btnBook.addEventListener('click', function () {
+                    // Dismiss prompt and clear any native selection artifacts.
+                    dismissAndClearNativeSelection();
+                    // Skip Angular's state machine entirely — open the partner picker
+                    // directly with the partial (available-only) time range.  The slot
+                    // is within the booking window, so the Worker will fire immediately
+                    // (fireAtMs in the past → next cron tick).
+                    getAvailabilityRenderPipeline().handleCourtViewLockedSlotClick(
+                        slot, undefined, straddle.partialToMinutes
+                    );
                 });
 
                 btnSchedule.addEventListener('click', function () {
-                    dismiss();
+                    dismissAndClearNativeSelection();
                     // Delegate to the locked-slot schedule flow, passing the fire-time
                     // override so the Worker waits for the last locked sub-slot to open.
                     getAvailabilityRenderPipeline().handleCourtViewLockedSlotClick(
@@ -5735,9 +5730,9 @@
                     );
                 });
 
-                btnCancel.addEventListener('click', dismiss);
+                btnCancel.addEventListener('click', dismissAndClearNativeSelection);
                 overlay.addEventListener('click', function (e) {
-                    if (e.target === overlay) dismiss();
+                    if (e.target === overlay) dismissAndClearNativeSelection();
                 });
 
                 card.appendChild(title);
