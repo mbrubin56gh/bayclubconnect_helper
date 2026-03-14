@@ -5475,17 +5475,6 @@
                 return all[0];
             }
 
-            // Expands abbreviated Court View court names to their canonical form so
-            // badge lookup tables (which use full names) match correctly.
-            // Angular renders "PB1" for Santa Clara and bare "1" for Redwood Shores
-            // while the availability API and lookup tables use "Pickleball 1".
-            function normalizeCourtViewName(name) {
-                const pbMatch = name.match(/^PB(\d+)$/i);
-                if (pbMatch) return 'Pickleball ' + pbMatch[1];
-                if (/^\d+$/.test(name)) return 'Pickleball ' + name;
-                return name;
-            }
-
             // Tags each app-booking-calendar-column with data-bc-club-id and
             // data-bc-court-id using the merged courts order recorded when the XHR
             // payload was built.  Angular renders columns in the same order courts
@@ -5522,20 +5511,26 @@
 
             function tagOneColumn(col, i, courtsOrder, podConflicts) {
                 const clubId = courtsOrder[i].clubId;
-                const courtName = (
-                    col.querySelector('div.court-name')?.textContent?.trim() ||
-                    courtsOrder[i].courtName || ''
-                );
                 col.setAttribute('data-bc-club-id', clubId);
                 col.setAttribute('data-bc-court-id', courtsOrder[i].courtId);
 
-                const canonicalName = normalizeCourtViewName(courtName);
+                // Use the API court name as the canonical source of truth.
+                // Angular abbreviates names ("PB1", "2", bare "Pickleball")
+                // but the API returns the full form ("Pickleball 1") that
+                // matches our badge lookup tables.  Trim to handle Santa
+                // Clara's occasional trailing spaces.
+                const canonicalName = (courtsOrder[i].courtName || '').trim();
                 const badges = [];
                 if (isCourtGated(canonicalName, clubId))      badges.push('G');
                 if (isCourtEdge(canonicalName, clubId))       badges.push('E');
                 if (courtHasHittingWall(canonicalName, clubId)) badges.push('H');
                 const courtNameEl = col.querySelector('div.court-name');
                 if (courtNameEl) {
+                    // Replace Angular's abbreviated name ("PB1", "2") with the
+                    // expanded canonical form ("Pickleball 1") for readability.
+                    if (canonicalName && courtNameEl.textContent.trim() !== canonicalName) {
+                        courtNameEl.textContent = canonicalName;
+                    }
                     if (badges.length > 0) {
                         courtNameEl.setAttribute('data-bc-badges', badges.join(' '));
                     } else {
