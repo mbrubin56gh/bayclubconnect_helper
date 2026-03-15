@@ -161,6 +161,23 @@
             }
 
             function setMergedCourtsOrder(order) {
+                // Preserve existing openingHours when the new data lacks them.
+                // The availability API does not return openingHours, but the
+                // courtsheet /courts endpoint does.  Without this merge, a
+                // later availability fetch would wipe out good schedule data.
+                if (mergedCourtsOrder && Array.isArray(order)) {
+                    const priorByCourtId = {};
+                    mergedCourtsOrder.forEach(function (entry) {
+                        if (entry.openingHours && entry.openingHours.length > 0) {
+                            priorByCourtId[entry.courtId] = entry.openingHours;
+                        }
+                    });
+                    order.forEach(function (entry) {
+                        if ((!entry.openingHours || entry.openingHours.length === 0) && priorByCourtId[entry.courtId]) {
+                            entry.openingHours = priorByCourtId[entry.courtId];
+                        }
+                    });
+                }
                 mergedCourtsOrder = order;
             }
 
@@ -713,6 +730,15 @@
                             applyMergedPayloadToXhr(capturedXhrRef, nativeData);
                         } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        // Angular renders columns synchronously from the dispatch
+                        // above, but the MutationObserver callback is micro-task
+                        // deferred.  Schedule an explicit tagColumns pass so
+                        // operating-hours dimming is applied reliably after the
+                        // columns exist in the DOM with the correct date and
+                        // openingHours already set.
+                        requestAnimationFrame(function () {
+                            try { getNativeCourtColumnsService().tagColumns(); } catch (_e) { /* ignore */ }
+                        });
                     });
                 });
             }
@@ -778,6 +804,12 @@
                             applyMergedPayloadToXhr(capturedXhrRef, nativeData);
                         } catch (_e) { /* pass through unmodified on merge error */ }
                         capturedXhrRef.dispatchEvent(new ProgressEvent('load'));
+                        // Re-tag columns after Angular processes the events
+                        // response, ensuring operating-hours dimming is applied
+                        // even if earlier observer callbacks ran with stale state.
+                        requestAnimationFrame(function () {
+                            try { getNativeCourtColumnsService().tagColumns(); } catch (_e) { /* ignore */ }
+                        });
                     });
                 });
             }
@@ -7650,7 +7682,7 @@
                 });
             }
 
-            serviceInstance = { install, clear };
+            serviceInstance = { install, clear, tagColumns };
             return serviceInstance;
         };
     })();
