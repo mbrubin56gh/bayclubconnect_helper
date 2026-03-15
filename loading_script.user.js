@@ -7431,9 +7431,15 @@
                 bar.appendChild(inner);
                 document.body.appendChild(bar);
 
+                // Re-query the visible calendar each time because Angular may
+                // replace the DOM on date change, making the original reference stale.
+                function liveCal() {
+                    return findVisibleCalendar() || cal;
+                }
+
                 // Measure native columns to match widths.
                 function syncWidths() {
-                    const columns = cal.querySelectorAll('app-booking-calendar-column');
+                    const columns = liveCal().querySelectorAll('app-booking-calendar-column');
                     const labels = inner.children;
                     for (let i = 0; i < labels.length && i < columns.length; i++) {
                         const w = columns[i].getBoundingClientRect().width;
@@ -7443,16 +7449,18 @@
 
                 // Sync horizontal scroll position with the column container.
                 function syncScroll() {
-                    const contentEl = cal.querySelector('.booking-calendar-columns-floating-scroll');
+                    const contentEl = liveCal().querySelector('.booking-calendar-columns-floating-scroll');
                     if (!contentEl) return;
                     inner.style.transform = 'translateX(' + (-contentEl.scrollLeft) + 'px)';
                 }
 
-                // Align the inner container's left edge with the first column.
+                // Align the inner container's left edge with the first actual
+                // court column, not the scroll container — the time axis column
+                // sits to the left and its width varies by viewport.
                 function syncLeft() {
-                    const contentEl = cal.querySelector('.booking-calendar-columns-floating-scroll');
-                    if (contentEl) {
-                        inner.style.marginLeft = contentEl.getBoundingClientRect().left + 'px';
+                    const firstCol = liveCal().querySelector('app-booking-calendar-column');
+                    if (firstCol) {
+                        inner.style.marginLeft = firstCol.getBoundingClientRect().left + 'px';
                     }
                 }
 
@@ -7464,10 +7472,16 @@
                         bar.style.display = 'none';
                         return;
                     }
-                    const firstHeader = cal.querySelector('div.booking-calendar-column-header');
+                    const firstHeader = liveCal().querySelector('div.booking-calendar-column-header');
                     if (!firstHeader) return;
                     const headerBottom = firstHeader.getBoundingClientRect().bottom;
-                    bar.style.display = (headerBottom < 0) ? 'block' : 'none';
+                    const visible = headerBottom < 0;
+                    bar.style.display = visible ? 'block' : 'none';
+                    if (visible) {
+                        syncWidths();
+                        syncLeft();
+                        syncScroll();
+                    }
                 }
 
                 syncWidths();
