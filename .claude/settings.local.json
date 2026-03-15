@@ -15,7 +15,8 @@
       "Bash(npx dotenv:*)",
       "Bash(ls *.test.* *.spec.*)",
       "Bash(ls *.test.*)",
-      "Bash(wrangler d1:*)"
+      "Bash(wrangler d1:*)",
+      "Bash(git reset:*)"
     ]
   }
 }
