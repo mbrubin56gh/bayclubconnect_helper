@@ -3842,6 +3842,47 @@
     // Default time range (in minutes) for nearby-time alternatives.
     const DEFAULT_ALT_RANGE_MINUTES = 120;
 
+    // Returns the opening-hours range { fromInMinutes, toInMinutes } for the
+    // given court entry on the given date string (YYYY-MM-DD), or null if the
+    // court has no schedule data.  Uses noon local time to derive the day of
+    // week so daylight-saving transitions do not shift the date.
+    // Promoted to IIFE scope so both Court View and the flexibility screen
+    // can access it.
+    const _DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    function getCourtOpenHoursForDate(courtEntry, dateStr) {
+        if (!courtEntry || !Array.isArray(courtEntry.openingHours) || courtEntry.openingHours.length === 0) {
+            return null;
+        }
+        const dayName = _DAY_NAMES[new Date(dateStr + 'T12:00:00').getDay()];
+        const dayEntry = courtEntry.openingHours.find(function (h) { return h.dayOfWeek === dayName; });
+        if (!dayEntry || !Array.isArray(dayEntry.openingHours) || dayEntry.openingHours.length === 0) {
+            return null;
+        }
+        // Courts typically have a single time range per day; take the first.
+        return dayEntry.openingHours[0];
+    }
+
+    // Returns the earliest opening and latest closing across all courts at
+    // a given club for a given date.  Used to clamp the flexibility screen's
+    // time range stepper so it does not extend into hours when the club is
+    // closed.  Returns { earliestOpen, latestClose } in minutes, or null if
+    // no operating hours data is available.
+    function getClubOperatingBoundsForDate(clubId, dateStr) {
+        const courtsOrder = getBookingStateService().getMergedCourtsOrder() || [];
+        let earliest = Infinity;
+        let latest = -Infinity;
+        let found = false;
+        courtsOrder.forEach(function (entry) {
+            if (entry.clubId !== clubId) return;
+            const hours = getCourtOpenHoursForDate(entry, dateStr);
+            if (!hours) return;
+            found = true;
+            if (hours.fromInMinutes < earliest) earliest = hours.fromInMinutes;
+            if (hours.toInMinutes > latest) latest = hours.toInMinutes;
+        });
+        return found ? { earliestOpen: earliest, latestClose: latest } : null;
+    }
+
     // Gathers alternative time slots and clubs from the last fetched
     // availability data.  Returns { altTimes, altClubs } where each entry
     // has enough information to render a selectable card on the flexibility
@@ -4791,10 +4832,15 @@
                 }
 
                 // Time range stepper — lets the user widen or narrow the nearby-time window.
+                // Clamp the initial bounds to the club's operating hours so we
+                // never suggest times before the club opens or after it closes.
                 const defaultRange = DEFAULT_ALT_RANGE_MINUTES;
                 const primaryFrom = slotInfo.fromMinutes;
-                const rangeStartMin = Math.max(300, primaryFrom - defaultRange);
-                const rangeEndMin = Math.min(1380, primaryFrom + defaultRange);
+                const clubBounds = getClubOperatingBoundsForDate(slotInfo.clubId, slotInfo.date);
+                const floorMin = clubBounds ? clubBounds.earliestOpen : 300;
+                const ceilMin = clubBounds ? clubBounds.latestClose : 1380;
+                const rangeStartMin = Math.max(floorMin, primaryFrom - defaultRange);
+                const rangeEndMin = Math.min(ceilMin, primaryFrom + defaultRange);
 
                 function fmtMin(m) {
                     const h = Math.floor(m / 60);
@@ -5130,6 +5176,12 @@
                 }
 
                 // -- Time range stepper: nudge start/end by 30 minutes, re-filter slots.
+                // Compute operating-hours bounds for clamping (same logic as
+                // buildFlexibilityScreenHtml uses for the initial range).
+                const stepperClubBounds = getClubOperatingBoundsForDate(slotInfo.clubId, slotInfo.date);
+                const floorMin = stepperClubBounds ? stepperClubBounds.earliestOpen : 300;
+                const ceilMin = stepperClubBounds ? stepperClubBounds.latestClose : 1380;
+
                 const stepperEl = flexScreen.querySelector('[data-bc-flex-time-stepper]');
                 if (stepperEl) {
                     const startEl = stepperEl.querySelector('[data-bc-flex-range-start]');
@@ -5143,13 +5195,46 @@
                         return `${h12}:${String(mm).padStart(2, '0')} ${suffix}`;
                     }
 
+                    // Disable arrow buttons that would step past the club's
+                    // operating hours or cross the opposite bound.
+                    function updateStepperButtons() {
+                        const startMin = parseInt(startEl.getAttribute('data-minutes'), 10);
+                        const endMin = parseInt(endEl.getAttribute('data-minutes'), 10);
+                        const startDown = stepperEl.querySelector('[data-bc-flex-range-start-down]');
+                        const startUp = stepperEl.querySelector('[data-bc-flex-range-start-up]');
+                        const endDown = stepperEl.querySelector('[data-bc-flex-range-end-down]');
+                        const endUp = stepperEl.querySelector('[data-bc-flex-range-end-up]');
+                        const disabledStyle = 'opacity:0.25;cursor:default;';
+                        const enabledStyle = 'opacity:1;cursor:pointer;';
+                        if (startDown) {
+                            const atFloor = startMin <= floorMin;
+                            startDown.disabled = atFloor;
+                            startDown.style.cssText += atFloor ? disabledStyle : enabledStyle;
+                        }
+                        if (startUp) {
+                            const atEnd = startMin + 30 >= endMin;
+                            startUp.disabled = atEnd;
+                            startUp.style.cssText += atEnd ? disabledStyle : enabledStyle;
+                        }
+                        if (endDown) {
+                            const atStart = endMin - 30 <= startMin;
+                            endDown.disabled = atStart;
+                            endDown.style.cssText += atStart ? disabledStyle : enabledStyle;
+                        }
+                        if (endUp) {
+                            const atCeil = endMin >= ceilMin;
+                            endUp.disabled = atCeil;
+                            endUp.style.cssText += atCeil ? disabledStyle : enabledStyle;
+                        }
+                    }
+
                     function adjustRange(which, delta) {
                         const el = (which === 'start') ? startEl : endEl;
                         if (!el) return;
                         let current = parseInt(el.getAttribute('data-minutes'), 10);
                         current += delta;
-                        // Clamp to 5:00 AM (300) – 11:00 PM (1380).
-                        current = Math.max(300, Math.min(1380, current));
+                        // Clamp to the club's operating hours (or 5 AM–11 PM fallback).
+                        current = Math.max(floorMin, Math.min(ceilMin, current));
                         // Prevent start from crossing end and vice versa.
                         if (which === 'start' && endEl) {
                             const endMin = parseInt(endEl.getAttribute('data-minutes'), 10);
@@ -5161,6 +5246,7 @@
                         }
                         el.setAttribute('data-minutes', current);
                         el.textContent = fmtMin(current);
+                        updateStepperButtons();
                         rerenderSlots();
                     }
 
@@ -5220,6 +5306,9 @@
                     stepperEl.querySelector('[data-bc-flex-range-start-up]')?.addEventListener('click', () => adjustRange('start', 30));
                     stepperEl.querySelector('[data-bc-flex-range-end-down]')?.addEventListener('click', () => adjustRange('end', -30));
                     stepperEl.querySelector('[data-bc-flex-range-end-up]')?.addEventListener('click', () => adjustRange('end', 30));
+
+                    // Set initial disabled state for buttons at boundaries.
+                    updateStepperButtons();
                 }
 
                 // Look up the courts array for a given slot from the gathered alternatives.
@@ -6872,23 +6961,8 @@
             // A "straddle" means at least one sub-slot is available (window already open)
             // and at least one is locked (window not yet open).
             //
-            // Returns the opening-hours range { fromInMinutes, toInMinutes } for the
-            // given court entry on the given date string (YYYY-MM-DD), or null if the
-            // court has no schedule data.  Uses noon local time to derive the day of week
-            // so daylight-saving transitions do not shift the date.
-            const _DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            function getCourtOpenHoursForDate(courtEntry, dateStr) {
-                if (!courtEntry || !Array.isArray(courtEntry.openingHours) || courtEntry.openingHours.length === 0) {
-                    return null;
-                }
-                const dayName = _DAY_NAMES[new Date(dateStr + 'T12:00:00').getDay()];
-                const dayEntry = courtEntry.openingHours.find(function (h) { return h.dayOfWeek === dayName; });
-                if (!dayEntry || !Array.isArray(dayEntry.openingHours) || dayEntry.openingHours.length === 0) {
-                    return null;
-                }
-                // Courts typically have a single time range per day; take the first.
-                return dayEntry.openingHours[0];
-            }
+            // getCourtOpenHoursForDate is defined at IIFE scope so both
+            // Court View and the flexibility screen can use it.
 
             // Returns: { firstLockedIndex, lastLockedIndex, partialToMinutes,
             //            fullToMinutes, fireAtFromMinutes }
